@@ -36,7 +36,7 @@ Run the following commands to transform your Ubuntu Server into the VIGILANT app
 
 ```bash
 # Clone the repository
-git clone [https://github.com/YOUR_USER/VIGILANT-Gateway.git](https://github.com/YOUR_USER/VIGILANT-Gateway.git)
+git clone [https://github.com/magnaye-rp/VIGILANT_Gateway.git](https://github.com/magnaye-rp/VIGILANT_Gateway.git)
 cd VIGILANT-Gateway
 
 # Run the automated dependency installer
