@@ -17,7 +17,7 @@ V.I.G.I.L.A.N.T. is a hardware-integrated security gateway designed for the **Le
 
 ## 🛠️ Hardware Specifications
 * **Host:** Lenovo ThinkCentre M710q (x86 Tiny PC)
-* **Storage:** 256GB NVMe (Internal or External via USB-C)
+* **Storage:** 120Gb NVMe (Internal)
 * **Network:** * **WAN:** Integrated Intel Gigabit Ethernet (Internet In)
     * **LAN:** Internal M.2 A+E Key Wi-Fi Card (Access Point Out)
 * **OS:** Ubuntu Server 24.04 LTS (Headless)
