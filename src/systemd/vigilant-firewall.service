@@ -1,0 +1,12 @@
+[Unit]
+Description=VIGILANT Firewall Rules
+After=network.target
+Before=vigilant-proxy.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash /home/vigilant_admin/vigilant/scripts/setup-iptables.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,17 @@
+[Unit]
+Description=VIGILANT Flask Dashboard
+After=network.target vigilant-proxy.service
+
+[Service]
+Type=simple
+User=vigilant_admin
+WorkingDirectory=/home/vigilant_admin/vigilant
+ExecStart=/home/vigilant_admin/vigilant/venv/bin/python3 \
+  /home/vigilant_admin/vigilant/app.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/home/vigilant_admin/vigilant/logs/dashboard.log
+StandardError=append:/home/vigilant_admin/vigilant/logs/dashboard.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="refresh" content="5">
+<title>VIGILANT Dashboard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: monospace; background: #0d1117; color: #c9d1d9; padding: 20px; }
+  h1 { color: #58a6ff; margin-bottom: 20px; font-size: 1.4em; letter-spacing: 2px; }
+  .cards { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+          padding: 16px 24px; min-width: 160px; }
+  .card .num { font-size: 2em; font-weight: bold; color: #58a6ff; }
+  .card .lbl { font-size: 0.75em; color: #8b949e; margin-top: 4px; }
+  h2 { color: #8b949e; font-size: 0.85em; letter-spacing: 1px;
+       text-transform: uppercase; margin: 20px 0 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.8em; }
+  th { background: #161b22; color: #8b949e; padding: 8px 10px;
+       text-align: left; border-bottom: 1px solid #30363d; }
+  td { padding: 6px 10px; border-bottom: 1px solid #21262d; }
+  tr:hover td { background: #161b22; }
+  .cat-Educational  { color: #3fb950; }
+  .cat-Productive   { color: #58a6ff; }
+  .cat-Distracting  { color: #d29922; }
+  .cat-Harmful      { color: #f85149; }
+  .cat-Uncategorized{ color: #8b949e; }
+  .cat-Non-HTML     { color: #484f58; }
+  .flagged { color: #f85149; font-weight: bold; }
+  .bar-wrap { display:flex; align-items:center; gap:8px; margin:4px 0; }
+  .bar { height:14px; border-radius:3px; min-width:4px; }
+  button { background:#21262d; border:1px solid #30363d; color:#c9d1d9;
+           padding:6px 14px; border-radius:6px; cursor:pointer;
+           font-family:monospace; margin-top:12px; }
+  button:hover { background:#30363d; }
+</style>
+</head>
+<body>
+<h1>[ VIGILANT ] Network Traffic Dashboard</h1>
+<div class="cards" id="cards">
+  <div class="card"><div class="num" id="total">—</div><div class="lbl">Total requests</div></div>
+  <div class="card"><div class="num" id="flagged">—</div><div class="lbl">Harmful blocked</div></div>
+  <div class="card"><div class="num" id="clients">—</div><div class="lbl">Active clients</div></div>
+</div>
+
+<h2>Category breakdown</h2>
+<div id="bars"></div>
+
+<h2>Recent traffic</h2>
+<table>
+  <thead><tr><th>Time (UTC)</th><th>Client IP</th><th>Host</th><th>Category</th><th>Blocked</th></tr></thead>
+  <tbody id="recent"></tbody>
+</table>
+
+<h2>Throttle events</h2>
+<table>
+  <thead><tr><th>Time (UTC)</th><th>Client IP</th><th>Host</th><th>RPM</th><th>Baseline</th><th>Action</th></tr></thead>
+  <tbody id="throttles"></tbody>
+</table>
+
+<button onclick="clearLogs()">Clear all logs</button>
+
+<script>
+const COLORS = {
+  Educational:"#3fb950", Productive:"#58a6ff",
+  Distracting:"#d29922", Harmful:"#f85149",
+  Uncategorized:"#8b949e","Non-HTML":"#484f58"
+};
+
+async function refresh() {
+  const d = await fetch("/api/stats").then(r => r.json());
+  document.getElementById("total").textContent   = d.total;
+  document.getElementById("flagged").textContent = d.flagged;
+  document.getElementById("clients").textContent = d.clients;
+
+  const maxC = Math.max(...d.counts.map(c => c.count), 1);
+  document.getElementById("bars").innerHTML = d.counts.map(c => `
+    <div class="bar-wrap">
+      <span style="width:120px;color:${COLORS[c.category]||'#ccc'};font-size:.8em">${c.category}</span>
+      <div class="bar" style="width:${Math.round(c.count/maxC*240)}px;background:${COLORS[c.category]||'#ccc'}"></div>
+      <span style="font-size:.8em;color:#8b949e">${c.count}</span>
+    </div>`).join("");
+
+  document.getElementById("recent").innerHTML = d.recent.map(r => `
+    <tr>
+      <td>${r.time}</td>
+      <td>${r.client_ip}</td>
+      <td>${r.host}</td>
+      <td class="cat-${r.category}">${r.category}</td>
+      <td>${r.flagged ? '<span class="flagged">BLOCKED</span>' : '—'}</td>
+    </tr>`).join("");
+
+  document.getElementById("throttles").innerHTML = d.throttles.length
+    ? d.throttles.map(t => `
+      <tr>
+        <td>${t.time}</td><td>${t.client_ip}</td><td>${t.host}</td>
+        <td style="color:#f85149">${t.rpm}</td>
+        <td>${t.baseline}</td>
+        <td style="color:#d29922">${t.action}</td>
+      </tr>`).join("")
+    : '<tr><td colspan="6" style="color:#484f58">No throttle events yet</td></tr>';
+}
+
+async function clearLogs() {
+  if (!confirm("Clear all traffic logs and throttle events?")) return;
+  await fetch("/api/clear", { method: "POST" });
+  refresh();
+}
+
+setInterval(refresh, 5000);
+refresh();
+</script>
+</body>
+</html>
