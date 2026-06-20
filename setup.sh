@@ -41,13 +41,13 @@ check_os() {
 
 check_network_interfaces() {
     log_info "Checking network interfaces..."
-    if ! ip link show enp0s5 > /dev/null 2>&1; then
-        log_warn "enp0s5 not found - you may need to adjust network interface names"
+    if ! ip link show enp0s31f6 > /dev/null 2>&1; then
+        log_warn "wlp1s0 not found - you may need to adjust network interface names"
         log_warn "Current interfaces:"
         ip link show | grep "^[0-9]:" | grep -v "lo"
     fi
-    if ! ip link show enp0s6 > /dev/null 2>&1; then
-        log_warn "enp0s6 not found - you may need to adjust network interface names"
+    if ! ip link show wlp1s0 > /dev/null 2>&1; then
+        log_warn "wlp1s0 not found - you may need to adjust network interface names"
     fi
 }
 
@@ -197,7 +197,7 @@ stage_6_dns_dhcp() {
     cp /etc/dnsmasq.conf /etc/dnsmasq.conf.bak
     
     log_info "Appending VIGILANT config to dnsmasq..."
-    cat "$REPO_DIR/src/config/dnsmasq.conf" >> /etc/dnsmasq.conf
+cp "$REPO_DIR/src/config/dnsmasq.conf" /etc/dnsmasq.conf
     
     log_info "Restarting dnsmasq..."
     systemctl restart dnsmasq
