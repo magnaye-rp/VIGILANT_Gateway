@@ -216,6 +216,44 @@ stage_7_firewall() {
     log_success "Firewall rules applied"
 }
 
+stage_7_5_hostapd() {
+    echo ""
+    log_info "═══════════════════════════════════════════"
+    log_info "STAGE 7.5: HOSTAPD ACCESS POINT SETUP"
+    log_info "═══════════════════════════════════════════"
+    
+    log_info "Creating hostapd configuration file..."
+    cat << 'EOF' > /etc/hostapd/hostapd.conf
+interface=wlp1s0
+driver=nl80211
+ssid=VIGILANT_GATEWAY
+hw_mode=g
+channel=6
+wmm_enabled=1
+macaddr_acl=0
+auth_algs=1
+wpa=2
+wpa_key_mgmt=WPA-PSK
+rsn_pairwise=CCMP
+wpa_passphrase=VigilantGateway2026
+EOF
+
+    log_info "Updating system default hostapd daemon reference..."
+    if [ -f /etc/default/hostapd ]; then
+        sed -i 's|^#\?DAEMON_CONF=.*|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd
+    else
+        echo 'DAEMON_CONF="/etc/hostapd/hostapd.conf"' > /etc/default/hostapd
+    fi
+
+    log_info "Unmasking, enabling, and kickstarting hostapd broadcast..."
+    systemctl unmask hostapd >/dev/null 2>&1
+    systemctl daemon-reload
+    systemctl enable hostapd
+    systemctl restart hostapd
+    
+    log_success "Hostapd Access Point is live!"
+}
+
 # ─── Stage 8: Certificates ──────────────────────────────────────────────────
 stage_8_certificates() {
     echo ""
