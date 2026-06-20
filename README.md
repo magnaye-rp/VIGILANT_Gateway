@@ -75,7 +75,7 @@ Perfect for:
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/yourusername/vigilant-gateway.git
+git clone https://github.com/magnaye-rp/vigilant-gateway.git
 cd vigilant-gateway
 
 # 2. Run setup (automated, all 11 stages)
