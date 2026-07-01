@@ -2,8 +2,9 @@ import re
 import time
 import sqlite3
 import threading
+import subprocess
 from collections import defaultdict, deque
-from mitmproxy import http
+from mitmproxy import http, tls
 import spacy
 
 # ─── Configuration ────────────────────────────────────────────────
@@ -167,6 +168,16 @@ def categorize_content(text, host=""):
 
     if hint_category:
         scores[hint_category] = scores.get(hint_category, 0) + hint_score
+    
+    # NER count weighting - add weighted scores based on entity types
+    if doc and doc.ents:
+        for ent in doc.ents:
+            # Academic/professional entities boost Educational category
+            if ent.label_ in ["LAW", "WORK_OF_ART", "EVENT", "ORG", "PERSON", "GPE"]:
+                scores["Educational"] = scores.get("Educational", 0) + 2
+            # Dates/numbers can indicate productive work
+            elif ent.label_ in ["DATE", "TIME", "CARDINAL", "ORDINAL"]:
+                scores["Productive"] = scores.get("Productive", 0) + 1
 
     if scores.get("Harmful", 0) > 0:
         return "Harmful", entities
@@ -177,21 +188,140 @@ def categorize_content(text, host=""):
 
     return best, entities
 
+# ─── Traffic Control Throttling ───────────────────────────────────────
+def apply_throttle(client_ip):
+    """Apply Linux tc traffic control to throttle client bandwidth"""
+    try:
+        # Create root qdisc if not exists
+        subprocess.run(
+            ["tc", "qdisc", "add", "dev", "eth0", "root", "handle", "1:", "htb"],
+            check=False, capture_output=True
+        )
+        
+        # Create class for throttled traffic
+        subprocess.run(
+            ["tc", "class", "add", "dev", "eth0", "parent", "1:", "classid", "1:10",
+             "htb", "rate", "512kbit", "ceil", "512kbit"],
+            check=False, capture_output=True
+        )
+        
+        # Create filter to mark traffic from client IP
+        subprocess.run(
+            ["tc", "filter", "add", "dev", "eth0", "protocol", "ip", "parent", "1:0",
+             "prio", "1", "u32", "match", "ip", "src", client_ip, "flowid", "1:10"],
+            check=False, capture_output=True
+        )
+        print(f"[VIGILANT] Throttling applied to {client_ip} at 512kbit")
+        return True
+    except Exception as e:
+        print(f"[VIGILANT] Throttling failed for {client_ip}: {e}")
+        return False
+
+def remove_throttle(client_ip):
+    """Remove traffic control throttling for client IP"""
+    try:
+        subprocess.run(
+            ["tc", "filter", "del", "dev", "eth0", "protocol", "ip", "parent", "1:0",
+             "prio", "1", "u32", "match", "ip", "src", client_ip, "flowid", "1:10"],
+            check=False, capture_output=True
+        )
+        print(f"[VIGILANT] Throttling removed for {client_ip}")
+        return True
+    except Exception as e:
+        print(f"[VIGILANT] Throttle removal failed for {client_ip}: {e}")
+        return False
+
+# ─── DNS Log Tailing Thread ─────────────────────────────────────────────
+def tail_dnsmasq_log():
+    """Background thread to tail dnsmasq log for passive DNS tracking"""
+    log_path = "/var/log/dnsmasq.log"
+    
+    while True:
+        try:
+            with open(log_path, 'r') as f:
+                f.seek(0, 2)  # Start from end of file
+                while True:
+                    line = f.readline()
+                    if not line:
+                        time.sleep(0.1)
+                        continue
+                    
+                    # Parse DNS query format: query[A] domain.com from 192.168.10.20
+                    if "query[" in line and " from " in line:
+                        parts = line.split()
+                        for i, part in enumerate(parts):
+                            if part.startswith("query["):
+                                if i + 2 < len(parts):
+                                    domain = parts[i + 1]
+                                    client_ip = parts[i + 3]
+                                    
+                                    # Track velocity for DNS queries
+                                    flagged, rpm_now, rpm_base = should_throttle(client_ip, domain)
+                                    if flagged and client_ip not in throttled_clients:
+                                        throttled_clients.add(client_ip)
+                                        log_throttle(client_ip, domain, rpm_now, rpm_base, "DNS_THROTTLE_APPLIED")
+                                        apply_throttle(client_ip)
+                                        print(f"[VIGILANT] DNS DOOMSCROLL DETECTED {client_ip} @ {domain} "
+                                              f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
+                                    
+                                    # Log DNS query for dashboard visibility
+                                    log_request(client_ip, domain, "(DNS_QUERY)", "DNS", "DNS_Tracked", False, [])
+                                    break
+        except FileNotFoundError:
+            time.sleep(5)
+        except Exception as e:
+            print(f"[VIGILANT] DNS log tailing error: {e}")
+            time.sleep(5)
+
 # ─── mitmproxy Addon ──────────────────────────────────────────────
 class VIGILANTAddon:
 
     def __init__(self):
         init_db()
         print("[VIGILANT] Addon loaded. DB initialised. NLP model ready.")
+        
+        # Start DNS log tailing thread
+        dns_thread = threading.Thread(target=tail_dnsmasq_log, daemon=True)
+        dns_thread.start()
+        print("[VIGILANT] DNS log tailing thread started")
 
+    def tls_clienthello(self, layer: tls.TlsClientHello):
+        """TLS ClientHello hook for mobile SNI fallback tracking"""
+        try:
+            client_ip = layer.client_conn.peername[0]
+            sni = layer.client_hello.sni
+            
+            if sni:
+                # Check if SNI belongs to bypassed social domains
+                clean_sni = sni.lstrip("www.")
+                base = ".".join(clean_sni.split(".")[-2:])
+                
+                # Track velocity at TLS handshake phase
+                flagged, rpm_now, rpm_base = should_throttle(client_ip, sni)
+                
+                if flagged and client_ip not in throttled_clients:
+                    throttled_clients.add(client_ip)
+                    log_throttle(client_ip, sni, rpm_now, rpm_base, "TLS_THROTTLE_APPLIED")
+                    apply_throttle(client_ip)
+                    print(f"[VIGILANT] TLS DOOMSCROLL DETECTED {client_ip} @ {sni} "
+                          f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
+                
+                # If SNI belongs to bypassed domains, log fallback request
+                if any(base in d for d in SOCIAL_DOMAINS):
+                    log_request(client_ip, sni, "(TLS_SNI)", "TLS", "Mobile_Bypass", False, [])
+                    print(f"[VIGILANT] TLS SNI bypass logged: {client_ip} -> {sni}")
+        except Exception as e:
+            print(f"[VIGILANT] TLS ClientHello error: {e}")
+    
     def request(self, flow: http.HTTPFlow):
         client_ip = flow.client_conn.peername[0]
         host      = flow.request.pretty_host
         flagged, rpm_now, rpm_base = should_throttle(client_ip, host)
         if flagged and client_ip not in throttled_clients:
             throttled_clients.add(client_ip)
-            log_throttle(client_ip, host, rpm_now, rpm_base, "THROTTLE_APPLIED")
-            print(f"[VIGILANT] DOOMSCROLL DETECTED {client_ip} @ {host} "
+            log_throttle(client_ip, host, rpm_now, rpm_base, "HTTP_THROTTLE_APPLIED")
+            apply_throttle(client_ip)
+            print(f"[VIGILANT] HTTP DOOMSCROLL DETECTED {client_ip} @ {host} "
                   f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
 
     def response(self, flow: http.HTTPFlow):

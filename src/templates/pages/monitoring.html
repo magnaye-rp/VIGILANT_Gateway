@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+
+{% block title %}Monitoring{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">Monitoring</h1>
+    <p class="page-subtitle">Real-time system and network monitoring</p>
+</div>
+
+<!-- Resource Usage Charts -->
+<div class="grid-2" style="margin-bottom: 24px;">
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">CPU Usage</h3>
+        </div>
+        <div class="card-body">
+            <div style="height: 200px; display: flex; align-items: flex-end; gap: 4px;" id="cpuChart">
+                <!-- CPU bars will be inserted here -->
+            </div>
+            <div style="margin-top: 16px; display: flex; justify-content: space-between; font-size: 0.875rem;">
+                <span style="color: var(--text-muted);">Current: <span id="currentCpu">—%</span></span>
+                <span style="color: var(--text-muted);">Average: <span id="avgCpu">—%</span></span>
+            </div>
+        </div>
+    </div>
+    
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">Memory Usage</h3>
+        </div>
+        <div class="card-body">
+            <div style="height: 200px; display: flex; align-items: flex-end; gap: 4px;" id="memoryChart">
+                <!-- Memory bars will be inserted here -->
+            </div>
+            <div style="margin-top: 16px; display: flex; justify-content: space-between; font-size: 0.875rem;">
+                <span style="color: var(--text-muted);">Current: <span id="currentMemory">—%</span></span>
+                <span style="color: var(--text-muted);">Average: <span id="avgMemory">—%</span></span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="grid-2" style="margin-bottom: 24px;">
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">Network Traffic (WAN)</h3>
+        </div>
+        <div class="card-body">
+            <div style="height: 200px; display: flex; align-items: flex-end; gap: 4px;" id="wanChart">
+                <!-- WAN traffic bars will be inserted here -->
+            </div>
+            <div style="margin-top: 16px; display: flex; justify-content: space-between; font-size: 0.875rem;">
+                <span style="color: var(--text-muted);">Download: <span id="wanDownload">— MB/s</span></span>
+                <span style="color: var(--text-muted);">Upload: <span id="wanUpload">— MB/s</span></span>
+            </div>
+        </div>
+    </div>
+    
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">Network Traffic (LAN)</h3>
+        </div>
+        <div class="card-body">
+            <div style="height: 200px; display: flex; align-items: flex-end; gap: 4px;" id="lanChart">
+                <!-- LAN traffic bars will be inserted here -->
+            </div>
+            <div style="margin-top: 16px; display: flex; justify-content: space-between; font-size: 0.875rem;">
+                <span style="color: var(--text-muted);">Download: <span id="lanDownload">— MB/s</span></span>
+                <span style="color: var(--text-muted);">Upload: <span id="lanUpload">— MB/s</span></span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Running Processes -->
+<div class="card" style="margin-bottom: 24px;">
+    <div class="card-header">
+        <h3 class="card-title">Top Processes</h3>
+        <button class="btn btn-sm btn-secondary" onclick="refreshProcesses()">Refresh</button>
+    </div>
+    <div class="card-body" style="padding: 0;">
+        <div class="table-container" style="border: none; box-shadow: none;">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>PID</th>
+                        <th>User</th>
+                        <th>CPU %</th>
+                        <th>MEM %</th>
+                        <th>Command</th>
+                    </tr>
+                </thead>
+                <tbody id="processTable">
+                    <tr>
+                        <td>1234</td>
+                        <td>vigilant_admin</td>
+                        <td>15.2</td>
+                        <td>8.5</td>
+                        <td>python3 vigilant_addon.py</td>
+                    </tr>
+                    <tr>
+                        <td>5678</td>
+                        <td>vigilant_admin</td>
+                        <td>5.1</td>
+                        <td>3.2</td>
+                        <td>python3 app.py</td>
+                    </tr>
+                    <tr>
+                        <td>9012</td>
+                        <td>root</td>
+                        <td>2.3</td>
+                        <td>1.5</td>
+                        <td>mitmdump</td>
+                    </tr>
+                    <tr>
+                        <td>3456</td>
+                        <td>dnsmasq</td>
+                        <td>0.5</td>
+                        <td>0.8</td>
+                        <td>dnsmasq</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Network Connections -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Active Network Connections</h3>
+        <button class="btn btn-sm btn-secondary" onclick="refreshConnections()">Refresh</button>
+    </div>
+    <div class="card-body" style="padding: 0;">
+        <div class="table-container" style="border: none; box-shadow: none;">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Protocol</th>
+                        <th>Local Address</th>
+                        <th>Foreign Address</th>
+                        <th>State</th>
+                        <th>PID/Program</th>
+                    </tr>
+                </thead>
+                <tbody id="connectionTable">
+                    <tr>
+                        <td>TCP</td>
+                        <td>192.168.10.1:5000</td>
+                        <td>192.168.10.15:52341</td>
+                        <td>ESTABLISHED</td>
+                        <td>5678/python3</td>
+                    </tr>
+                    <tr>
+                        <td>TCP</td>
+                        <td>192.168.10.1:8080</td>
+                        <td>192.168.10.30:41234</td>
+                        <td>ESTABLISHED</td>
+                        <td>9012/mitmdump</td>
+                    </tr>
+                    <tr>
+                        <td>TCP</td>
+                        <td>0.0.0.0:22</td>
+                        <td>0.0.0.0:0</td>
+                        <td>LISTEN</td>
+                        <td>1234/sshd</td>
+                    </tr>
+                    <tr>
+                        <td>TCP</td>
+                        <td>0.0.0.0:53</td>
+                        <td>0.0.0.0:0</td>
+                        <td>LISTEN</td>
+                        <td>3456/dnsmasq</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const cpuHistory = [];
+const memoryHistory = [];
+const maxHistory = 60;
+
+function updateCharts() {
+    const stats = Vigilant.apiGet('/api/system');
+    if (!stats) return;
+    
+    // Update CPU chart
+    cpuHistory.push(stats.cpu_percent);
+    if (cpuHistory.length > maxHistory) cpuHistory.shift();
+    
+    const cpuChart = document.getElementById('cpuChart');
+    cpuChart.innerHTML = cpuHistory.map(val => `
+        <div style="flex: 1; background: ${val > 80 ? 'var(--danger)' : val > 50 ? 'var(--warning)' : 'var(--success)'}; 
+                    height: ${val}%; border-radius: 2px; min-height: 2px;"></div>
+    `).join('');
+    
+    document.getElementById('currentCpu').textContent = stats.cpu_percent.toFixed(1) + '%';
+    document.getElementById('avgCpu').textContent = (cpuHistory.reduce((a, b) => a + b, 0) / cpuHistory.length).toFixed(1) + '%';
+    
+    // Update Memory chart
+    memoryHistory.push(stats.memory_percent);
+    if (memoryHistory.length > maxHistory) memoryHistory.shift();
+    
+    const memoryChart = document.getElementById('memoryChart');
+    memoryChart.innerHTML = memoryHistory.map(val => `
+        <div style="flex: 1; background: ${val > 80 ? 'var(--danger)' : val > 50 ? 'var(--warning)' : 'var(--success)'}; 
+                    height: ${val}%; border-radius: 2px; min-height: 2px;"></div>
+    `).join('');
+    
+    document.getElementById('currentMemory').textContent = stats.memory_percent.toFixed(1) + '%';
+    document.getElementById('avgMemory').textContent = (memoryHistory.reduce((a, b) => a + b, 0) / memoryHistory.length).toFixed(1) + '%';
+    
+    // TODO: Update network charts with real data
+    document.getElementById('wanDownload').textContent = (Math.random() * 10).toFixed(2) + ' MB/s';
+    document.getElementById('wanUpload').textContent = (Math.random() * 5).toFixed(2) + ' MB/s';
+    document.getElementById('lanDownload').textContent = (Math.random() * 20).toFixed(2) + ' MB/s';
+    document.getElementById('lanUpload').textContent = (Math.random() * 10).toFixed(2) + ' MB/s';
+}
+
+function refreshProcesses() {
+    // TODO: Implement API call to refresh processes
+    Vigilant.showToast('Processes refreshed', 'info');
+}
+
+function refreshConnections() {
+    // TODO: Implement API call to refresh connections
+    Vigilant.showToast('Connections refreshed', 'info');
+}
+
+// Auto-update charts every 2 seconds
+Vigilant.startAutoRefresh(updateCharts, 2000);
+</script>
+{% endblock %}

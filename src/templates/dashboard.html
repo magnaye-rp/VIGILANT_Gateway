@@ -1,114 +1,1544 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta http-equiv="refresh" content="5">
-<title>VIGILANT Dashboard</title>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: monospace; background: #0d1117; color: #c9d1d9; padding: 20px; }
-  h1 { color: #58a6ff; margin-bottom: 20px; font-size: 1.4em; letter-spacing: 2px; }
-  .cards { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
-  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px;
-          padding: 16px 24px; min-width: 160px; }
-  .card .num { font-size: 2em; font-weight: bold; color: #58a6ff; }
-  .card .lbl { font-size: 0.75em; color: #8b949e; margin-top: 4px; }
-  h2 { color: #8b949e; font-size: 0.85em; letter-spacing: 1px;
-       text-transform: uppercase; margin: 20px 0 8px; }
-  table { width: 100%; border-collapse: collapse; font-size: 0.8em; }
-  th { background: #161b22; color: #8b949e; padding: 8px 10px;
-       text-align: left; border-bottom: 1px solid #30363d; }
-  td { padding: 6px 10px; border-bottom: 1px solid #21262d; }
-  tr:hover td { background: #161b22; }
-  .cat-Educational  { color: #3fb950; }
-  .cat-Productive   { color: #58a6ff; }
-  .cat-Distracting  { color: #d29922; }
-  .cat-Harmful      { color: #f85149; }
-  .cat-Uncategorized{ color: #8b949e; }
-  .cat-Non-HTML     { color: #484f58; }
-  .flagged { color: #f85149; font-weight: bold; }
-  .bar-wrap { display:flex; align-items:center; gap:8px; margin:4px 0; }
-  .bar { height:14px; border-radius:3px; min-width:4px; }
-  button { background:#21262d; border:1px solid #30363d; color:#c9d1d9;
-           padding:6px 14px; border-radius:6px; cursor:pointer;
-           font-family:monospace; margin-top:12px; }
-  button:hover { background:#30363d; }
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VIGILANT Gateway - Admin Dashboard</title>
+  <style>
+    :root {
+      --primary: #00d9ff;
+      --primary-dark: #0099cc;
+      --surface: #0f1419;
+      --surface-light: #1a1f26;
+      --surface-lighter: #252d38;
+      --text: #e0e6ed;
+      --text-secondary: #8b93a1;
+      --success: #00d084;
+      --warning: #ffa500;
+      --danger: #ff3860;
+      --border: #2d3748;
+      --radius: 12px;
+      --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      background: var(--surface);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 16px;
+      line-height: 1.5;
+    }
+
+    /* ─── Layout: Sidebar + Main ─── */
+    .container {
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    .sidebar {
+      width: 260px;
+      background: var(--surface-light);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      transition: var(--transition);
+      position: relative;
+      z-index: 100;
+    }
+
+    .main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .header {
+      background: var(--surface-light);
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+
+    .header-title {
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: var(--primary);
+      letter-spacing: -0.5px;
+    }
+
+    .header-status {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.875rem;
+      color: var(--text-secondary);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 2rem;
+      scroll-behavior: smooth;
+    }
+
+    /* ─── Sidebar Navigation ─── */
+    .sidebar-header {
+      padding: 1.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .sidebar-logo {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--primary);
+      letter-spacing: 1px;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .sidebar-nav {
+      flex: 1;
+      padding: 1rem 0;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.75rem 1.5rem;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: var(--transition);
+      border-left: 3px solid transparent;
+      font-size: 0.95rem;
+    }
+
+    .nav-item:hover {
+      color: var(--text);
+      background: var(--surface-lighter);
+    }
+
+    .nav-item.active {
+      color: var(--primary);
+      background: rgba(0, 217, 255, 0.1);
+      border-left-color: var(--primary);
+    }
+
+    .nav-icon {
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* ─── Mobile Menu Toggle ─── */
+    .menu-toggle {
+      display: none;
+      background: none;
+      border: none;
+      color: var(--primary);
+      font-size: 1.5rem;
+      cursor: pointer;
+      padding: 0.5rem;
+    }
+
+    /* ─── Cards & Panels ─── */
+    .card {
+      background: var(--surface-light);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      transition: var(--transition);
+    }
+
+    .card:hover {
+      border-color: var(--primary);
+      box-shadow: 0 0 20px rgba(0, 217, 255, 0.1);
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .card-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .card-subtitle {
+      font-size: 0.875rem;
+      color: var(--text-secondary);
+      margin-top: 0.25rem;
+    }
+
+    /* ─── Tabs ─── */
+    .tabs {
+      display: flex;
+      gap: 0.5rem;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 1.5rem;
+    }
+
+    .tab {
+      padding: 0.75rem 1.5rem;
+      background: none;
+      border: none;
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 0.95rem;
+      transition: var(--transition);
+      border-bottom: 2px solid transparent;
+    }
+
+    .tab:hover {
+      color: var(--text);
+    }
+
+    .tab.active {
+      color: var(--primary);
+      border-bottom-color: var(--primary);
+    }
+
+    .tab-content {
+      display: none;
+    }
+
+    .tab-content.active {
+      display: block;
+      animation: fadeIn 0.3s ease-in;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    /* ─── Form Controls ─── */
+    .form-group {
+      margin-bottom: 1.5rem;
+    }
+
+    .form-label {
+      display: block;
+      font-size: 0.9rem;
+      font-weight: 500;
+      margin-bottom: 0.5rem;
+      color: var(--text);
+    }
+
+    .form-hint {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      margin-top: 0.25rem;
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 1.5rem;
+    }
+
+    input[type="text"],
+    input[type="number"],
+    input[type="password"],
+    select,
+    textarea {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      color: var(--text);
+      font-size: 0.95rem;
+      font-family: inherit;
+      transition: var(--transition);
+    }
+
+    input[type="text"]:focus,
+    input[type="number"]:focus,
+    input[type="password"]:focus,
+    select:focus,
+    textarea:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(0, 217, 255, 0.1);
+    }
+
+    input[type="checkbox"],
+    input[type="radio"] {
+      accent-color: var(--primary);
+      cursor: pointer;
+    }
+
+    /* ─── Buttons ─── */
+    button {
+      font-family: inherit;
+      cursor: pointer;
+      transition: var(--transition);
+      border: none;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-weight: 500;
+      padding: 0.75rem 1.5rem;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: var(--surface);
+    }
+
+    .btn-primary:hover {
+      background: var(--primary-dark);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0, 217, 255, 0.3);
+    }
+
+    .btn-secondary {
+      background: var(--surface-lighter);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover {
+      background: var(--border);
+    }
+
+    .btn-danger {
+      background: var(--danger);
+      color: white;
+    }
+
+    .btn-danger:hover {
+      background: #ff1744;
+      box-shadow: 0 4px 12px rgba(255, 56, 96, 0.3);
+    }
+
+    .btn-success {
+      background: var(--success);
+      color: var(--surface);
+    }
+
+    .btn-success:hover {
+      background: #00c96b;
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      margin-top: 1.5rem;
+    }
+
+    /* ─── Stats Grid ─── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1.5rem;
+      margin-bottom: 2rem;
+    }
+
+    .stat-card {
+      background: var(--surface-light);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--primary);
+      margin-bottom: 0.5rem;
+    }
+
+    .stat-label {
+      font-size: 0.875rem;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* ─── Traffic Table ─── */
+    .traffic-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+
+    .traffic-table th {
+      background: var(--surface);
+      color: var(--text-secondary);
+      padding: 1rem;
+      text-align: left;
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+      text-transform: uppercase;
+      font-size: 0.8rem;
+      letter-spacing: 0.5px;
+    }
+
+    .traffic-table td {
+      padding: 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .traffic-table tbody tr:hover {
+      background: var(--surface);
+    }
+
+    .category-badge {
+      display: inline-block;
+      padding: 0.25rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .category-badge.educational { background: rgba(0, 208, 132, 0.2); color: #00d084; }
+    .category-badge.productive { background: rgba(0, 217, 255, 0.2); color: var(--primary); }
+    .category-badge.distracting { background: rgba(255, 165, 0, 0.2); color: var(--warning); }
+    .category-badge.harmful { background: rgba(255, 56, 96, 0.2); color: var(--danger); }
+
+    /* ─── Modal Dialog ─── */
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.7);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal.active {
+      display: flex;
+    }
+
+    .modal-content {
+      background: var(--surface-light);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 2rem;
+      max-width: 600px;
+      width: 90%;
+      max-height: 80vh;
+      overflow-y: auto;
+      animation: slideUp 0.3s ease-out;
+    }
+
+    @keyframes slideUp {
+      from { transform: translateY(20px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1.5rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .modal-title {
+      font-size: 1.25rem;
+      font-weight: 600;
+    }
+
+    .modal-close {
+      background: none;
+      border: none;
+      color: var(--text-secondary);
+      font-size: 1.5rem;
+      cursor: pointer;
+      padding: 0;
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal-close:hover {
+      color: var(--text);
+    }
+
+    /* ─── Toast Notifications ─── */
+    .toast-container {
+      position: fixed;
+      bottom: 1.5rem;
+      right: 1.5rem;
+      z-index: 2000;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .toast {
+      background: var(--surface-light);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--primary);
+      border-radius: 8px;
+      padding: 1rem 1.5rem;
+      color: var(--text);
+      font-size: 0.95rem;
+      animation: slideIn 0.3s ease-out;
+      min-width: 300px;
+    }
+
+    .toast.success { border-left-color: var(--success); }
+    .toast.error { border-left-color: var(--danger); }
+    .toast.warning { border-left-color: var(--warning); }
+
+    @keyframes slideIn {
+      from { transform: translateX(400px); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+
+    /* ─── Loading Spinner ─── */
+    .spinner {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 3px solid var(--border);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* ─── Wizard Steps ─── */
+    .wizard-steps {
+      display: flex;
+      gap: 1rem;
+      margin-bottom: 2rem;
+      justify-content: space-between;
+    }
+
+    .wizard-step {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      color: var(--text-secondary);
+    }
+
+    .wizard-number {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--surface);
+      border: 2px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+    }
+
+    .wizard-step.active .wizard-number {
+      background: var(--primary);
+      color: var(--surface);
+      border-color: var(--primary);
+    }
+
+    .wizard-step.completed .wizard-number {
+      background: var(--success);
+      border-color: var(--success);
+    }
+
+    /* ─── Toggle Switch ─── */
+    .toggle-switch {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .switch {
+      position: relative;
+      width: 48px;
+      height: 28px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      cursor: pointer;
+      transition: var(--transition);
+    }
+
+    .switch::after {
+      content: '';
+      position: absolute;
+      width: 24px;
+      height: 24px;
+      background: var(--text-secondary);
+      border-radius: 50%;
+      top: 1px;
+      left: 1px;
+      transition: var(--transition);
+    }
+
+    input[type="checkbox"]:checked + .switch {
+      background: var(--primary);
+      border-color: var(--primary);
+    }
+
+    input[type="checkbox"]:checked + .switch::after {
+      left: 23px;
+      background: var(--surface);
+    }
+
+    /* ─── Responsive Design ─── */
+    @media (max-width: 768px) {
+      .container {
+        flex-direction: column;
+      }
+
+      .sidebar {
+        position: absolute;
+        left: 0;
+        top: 0;
+        height: 100%;
+        z-index: 200;
+        transform: translateX(-100%);
+        transition: var(--transition);
+        box-shadow: 2px 0 20px rgba(0, 0, 0, 0.5);
+      }
+
+      .sidebar.open {
+        transform: translateX(0);
+      }
+
+      .main {
+        width: 100%;
+      }
+
+      .menu-toggle {
+        display: flex;
+      }
+
+      .header {
+        padding: 1rem;
+      }
+
+      .content {
+        padding: 1.5rem;
+      }
+
+      .form-row {
+        grid-template-columns: 1fr;
+      }
+
+      .toast-container {
+        left: 1rem;
+        right: 1rem;
+        bottom: 1rem;
+      }
+
+      .toast {
+        min-width: auto;
+      }
+
+      .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .btn-group {
+        flex-direction: column;
+      }
+
+      button {
+        width: 100%;
+      }
+    }
+
+    @media (max-width: 480px) {
+      :root {
+        font-size: 14px;
+      }
+
+      .sidebar {
+        width: 100%;
+      }
+
+      .header-title {
+        font-size: 1rem;
+      }
+
+      .stats-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .modal-content {
+        padding: 1.5rem;
+      }
+
+      .traffic-table {
+        font-size: 0.8rem;
+      }
+
+      .traffic-table th,
+      .traffic-table td {
+        padding: 0.75rem 0.5rem;
+      }
+    }
+
+    /* ─── Utility Classes ─── */
+    .hidden { display: none; }
+    .flex { display: flex; }
+    .flex-col { flex-direction: column; }
+    .gap-1 { gap: 0.5rem; }
+    .gap-2 { gap: 1rem; }
+    .text-center { text-align: center; }
+    .text-right { text-align: right; }
+    .mt-2 { margin-top: 1rem; }
+    .mb-2 { margin-bottom: 1rem; }
+
+    /* ─── Empty State ─── */
+    .empty-state {
+      text-align: center;
+      padding: 3rem 1.5rem;
+      color: var(--text-secondary);
+    }
+
+    .empty-state-icon {
+      font-size: 3rem;
+      margin-bottom: 1rem;
+      opacity: 0.5;
+    }
+  </style>
 </head>
 <body>
-<h1>[ VIGILANT ] Network Traffic Dashboard</h1>
-<div class="cards" id="cards">
-  <div class="card"><div class="num" id="total">—</div><div class="lbl">Total requests</div></div>
-  <div class="card"><div class="num" id="flagged">—</div><div class="lbl">Harmful blocked</div></div>
-  <div class="card"><div class="num" id="clients">—</div><div class="lbl">Active clients</div></div>
+
+<div class="container">
+  <!-- Sidebar Navigation -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-logo">🔒 VIGILANT</div>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-item active" onclick="switchTab('dashboard')">
+        <div class="nav-icon">📊</div>
+        <span>Dashboard</span>
+      </div>
+      <div class="nav-item" onclick="switchTab('wizard')">
+        <div class="nav-icon">✨</div>
+        <span>Setup Wizard</span>
+      </div>
+      <div class="nav-item" onclick="switchTab('settings')">
+        <div class="nav-icon">⚙️</div>
+        <span>Settings</span>
+      </div>
+      <div class="nav-item" onclick="switchTab('traffic')">
+        <div class="nav-icon">📡</div>
+        <span>Traffic Log</span>
+      </div>
+      <div class="nav-item" onclick="switchTab('system')">
+        <div class="nav-icon">🖥️</div>
+        <span>System</span>
+      </div>
+    </nav>
+    <div style="padding: 1rem 1.5rem; border-top: 1px solid var(--border); font-size: 0.8rem; color: var(--text-secondary);">
+      v1.0 • Build 2026.06
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <div class="main">
+    <header class="header">
+      <div style="display: flex; align-items: center; gap: 1rem;">
+        <button class="menu-toggle" onclick="toggleSidebar()">☰</button>
+        <div class="header-title">VIGILANT Gateway</div>
+      </div>
+      <div class="header-status">
+        <div class="status-dot"></div>
+        <span>System Online</span>
+      </div>
+    </header>
+
+    <main class="content">
+      <!-- Dashboard Tab -->
+      <div id="tab-dashboard" class="tab-content active">
+        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Dashboard Overview</h2>
+
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-value" id="stat-total">—</div>
+            <div class="stat-label">Total Requests</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="stat-flagged">—</div>
+            <div class="stat-label">Blocked</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="stat-clients">—</div>
+            <div class="stat-label">Active Clients</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="stat-throttled">—</div>
+            <div class="stat-label">Throttled</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">Category Breakdown</div>
+              <div class="card-subtitle">Traffic classification distribution</div>
+            </div>
+            <button class="btn-secondary" onclick="refreshStats()" style="padding: 0.5rem 1rem;">Refresh</button>
+          </div>
+          <div id="category-breakdown" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem;"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">Recent Activity</div>
+              <div class="card-subtitle">Last 10 traffic events</div>
+            </div>
+          </div>
+          <div id="recent-activity" style="overflow-x: auto;">
+            <table class="traffic-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Client</th>
+                  <th>Domain</th>
+                  <th>Category</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="recent-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Setup Wizard Tab -->
+      <div id="tab-wizard" class="tab-content">
+        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Quick Setup Wizard</h2>
+
+        <div class="wizard-steps" id="wizard-steps">
+          <div class="wizard-step active" data-step="1">
+            <div class="wizard-number">1</div>
+            <span>Network</span>
+          </div>
+          <div class="wizard-step" data-step="2">
+            <div class="wizard-number">2</div>
+            <span>Filtering</span>
+          </div>
+          <div class="wizard-step" data-step="3">
+            <div class="wizard-number">3</div>
+            <span>Throttling</span>
+          </div>
+          <div class="wizard-step" data-step="4">
+            <div class="wizard-number">4</div>
+            <span>Review</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <!-- Step 1: Network -->
+          <div id="wizard-step-1" class="wizard-content">
+            <div class="card-header">
+              <div class="card-title">Network Configuration</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Gateway IP Address</label>
+              <input type="text" id="wizard-gateway-ip" placeholder="192.168.10.1" value="192.168.10.1">
+              <div class="form-hint">IP address for the admin interface</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">DHCP Range</label>
+              <div class="form-row">
+                <input type="text" id="wizard-dhcp-start" placeholder="192.168.10.10" value="192.168.10.10">
+                <input type="text" id="wizard-dhcp-end" placeholder="192.168.10.50" value="192.168.10.50">
+              </div>
+              <div class="form-hint">Client IP address range</div>
+            </div>
+            <div class="btn-group">
+              <button class="btn-primary" onclick="wizardNext()">Continue to Filtering</button>
+            </div>
+          </div>
+
+          <!-- Step 2: Filtering -->
+          <div id="wizard-step-2" class="wizard-content hidden">
+            <div class="card-header">
+              <div class="card-title">Content Filtering</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">NLP Model Accuracy</label>
+              <select id="wizard-nlp-mode">
+                <option value="fast">Fast (Lower accuracy, ~70%)</option>
+                <option value="balanced" selected>Balanced (Good accuracy, ~85%)</option>
+                <option value="strict">Strict (Higher accuracy, ~95%)</option>
+              </select>
+              <div class="form-hint">Trade-off between speed and accuracy</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Categories to Block</label>
+              <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                <div>
+                  <input type="checkbox" id="block-harmful" checked>
+                  <label for="block-harmful" style="display: inline; margin-left: 0.5rem;">Harmful content</label>
+                </div>
+                <div>
+                  <input type="checkbox" id="block-distracting">
+                  <label for="block-distracting" style="display: inline; margin-left: 0.5rem;">Distracting sites</label>
+                </div>
+              </div>
+            </div>
+            <div class="btn-group">
+              <button class="btn-secondary" onclick="wizardPrev()">Back</button>
+              <button class="btn-primary" onclick="wizardNext()">Continue to Throttling</button>
+            </div>
+          </div>
+
+          <!-- Step 3: Throttling -->
+          <div id="wizard-step-3" class="wizard-content hidden">
+            <div class="card-header">
+              <div class="card-title">Doomscroll Prevention</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Enable Throttling</label>
+              <div class="toggle-switch">
+                <input type="checkbox" id="throttle-enabled" checked>
+                <div class="switch"></div>
+                <span id="throttle-status">Enabled</span>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Request Threshold (per minute)</label>
+              <input type="number" id="wizard-throttle-threshold" value="30" min="10" max="100">
+              <div class="form-hint">Trigger throttling when exceeds this rate</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Throttle Rate</label>
+              <select id="wizard-throttle-rate">
+                <option value="128">128 Kbps (Strict)</option>
+                <option value="256" selected>256 Kbps (Balanced)</option>
+                <option value="512">512 Kbps (Moderate)</option>
+              </select>
+              <div class="form-hint">Bandwidth limit for throttled clients</div>
+            </div>
+            <div class="btn-group">
+              <button class="btn-secondary" onclick="wizardPrev()">Back</button>
+              <button class="btn-primary" onclick="wizardNext()">Review Settings</button>
+            </div>
+          </div>
+
+          <!-- Step 4: Review -->
+          <div id="wizard-step-4" class="wizard-content hidden">
+            <div class="card-header">
+              <div class="card-title">Review & Save</div>
+            </div>
+            <div style="background: var(--surface); padding: 1.5rem; border-radius: 8px; margin-bottom: 1.5rem;">
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; font-size: 0.9rem;">
+                <div>
+                  <div style="color: var(--text-secondary); margin-bottom: 0.25rem;">Gateway IP</div>
+                  <div style="font-weight: 600;" id="review-gateway-ip"></div>
+                </div>
+                <div>
+                  <div style="color: var(--text-secondary); margin-bottom: 0.25rem;">DHCP Range</div>
+                  <div style="font-weight: 600;" id="review-dhcp-range"></div>
+                </div>
+                <div>
+                  <div style="color: var(--text-secondary); margin-bottom: 0.25rem;">NLP Mode</div>
+                  <div style="font-weight: 600;" id="review-nlp-mode"></div>
+                </div>
+                <div>
+                  <div style="color: var(--text-secondary); margin-bottom: 0.25rem;">Throttle Rate</div>
+                  <div style="font-weight: 600;" id="review-throttle-rate"></div>
+                </div>
+              </div>
+            </div>
+            <div class="btn-group">
+              <button class="btn-secondary" onclick="wizardPrev()">Back</button>
+              <button class="btn-success" onclick="saveWizardConfig()" style="width: auto;">Save Configuration</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Settings Tab -->
+      <div id="tab-settings" class="tab-content">
+        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Advanced Settings</h2>
+
+        <div class="tabs" style="border-bottom: 1px solid var(--border); margin-bottom: 2rem;">
+          <button class="tab active" onclick="switchSettings('network')">Network</button>
+          <button class="tab" onclick="switchSettings('filtering')">Filtering</button>
+          <button class="tab" onclick="switchSettings('throttling')">Throttling</button>
+          <button class="tab" onclick="switchSettings('security')">Security</button>
+        </div>
+
+        <!-- Network Settings -->
+        <div id="settings-network" class="settings-panel">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">Network Configuration</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">WAN Interface</label>
+              <select id="setting-wan-interface">
+                <option>enp0s5</option>
+                <option>eth0</option>
+                <option>eno1</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">LAN Interface</label>
+              <select id="setting-lan-interface">
+                <option>enp0s6</option>
+                <option>eth1</option>
+                <option>wlan0</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Gateway IP</label>
+              <input type="text" id="setting-gateway-ip" value="192.168.10.1">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Upstream DNS Servers</label>
+              <textarea id="setting-dns-servers" rows="3" placeholder="8.8.8.8&#10;8.8.4.4">8.8.8.8
+8.8.4.4</textarea>
+            </div>
+            <button class="btn-primary" onclick="saveSettings()">Save Network Settings</button>
+          </div>
+        </div>
+
+        <!-- Filtering Settings -->
+        <div id="settings-filtering" class="settings-panel hidden">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">Content Filtering</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">NLP Model</label>
+              <select id="setting-nlp-model">
+                <option value="balanced" selected>en_core_web_sm (Balanced)</option>
+                <option value="large">en_core_web_lg (Accurate)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Block Categories</label>
+              <div style="display: flex; flex-direction: column; gap: 1rem;">
+                <div>
+                  <div class="toggle-switch">
+                    <input type="checkbox" id="setting-block-harmful" checked>
+                    <div class="switch"></div>
+                  </div>
+                  <div style="margin-top: 0.5rem;">
+                    <div style="font-weight: 600; color: var(--danger);">Harmful</div>
+                    <div style="font-size: 0.85rem; color: var(--text-secondary);">Adult content, violence, extremism</div>
+                  </div>
+                </div>
+                <div>
+                  <div class="toggle-switch">
+                    <input type="checkbox" id="setting-block-distracting">
+                    <div class="switch"></div>
+                  </div>
+                  <div style="margin-top: 0.5rem;">
+                    <div style="font-weight: 600; color: var(--warning);">Distracting</div>
+                    <div style="font-size: 0.85rem; color: var(--text-secondary);">Social media, entertainment, memes</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <button class="btn-primary" onclick="saveSettings()">Save Filtering Settings</button>
+          </div>
+        </div>
+
+        <!-- Throttling Settings -->
+        <div id="settings-throttling" class="settings-panel hidden">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">Doomscroll Prevention</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Enable Throttling</label>
+              <div class="toggle-switch">
+                <input type="checkbox" id="setting-throttle-enabled" checked>
+                <div class="switch"></div>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Velocity Threshold (requests/min)</label>
+              <input type="number" id="setting-velocity-threshold" value="30" min="10" max="200">
+              <div class="form-hint">Trigger throttling when requests exceed this rate on social media</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Throttle Duration (seconds)</label>
+              <input type="number" id="setting-throttle-duration" value="60" min="10" max="600">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Bandwidth Limit (Kbps)</label>
+              <input type="number" id="setting-throttle-rate" value="256" min="64" max="1024">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Target Domains (comma-separated)</label>
+              <textarea id="setting-target-domains" rows="4">facebook.com,twitter.com,x.com,tiktok.com,instagram.com,reddit.com,youtube.com,twitch.tv</textarea>
+            </div>
+            <button class="btn-primary" onclick="saveSettings()">Save Throttling Settings</button>
+          </div>
+        </div>
+
+        <!-- Security Settings -->
+        <div id="settings-security" class="settings-panel hidden">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">Security & Privacy</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Admin Password</label>
+              <input type="password" id="setting-admin-password" placeholder="••••••••">
+              <div class="form-hint">Leave blank to keep current password</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Enable HTTPS</label>
+              <div class="toggle-switch">
+                <input type="checkbox" id="setting-https-enabled" checked>
+                <div class="switch"></div>
+              </div>
+              <div class="form-hint">Use SSL/TLS for dashboard connection</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Log Retention (days)</label>
+              <input type="number" id="setting-log-retention" value="30" min="7" max="365">
+              <div class="form-hint">Automatically delete logs older than this</div>
+            </div>
+            <button class="btn-primary" onclick="saveSettings()">Save Security Settings</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Traffic Log Tab -->
+      <div id="tab-traffic" class="tab-content">
+        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Traffic Log</h2>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">All Traffic Events</div>
+              <div class="card-subtitle">Complete activity history with filters</div>
+            </div>
+            <button class="btn-secondary" onclick="clearTrafficLogs()" style="padding: 0.5rem 1rem;">Clear Logs</button>
+          </div>
+
+          <div class="form-row" style="margin-bottom: 1.5rem;">
+            <input type="text" id="traffic-filter-client" placeholder="Filter by client IP">
+            <input type="text" id="traffic-filter-domain" placeholder="Filter by domain">
+            <select id="traffic-filter-category">
+              <option value="">All Categories</option>
+              <option value="Educational">Educational</option>
+              <option value="Productive">Productive</option>
+              <option value="Distracting">Distracting</option>
+              <option value="Harmful">Harmful</option>
+            </select>
+          </div>
+
+          <div style="overflow-x: auto;">
+            <table class="traffic-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Client IP</th>
+                  <th>Domain</th>
+                  <th>Category</th>
+                  <th>Blocked</th>
+                </tr>
+              </thead>
+              <tbody id="traffic-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- System Tab -->
+      <div id="tab-system" class="tab-content">
+        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">System Management</h2>
+
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-value" id="sys-uptime">—</div>
+            <div class="stat-label">Uptime</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="sys-cpu">—</div>
+            <div class="stat-label">CPU Usage</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="sys-memory">—</div>
+            <div class="stat-label">Memory Usage</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="sys-disk">—</div>
+            <div class="stat-label">Disk Usage</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Service Management</div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 1rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem; background: var(--surface); border-radius: 8px;">
+              <div>
+                <div style="font-weight: 600;">Proxy Service</div>
+                <div style="font-size: 0.85rem; color: var(--text-secondary);">mitmproxy transparent gateway</div>
+              </div>
+              <div style="display: flex; gap: 0.5rem;">
+                <button class="btn-secondary" style="padding: 0.5rem 1rem;">Restart</button>
+              </div>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem; background: var(--surface); border-radius: 8px;">
+              <div>
+                <div style="font-weight: 600;">Dashboard Service</div>
+                <div style="font-size: 0.85rem; color: var(--text-secondary);">Flask admin interface</div>
+              </div>
+              <div style="display: flex; gap: 0.5rem;">
+                <button class="btn-secondary" style="padding: 0.5rem 1rem;">Restart</button>
+              </div>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem; background: var(--surface); border-radius: 8px;">
+              <div>
+                <div style="font-weight: 600;">Firewall Rules</div>
+                <div style="font-size: 0.85rem; color: var(--text-secondary);">iptables and network configuration</div>
+              </div>
+              <div style="display: flex; gap: 0.5rem;">
+                <button class="btn-secondary" style="padding: 0.5rem 1rem;">Reload</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Maintenance</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">System Configuration</label>
+            <div class="btn-group">
+              <button class="btn-secondary" onclick="exportConfig()">Export Config</button>
+              <button class="btn-secondary" onclick="importConfig()">Import Config</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Factory Reset</label>
+            <div class="form-hint" style="margin-bottom: 1rem;">This will reset all settings to defaults. This action cannot be undone.</div>
+            <button class="btn-danger" onclick="confirmReset()">Restore Default Settings</button>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
 </div>
 
-<h2>Category breakdown</h2>
-<div id="bars"></div>
+<!-- Modal for Confirmations -->
+<div class="modal" id="confirmModal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <div class="modal-title">Confirm Action</div>
+      <button class="modal-close" onclick="closeModal('confirmModal')">✕</button>
+    </div>
+    <div id="modalMessage" style="margin-bottom: 1.5rem; color: var(--text-secondary);"></div>
+    <div class="btn-group">
+      <button class="btn-secondary" onclick="closeModal('confirmModal')">Cancel</button>
+      <button class="btn-danger" id="confirmBtn" onclick="executeConfirm()">Confirm</button>
+    </div>
+  </div>
+</div>
 
-<h2>Recent traffic</h2>
-<table>
-  <thead><tr><th>Time (UTC)</th><th>Client IP</th><th>Host</th><th>Category</th><th>Blocked</th></tr></thead>
-  <tbody id="recent"></tbody>
-</table>
-
-<h2>Throttle events</h2>
-<table>
-  <thead><tr><th>Time (UTC)</th><th>Client IP</th><th>Host</th><th>RPM</th><th>Baseline</th><th>Action</th></tr></thead>
-  <tbody id="throttles"></tbody>
-</table>
-
-<button onclick="clearLogs()">Clear all logs</button>
+<!-- Toast Container -->
+<div class="toast-container" id="toastContainer"></div>
 
 <script>
-const COLORS = {
-  Educational:"#3fb950", Productive:"#58a6ff",
-  Distracting:"#d29922", Harmful:"#f85149",
-  Uncategorized:"#8b949e","Non-HTML":"#484f58"
-};
+  // ─── State Management ─── 
+  let currentTab = 'dashboard';
+  let currentWizardStep = 1;
+  let pendingConfirmAction = null;
 
-async function refresh() {
-  const d = await fetch("/api/stats").then(r => r.json());
-  document.getElementById("total").textContent   = d.total;
-  document.getElementById("flagged").textContent = d.flagged;
-  document.getElementById("clients").textContent = d.clients;
+  // ─── Tab Navigation ─── 
+  function switchTab(tabName) {
+    document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+    document.getElementById(`tab-${tabName}`).classList.add('active');
+    event.currentTarget?.classList.add('active');
+    currentTab = tabName;
+    closeSidebar();
+    
+    if (tabName === 'dashboard') refreshStats();
+  }
 
-  const maxC = Math.max(...d.counts.map(c => c.count), 1);
-  document.getElementById("bars").innerHTML = d.counts.map(c => `
-    <div class="bar-wrap">
-      <span style="width:120px;color:${COLORS[c.category]||'#ccc'};font-size:.8em">${c.category}</span>
-      <div class="bar" style="width:${Math.round(c.count/maxC*240)}px;background:${COLORS[c.category]||'#ccc'}"></div>
-      <span style="font-size:.8em;color:#8b949e">${c.count}</span>
-    </div>`).join("");
+  function switchSettings(section) {
+    document.querySelectorAll('.settings-panel').forEach(el => el.classList.add('hidden'));
+    document.querySelectorAll('.tabs .tab').forEach(el => el.classList.remove('active'));
+    document.getElementById(`settings-${section}`).classList.remove('hidden');
+    event.currentTarget?.classList.add('active');
+  }
 
-  document.getElementById("recent").innerHTML = d.recent.map(r => `
-    <tr>
-      <td>${r.time}</td>
-      <td>${r.client_ip}</td>
-      <td>${r.host}</td>
-      <td class="cat-${r.category}">${r.category}</td>
-      <td>${r.flagged ? '<span class="flagged">BLOCKED</span>' : '—'}</td>
-    </tr>`).join("");
+  // ─── Mobile Sidebar ─── 
+  function toggleSidebar() {
+    document.getElementById('sidebar').classList.toggle('open');
+  }
 
-  document.getElementById("throttles").innerHTML = d.throttles.length
-    ? d.throttles.map(t => `
-      <tr>
-        <td>${t.time}</td><td>${t.client_ip}</td><td>${t.host}</td>
-        <td style="color:#f85149">${t.rpm}</td>
-        <td>${t.baseline}</td>
-        <td style="color:#d29922">${t.action}</td>
-      </tr>`).join("")
-    : '<tr><td colspan="6" style="color:#484f58">No throttle events yet</td></tr>';
-}
+  function closeSidebar() {
+    document.getElementById('sidebar').classList.remove('open');
+  }
 
-async function clearLogs() {
-  if (!confirm("Clear all traffic logs and throttle events?")) return;
-  await fetch("/api/clear", { method: "POST" });
-  refresh();
-}
+  // ─── Wizard Navigation ─── 
+  function wizardNext() {
+    if (currentWizardStep < 4) {
+      document.getElementById(`wizard-step-${currentWizardStep}`).classList.add('hidden');
+      currentWizardStep++;
+      document.getElementById(`wizard-step-${currentWizardStep}`).classList.remove('hidden');
+      updateWizardSteps();
+      if (currentWizardStep === 4) updateReview();
+    }
+  }
 
-setInterval(refresh, 5000);
-refresh();
+  function wizardPrev() {
+    if (currentWizardStep > 1) {
+      document.getElementById(`wizard-step-${currentWizardStep}`).classList.add('hidden');
+      currentWizardStep--;
+      document.getElementById(`wizard-step-${currentWizardStep}`).classList.remove('hidden');
+      updateWizardSteps();
+    }
+  }
+
+  function updateWizardSteps() {
+    document.querySelectorAll('.wizard-step').forEach((el, i) => {
+      el.classList.remove('active', 'completed');
+      if (i + 1 < currentWizardStep) el.classList.add('completed');
+      if (i + 1 === currentWizardStep) el.classList.add('active');
+    });
+  }
+
+  function updateReview() {
+    document.getElementById('review-gateway-ip').textContent = document.getElementById('wizard-gateway-ip').value;
+    document.getElementById('review-dhcp-range').textContent = 
+      document.getElementById('wizard-dhcp-start').value + ' - ' + 
+      document.getElementById('wizard-dhcp-end').value;
+    document.getElementById('review-nlp-mode').textContent = 
+      document.getElementById('wizard-nlp-mode').options[document.getElementById('wizard-nlp-mode').selectedIndex].text;
+    document.getElementById('review-throttle-rate').textContent = 
+      document.getElementById('wizard-throttle-rate').value + ' Kbps';
+  }
+
+  // ─── API Calls ─── 
+  async function refreshStats() {
+    try {
+      const response = await fetch('/api/stats');
+      const data = await response.json();
+      
+      document.getElementById('stat-total').textContent = data.total;
+      document.getElementById('stat-flagged').textContent = data.flagged;
+      document.getElementById('stat-clients').textContent = data.clients;
+      document.getElementById('stat-throttled').textContent = data.throttles?.length || 0;
+
+      // Category breakdown
+      let html = '';
+      data.counts.forEach(c => {
+        const percent = data.total > 0 ? Math.round((c.count / data.total) * 100) : 0;
+        html += `
+          <div style="text-align: center; padding: 1rem; background: var(--surface); border-radius: 8px;">
+            <div style="font-size: 1.5rem; font-weight: 700; color: var(--primary); margin-bottom: 0.5rem;">${c.count}</div>
+            <div style="font-size: 0.85rem; color: var(--text-secondary); text-transform: uppercase;">${c.category}</div>
+            <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.25rem;">${percent}%</div>
+          </div>
+        `;
+      });
+      document.getElementById('category-breakdown').innerHTML = html;
+
+      // Recent activity
+      let recentHtml = '';
+      (data.recent || []).slice(0, 10).forEach(r => {
+        const categoryClass = `category-badge ${r.category.toLowerCase()}`;
+        recentHtml += `
+          <tr>
+            <td>${new Date(r.time).toLocaleTimeString()}</td>
+            <td style="font-family: monospace; font-size: 0.9rem;">${r.client_ip}</td>
+            <td>${r.host}</td>
+            <td><span class="${categoryClass}">${r.category}</span></td>
+            <td>${r.flagged ? '🚫 Blocked' : '✓'}</td>
+          </tr>
+        `;
+      });
+      document.getElementById('recent-tbody').innerHTML = recentHtml || '<tr><td colspan="5" class="text-center" style="color: var(--text-secondary); padding: 2rem;">No traffic data yet</td></tr>';
+    } catch (e) {
+      showToast('Failed to load statistics', 'error');
+    }
+  }
+
+  async function saveWizardConfig() {
+    try {
+      const config = {
+        gateway_ip: document.getElementById('wizard-gateway-ip').value,
+        dhcp_start: document.getElementById('wizard-dhcp-start').value,
+        dhcp_end: document.getElementById('wizard-dhcp-end').value,
+        nlp_mode: document.getElementById('wizard-nlp-mode').value,
+        block_harmful: document.getElementById('block-harmful').checked,
+        block_distracting: document.getElementById('block-distracting').checked,
+        throttle_enabled: document.getElementById('throttle-enabled').checked,
+        throttle_threshold: document.getElementById('wizard-throttle-threshold').value,
+        throttle_rate: document.getElementById('wizard-throttle-rate').value,
+      };
+      
+      const response = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+      });
+      
+      if (response.ok) {
+        showToast('Configuration saved successfully', 'success');
+        setTimeout(() => switchTab('dashboard'), 1500);
+      } else {
+        showToast('Failed to save configuration', 'error');
+      }
+    } catch (e) {
+      showToast('Error: ' + e.message, 'error');
+    }
+  }
+
+  async function saveSettings() {
+    try {
+      const settings = {
+        wan_interface: document.getElementById('setting-wan-interface')?.value,
+        lan_interface: document.getElementById('setting-lan-interface')?.value,
+        gateway_ip: document.getElementById('setting-gateway-ip')?.value,
+        dns_servers: document.getElementById('setting-dns-servers')?.value,
+        nlp_model: document.getElementById('setting-nlp-model')?.value,
+        block_harmful: document.getElementById('setting-block-harmful')?.checked,
+        block_distracting: document.getElementById('setting-block-distracting')?.checked,
+        throttle_enabled: document.getElementById('setting-throttle-enabled')?.checked,
+        velocity_threshold: document.getElementById('setting-velocity-threshold')?.value,
+        throttle_duration: document.getElementById('setting-throttle-duration')?.value,
+        throttle_rate: document.getElementById('setting-throttle-rate')?.value,
+        target_domains: document.getElementById('setting-target-domains')?.value,
+      };
+      
+      const response = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings)
+      });
+      
+      if (response.ok) {
+        showToast('Settings saved successfully', 'success');
+      } else {
+        showToast('Failed to save settings', 'error');
+      }
+    } catch (e) {
+      showToast('Error: ' + e.message, 'error');
+    }
+  }
+
+  async function clearTrafficLogs() {
+    pendingConfirmAction = async () => {
+      const response = await fetch('/api/clear', { method: 'POST' });
+      if (response.ok) {
+        showToast('Traffic logs cleared', 'success');
+        refreshStats();
+      }
+    };
+    showConfirmDialog('Clear all traffic logs and throttle events? This cannot be undone.', 'Clear');
+  }
+
+  async function confirmReset() {
+    pendingConfirmAction = async () => {
+      const response = await fetch('/api/reset', { method: 'POST' });
+      if (response.ok) {
+        showToast('System reset to defaults', 'success');
+        location.reload();
+      }
+    };
+    showConfirmDialog('Reset all settings to factory defaults? This cannot be undone.', 'Reset');
+  }
+
+  function exportConfig() {
+    showToast('Exporting configuration...', 'warning');
+    // Implementation would download config file
+  }
+
+  function importConfig() {
+    showToast('Import feature coming soon', 'warning');
+  }
+
+  // ─── Modal Management ─── 
+  function showConfirmDialog(message, action) {
+    document.getElementById('modalMessage').textContent = message;
+    document.getElementById('confirmBtn').textContent = action;
+    document.getElementById('confirmModal').classList.add('active');
+  }
+
+  function closeModal(id) {
+    document.getElementById(id).classList.remove('active');
+  }
+
+  function executeConfirm() {
+    if (pendingConfirmAction) {
+      pendingConfirmAction();
+      closeModal('confirmModal');
+      pendingConfirmAction = null;
+    }
+  }
+
+  // ─── Toast Notifications ─── 
+  function showToast(message, type = 'info') {
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.textContent = message;
+    document.getElementById('toastContainer').appendChild(toast);
+    setTimeout(() => toast.remove(), 4000);
+  }
+
+  // ─── Initialize ─── 
+  refreshStats();
+  setInterval(refreshStats, 5000);
 </script>
+
 </body>
 </html>

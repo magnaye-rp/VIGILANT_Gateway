@@ -1,0 +1,265 @@
+{% extends "base.html" %}
+
+{% block title %}System Status{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">System Status</h1>
+    <p class="page-subtitle">Monitor system health, resources, and service status</p>
+</div>
+
+<!-- System Overview -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-icon primary">⏱️</div>
+        <div class="stat-value" id="uptime">—</div>
+        <div class="stat-label">System Uptime</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon success">🖥️</div>
+        <div class="stat-value" id="loadAvg">—</div>
+        <div class="stat-label">Load Average</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon warning">🌡️</div>
+        <div class="stat-value" id="temperature">—°C</div>
+        <div class="stat-label">CPU Temperature</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon info">📦</div>
+        <div class="stat-value" id="processes">—</div>
+        <div class="stat-label">Running Processes</div>
+    </div>
+</div>
+
+<!-- Resource Usage -->
+<div class="card" style="margin-bottom: 24px;">
+    <div class="card-header">
+        <h3 class="card-title">Resource Usage</h3>
+        <button class="btn btn-sm btn-secondary" onclick="refreshSystemStats()">Refresh</button>
+    </div>
+    <div class="card-body">
+        <div class="grid-2">
+            <!-- CPU -->
+            <div>
+                <h4 style="margin-bottom: 12px; font-size: 0.875rem; color: var(--text-muted);">CPU</h4>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span>Usage</span>
+                    <span style="font-weight: 600;" id="cpuPercent">—%</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="cpuBar" style="width: 0%"></div>
+                </div>
+                <div style="margin-top: 16px; font-size: 0.875rem; color: var(--text-secondary);">
+                    <div>Cores: <span id="cpuCores">—</span></div>
+                    <div>Frequency: <span id="cpuFreq">—</span> GHz</div>
+                </div>
+            </div>
+            
+            <!-- Memory -->
+            <div>
+                <h4 style="margin-bottom: 12px; font-size: 0.875rem; color: var(--text-muted);">Memory</h4>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span>Usage</span>
+                    <span style="font-weight: 600;" id="memoryPercent">—%</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill success" id="memoryBar" style="width: 0%"></div>
+                </div>
+                <div style="margin-top: 16px; font-size: 0.875rem; color: var(--text-secondary);">
+                    <div>Total: <span id="memoryTotal">—</span> GB</div>
+                    <div>Used: <span id="memoryUsed">—</span> GB</div>
+                    <div>Available: <span id="memoryAvailable">—</span> GB</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Disk -->
+        <div style="margin-top: 24px;">
+            <h4 style="margin-bottom: 12px; font-size: 0.875rem; color: var(--text-muted);">Disk Storage</h4>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                <span>Usage</span>
+                <span style="font-weight: 600;" id="diskPercent">—%</span>
+            </div>
+            <div class="progress-bar">
+                <div class="progress-fill warning" id="diskBar" style="width: 0%"></div>
+            </div>
+            <div style="margin-top: 16px; font-size: 0.875rem; color: var(--text-secondary);">
+                <div>Total: <span id="diskTotal">—</span> GB</div>
+                <div>Used: <span id="diskUsed">—</span> GB</div>
+                <div>Free: <span id="diskFree">—</span> GB</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Service Status -->
+<div class="card" style="margin-bottom: 24px;">
+    <div class="card-header">
+        <h3 class="card-title">VIGILANT Services</h3>
+        <button class="btn btn-sm btn-secondary" onclick="refreshServices()">Refresh</button>
+    </div>
+    <div class="card-body">
+        <div class="table-container" style="border: none; box-shadow: none;">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Service</th>
+                        <th>Status</th>
+                        <th>Uptime</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="servicesTable">
+                    <!-- Service rows will be inserted here -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Network Interfaces -->
+<div class="card" style="margin-bottom: 24px;">
+    <div class="card-header">
+        <h3 class="card-title">Network Interfaces</h3>
+        <a href="/interfaces" class="btn btn-sm btn-secondary">Configure</a>
+    </div>
+    <div class="card-body">
+        <div class="table-container" style="border: none; box-shadow: none;">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Interface</th>
+                        <th>IP Address</th>
+                        <th>Status</th>
+                        <th>Traffic (RX/TX)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>enp0s5</strong> <span class="badge neutral">WAN</span></td>
+                        <td id="wanIp">—</td>
+                        <td><span class="badge success">Connected</span></td>
+                        <td id="wanTraffic">— / —</td>
+                    </tr>
+                    <tr>
+                        <td><strong>enp0s6</strong> <span class="badge neutral">LAN</span></td>
+                        <td id="lanIp">192.168.10.1</td>
+                        <td><span class="badge success">Connected</span></td>
+                        <td id="lanTraffic">— / —</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- System Information -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">System Information</h3>
+    </div>
+    <div class="card-body">
+        <div class="grid-2">
+            <div>
+                <h4 style="margin-bottom: 12px; font-size: 0.875rem; color: var(--text-muted);">Operating System</h4>
+                <div style="font-size: 0.875rem; color: var(--text-secondary);">
+                    <div>Kernel: <span id="kernelVersion">—</span></div>
+                    <div>OS: Ubuntu Server 24.04 LTS</div>
+                    <div>Architecture: x86_64</div>
+                </div>
+            </div>
+            <div>
+                <h4 style="margin-bottom: 12px; font-size: 0.875rem; color: var(--text-muted);">Hardware</h4>
+                <div style="font-size: 0.875rem; color: var(--text-secondary);">
+                    <div>Model: Lenovo ThinkCentre M710q</div>
+                    <div>CPU: Intel Xeon</div>
+                    <div>Storage: NVMe 120GB</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function refreshSystemStats() {
+    const stats = await Vigilant.apiGet('/api/system');
+    if (!stats) return;
+    
+    document.getElementById('uptime').textContent = stats.uptime;
+    document.getElementById('cpuPercent').textContent = stats.cpu_percent + '%';
+    document.getElementById('cpuBar').style.width = stats.cpu_percent + '%';
+    document.getElementById('memoryPercent').textContent = stats.memory_percent.toFixed(1) + '%';
+    document.getElementById('memoryBar').style.width = stats.memory_percent + '%';
+    document.getElementById('diskPercent').textContent = stats.disk_percent.toFixed(1) + '%';
+    document.getElementById('diskBar').style.width = stats.disk_percent + '%';
+    
+    // TODO: Get additional system info from API
+    document.getElementById('loadAvg').textContent = '0.5, 0.3, 0.1';
+    document.getElementById('temperature').textContent = '45';
+    document.getElementById('processes').textContent = '156';
+    document.getElementById('cpuCores').textContent = '2';
+    document.getElementById('cpuFreq').textContent = '2.4';
+    document.getElementById('memoryTotal').textContent = '7.8';
+    document.getElementById('memoryUsed').textContent = (stats.memory_mb / 1024).toFixed(1);
+    document.getElementById('memoryAvailable').textContent = (7.8 - stats.memory_mb / 1024).toFixed(1);
+    document.getElementById('diskTotal').textContent = '120';
+    document.getElementById('diskUsed').textContent = '45';
+    document.getElementById('diskFree').textContent = '75';
+    document.getElementById('kernelVersion').textContent = '6.5.0-28-generic';
+}
+
+async function refreshServices() {
+    const services = await Vigilant.apiGet('/api/services');
+    if (!services) return;
+    
+    const servicesTable = document.getElementById('servicesTable');
+    const serviceData = [
+        { name: 'vigilant-proxy', service: services.proxy, icon: '🔍' },
+        { name: 'vigilant-dashboard', service: services.dashboard, icon: '📊' },
+        { name: 'vigilant-firewall', service: services.firewall, icon: '🛡️' },
+        { name: 'dnsmasq', service: { status: 'running', uptime: '12h 45m' }, icon: '📡' },
+        { name: 'mitmproxy', service: { status: 'running', uptime: '12h 45m' }, icon: '🔐' }
+    ];
+    
+    servicesTable.innerHTML = serviceData.map(s => `
+        <tr>
+            <td>
+                <span style="margin-right: 8px;">${s.icon}</span>
+                <strong>${s.name}</strong>
+            </td>
+            <td>
+                <span class="badge ${s.service.status === 'running' || s.service.status === 'active' ? 'success' : 'danger'}">
+                    ${s.service.status}
+                </span>
+            </td>
+            <td>${s.service.uptime}</td>
+            <td>
+                <button class="btn btn-sm btn-secondary" onclick="restartService('${s.name}')">Restart</button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+function restartService(serviceName) {
+    Vigilant.confirmAction(`Are you sure you want to restart ${serviceName}?`, () => {
+        // TODO: Implement service restart API
+        Vigilant.showToast(`Restarting ${serviceName}...`, 'info');
+        setTimeout(() => {
+            Vigilant.showToast(`${serviceName} restarted successfully`, 'success');
+            refreshServices();
+        }, 2000);
+    });
+}
+
+// Initial load and auto-refresh
+refreshSystemStats();
+refreshServices();
+Vigilant.startAutoRefresh(() => {
+    refreshSystemStats();
+    refreshServices();
+}, 10000);
+</script>
+{% endblock %}

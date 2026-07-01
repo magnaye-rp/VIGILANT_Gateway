@@ -1,0 +1,71 @@
+<!-- Reusable Card Components -->
+
+<!-- Stat Card -->
+{% macro stat_card(icon, value, label, change=None, color='primary') -%}
+<div class="stat-card">
+    <div class="stat-icon {{ color }}">{{ icon }}</div>
+    <div class="stat-value">{{ value }}</div>
+    <div class="stat-label">{{ label }}</div>
+    {% if change is not none %}
+    <div class="stat-change {{ 'positive' if change > 0 else 'negative' }}">
+        {{ '+' if change > 0 else '' }}{{ change }}% from last hour
+    </div>
+    {% endif %}
+</div>
+{%- endmacro %}
+
+<!-- Info Card -->
+{% macro info_card(title, content, icon=None) -%}
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            {% if icon %}<span style="margin-right: 8px;">{{ icon }}</span>{% endif %}
+            {{ title }}
+        </h3>
+    </div>
+    <div class="card-body">
+        {{ content|safe }}
+    </div>
+</div>
+{%- endmacro %}
+
+<!-- Action Card -->
+{% macro action_card(title, description, actions) -%}
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">{{ title }}</h3>
+    </div>
+    <div class="card-body">
+        <p class="card-subtitle">{{ description }}</p>
+        <div style="margin-top: 16px;">
+            {% for action in actions %}
+            <button class="btn btn-{{ action.style or 'primary' }}" {{ action.attrs|safe }}>
+                {% if action.icon %}{{ action.icon }} {% endif %}{{ action.label }}
+            </button>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{%- endmacro %}
+
+<!-- Status Card -->
+{% macro status_card(title, status, details=None) -%}
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">{{ title }}</h3>
+        <span class="badge {{ status.class }}">{{ status.label }}</span>
+    </div>
+    <div class="card-body">
+        {% if details %}
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+            {% for key, value in details.items() %}
+            <div style="display: flex; justify-content: space-between; font-size: 0.875rem;">
+                <span style="color: var(--text-muted);">{{ key }}</span>
+                <span style="color: var(--text-primary); font-weight: 500;">{{ value }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+{%- endmacro %}

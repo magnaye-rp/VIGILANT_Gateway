@@ -1,0 +1,84 @@
+<!-- Reusable Form Components -->
+
+<!-- Form Group -->
+{% macro form_group(label, input_type, name, value='', placeholder='', required=false, help_text='') -%}
+<div class="form-group">
+    <label class="form-label" for="{{ name }}">
+        {{ label }}
+        {% if required %}<span style="color: var(--danger);">*</span>{% endif %}
+    </label>
+    <input type="{{ input_type }}" 
+           id="{{ name }}" 
+           name="{{ name }}" 
+           value="{{ value }}" 
+           placeholder="{{ placeholder }}"
+           {% if required %}required{% endif %}
+           class="form-input">
+    {% if help_text %}
+    <div class="form-help">{{ help_text }}</div>
+    {% endif %}
+</div>
+{%- endmacro %}
+
+<!-- Select Input -->
+{% macro form_select(label, name, options, selected='', required=false, help_text='') -%}
+<div class="form-group">
+    <label class="form-label" for="{{ name }}">
+        {{ label }}
+        {% if required %}<span style="color: var(--danger);">*</span>{% endif %}
+    </label>
+    <select id="{{ name }}" name="{{ name }}" class="form-select" {% if required %}required{% endif %}>
+        {% for option in options %}
+        <option value="{{ option.value }}" {% if option.value == selected %}selected{% endif %}>
+            {{ option.label }}
+        </option>
+        {% endfor %}
+    </select>
+    {% if help_text %}
+    <div class="form-help">{{ help_text }}</div>
+    {% endif %}
+</div>
+{%- endmacro %}
+
+<!-- Checkbox Input -->
+{% macro form_checkbox(label, name, checked=false, help_text='') -%}
+<div class="form-group">
+    <label class="form-checkbox">
+        <input type="checkbox" id="{{ name }}" name="{{ name }}" {% if checked %}checked{% endif %}>
+        {{ label }}
+    </label>
+    {% if help_text %}
+    <div class="form-help">{{ help_text }}</div>
+    {% endif %}
+</div>
+{%- endmacro %}
+
+<!-- Textarea -->
+{% macro form_textarea(label, name, value='', rows=4, required=false, help_text='') -%}
+<div class="form-group">
+    <label class="form-label" for="{{ name }}">
+        {{ label }}
+        {% if required %}<span style="color: var(--danger);">*</span>{% endif %}
+    </label>
+    <textarea id="{{ name}" 
+              name="{{ name }}" 
+              rows="{{ rows }}" 
+              {% if required %}required{% endif %}
+              class="form-input">{{ value }}</textarea>
+    {% if help_text %}
+    <div class="form-help">{{ help_text }}</div>
+    {% endif %}
+</div>
+{%- endmacro %}
+
+<!-- Form Actions -->
+{% macro form_actions(primary_label='Save', secondary_label='Cancel', secondary_action='') -%}
+<div style="display: flex; gap: 12px; justify-content: flex-end; margin-top: 24px;">
+    {% if secondary_action %}
+    <button type="button" class="btn btn-secondary" onclick="{{ secondary_action }}">
+        {{ secondary_label }}
+    </button>
+    {% endif %}
+    <button type="submit" class="btn btn-primary">{{ primary_label }}</button>
+</div>
+{%- endmacro %}

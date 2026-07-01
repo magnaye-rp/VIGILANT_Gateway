@@ -1,0 +1,87 @@
+<!-- Reusable Table Components -->
+
+<!-- Data Table -->
+{% macro data_table(columns, rows, actions=None) -%}
+<div class="table-container">
+    <table class="table">
+        <thead>
+            <tr>
+                {% for column in columns %}
+                <th>{{ column }}</th>
+                {% endfor %}
+                {% if actions %}
+                <th>Actions</th>
+                {% endif %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in rows %}
+            <tr>
+                {% for cell in row %}
+                <td>{{ cell|safe }}</td>
+                {% endfor %}
+                {% if actions %}
+                <td>
+                    <div style="display: flex; gap: 8px;">
+                        {% for action in actions %}
+                        <button class="btn btn-sm btn-{{ action.style or 'secondary' }}" 
+                                onclick="{{ action.onclick|safe }}"
+                                {{ action.attrs|safe }}>
+                            {% if action.icon %}{{ action.icon }}{% endif %}
+                        </button>
+                        {% endfor %}
+                    </div>
+                </td>
+                {% endif %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{%- endmacro %}
+
+<!-- Simple Table -->
+{% macro simple_table(headers, data) -%}
+<div class="table-container">
+    <table class="table">
+        <thead>
+            <tr>
+                {% for header in headers %}
+                <th>{{ header }}</th>
+                {% endfor %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in data %}
+            <tr>
+                {% for cell in row %}
+                <td>{{ cell }}</td>
+                {% endfor %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{%- endmacro %}
+
+<!-- Key-Value Table -->
+{% macro kv_table(data, label_col='Setting', value_col='Value') -%}
+<div class="table-container">
+    <table class="table">
+        <thead>
+            <tr>
+                <th>{{ label_col }}</th>
+                <th>{{ value_col }}</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for key, value in data.items() %}
+            <tr>
+                <td>{{ key }}</td>
+                <td>{{ value }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{%- endmacro %}

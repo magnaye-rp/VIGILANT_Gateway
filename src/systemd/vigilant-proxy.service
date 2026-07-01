@@ -13,6 +13,7 @@ ExecStart=/home/vigilant_admin/vigilant/venv/bin/mitmdump \
   --listen-host 0.0.0.0 \
   --listen-port 8080 \
   --set block_global=false \
+  --set ignore_hosts='^(.*\.)?(facebook|twitter|x|tiktok|instagram|reddit|youtube)\.com$' \
   -s /home/vigilant_admin/vigilant/addons/vigilant_addon.py
 Restart=on-failure
 RestartSec=5

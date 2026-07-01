@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+
+{% block title %}Network{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">Network Overview</h1>
+    <p class="page-subtitle">View network status and quick access to network configuration</p>
+</div>
+
+<!-- Network Status -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-icon success">🌐</div>
+        <div class="stat-value">Connected</div>
+        <div class="stat-label">WAN Status</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon success">📡</div>
+        <div class="stat-value">5</div>
+        <div class="stat-label">Active Clients</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon info">⚡</div>
+        <div class="stat-value">125 Mbps</div>
+        <div class="stat-label">WAN Speed</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon warning">📊</div>
+        <div class="stat-value">2.3 GB</div>
+        <div class="stat-label">Today's Traffic</div>
+    </div>
+</div>
+
+<!-- Quick Access -->
+<div class="card" style="margin-bottom: 24px;">
+    <div class="card-header">
+        <h3 class="card-title">Network Configuration</h3>
+    </div>
+    <div class="card-body">
+        <div class="grid-3">
+            <div style="padding: 16px; background: var(--bg-tertiary); border-radius: 8px; cursor: pointer;" onclick="window.location.href='/interfaces'">
+                <div style="font-size: 2rem; margin-bottom: 8px;">🔌</div>
+                <div style="font-weight: 600;">Interfaces</div>
+                <div style="font-size: 0.875rem; color: var(--text-muted);">Configure network interfaces</div>
+            </div>
+            <div style="padding: 16px; background: var(--bg-tertiary); border-radius: 8px; cursor: pointer;" onclick="window.location.href='/firewall'">
+                <div style="font-size: 2rem; margin-bottom: 8px;">🛡️</div>
+                <div style="font-weight: 600;">Firewall</div>
+                <div style="font-size: 0.875rem; color: var(--text-muted);">Manage firewall rules</div>
+            </div>
+            <div style="padding: 16px; background: var(--bg-tertiary); border-radius: 8px; cursor: pointer;" onclick="window.location.href='/dhcp'">
+                <div style="font-size: 2rem; margin-bottom: 8px;">📡</div>
+                <div style="font-weight: 600;">DHCP</div>
+                <div style="font-size: 0.875rem; color: var(--text-muted);">Configure DHCP server</div>
+            </div>
+            <div style="padding: 16px; background: var(--bg-tertiary); border-radius: 8px; cursor: pointer;" onclick="window.location.href='/dns'">
+                <div style="font-size: 2rem; margin-bottom: 8px;">🔍</div>
+                <div style="font-weight: 600;">DNS</div>
+                <div style="font-size: 0.875rem; color: var(--text-muted);">Configure DNS settings</div>
+            </div>
+            <div style="padding: 16px; background: var(--bg-tertiary); border-radius: 8px; cursor: pointer;" onclick="window.location.href='/routing'">
+                <div style="font-size: 2rem; margin-bottom: 8px;">➡️</div>
+                <div style="font-weight: 600;">Routing</div>
+                <div style="font-size: 0.875rem; color: var(--text-muted);">Manage routing table</div>
+            </div>
+            <div style="padding: 16px; background: var(--bg-tertiary); border-radius: 8px; cursor: pointer;" onclick="window.location.href='/vpn'">
+                <div style="font-size: 2rem; margin-bottom: 8px;">🔐</div>
+                <div style="font-weight: 600;">VPN</div>
+                <div style="font-size: 0.875rem; color: var(--text-muted);">Configure VPN</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Interface Summary -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Interface Summary</h3>
+    </div>
+    <div class="card-body">
+        <div class="table-container" style="border: none; box-shadow: none;">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Interface</th>
+                        <th>Type</th>
+                        <th>IP Address</th>
+                        <th>Status</th>
+                        <th>RX/TX</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>enp0s5</strong></td>
+                        <td><span class="badge neutral">WAN</span></td>
+                        <td>192.168.1.100</td>
+                        <td><span class="badge success">Connected</span></td>
+                        <td>1.2 GB / 890 MB</td>
+                    </tr>
+                    <tr>
+                        <td><strong>enp0s6</strong></td>
+                        <td><span class="badge neutral">LAN</span></td>
+                        <td>192.168.10.1</td>
+                        <td><span class="badge success">Connected</span></td>
+                        <td>2.3 GB / 1.8 GB</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

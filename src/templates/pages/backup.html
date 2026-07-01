@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+
+{% block title %}Backup & Restore{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">Backup & Restore</h1>
+    <p class="page-subtitle">Create and restore system backups</p>
+</div>
+
+<!-- Backup Status -->
+<div class="card" style="margin-bottom: 24px;">
+    <div class="card-header">
+        <h3 class="card-title">Backup Status</h3>
+    </div>
+    <div class="card-body">
+        <div class="grid-3">
+            <div>
+                <div style="font-size: 0.875rem; color: var(--text-muted);">Last Backup</div>
+                <div style="font-size: 1.25rem; font-weight: 600;">2024-01-15 02:00:00</div>
+            </div>
+            <div>
+                <div style="font-size: 0.875rem; color: var(--text-muted);">Total Backups</div>
+                <div style="font-size: 1.25rem; font-weight: 600;">8</div>
+            </div>
+            <div>
+                <div style="font-size: 0.875rem; color: var(--text-muted);">Total Size</div>
+                <div style="font-size: 1.25rem; font-weight: 600;">1.2 GB</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Create Backup -->
+<div class="card" style="margin-bottom: 24px;">
+    <div class="card-header">
+        <h3 class="card-title">Create Backup</h3>
+    </div>
+    <div class="card-body">
+        <form id="backupForm">
+            <div class="form-group">
+                <label class="form-label">Backup Name</label>
+                <input type="text" class="form-input" value="vigilant-backup-2024-01-15" placeholder="Enter backup name">
+            </div>
+            
+            <div class="form-group" style="margin-top: 16px;">
+                <label class="form-label">Backup Type</label>
+                <select class="form-select">
+                    <option value="full" selected>Full Backup (Configuration + Logs)</option>
+                    <option value="config">Configuration Only</option>
+                    <option value="logs">Logs Only</option>
+                </select>
+            </div>
+            
+            <div class="form-group" style="margin-top: 16px;">
+                <label class="form-checkbox">
+                    <input type="checkbox" checked>
+                    Include traffic logs may be large
+                </label>
+            </div>
+            
+            <div class="form-group" style="margin-top: 16px;">
+                <label class="form-checkbox">
+                    <input type="checkbox">
+                    Compress backup
+                </label>
+                <div class="form-help">Create compressed archive to save space</div>
+            </div>
+            
+            <div style="margin-top: 24px; display: flex; gap: 12px;">
+                <button type="submit" class="btn btn-primary">Create Backup</button>
+                <button type="button" class="btn btn-secondary" onclick="document.getElementById('backupForm').reset()">Reset</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Existing Backups -->
+<div class="card" style="margin-bottom: 24px;">
+    <div class="card-header">
+        <h3 class="card-title">Existing Backups</h3>
+        <button class="btn btn-sm btn-secondary" onclick="refreshBackups()">Refresh</button>
+    </div>
+    <div class="card-body" style="padding: 0;">
+        <div class="table-container" style="border: none; box-shadow: none;">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Date</th>
+                        <th>Type</th>
+                        <th>Size</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>vigilant-backup-2024-01-15</td>
+                        <td>2024-01-15 02:00:00</td>
+                        <td><span class="badge info">Full</span></td>
+                        <td>180 MB</td>
+                        <td>
+                            <button class="btn btn-sm btn-secondary" onclick="restoreBackup('vigilant-backup-2024-01-15')">Restore</button>
+                            <button class="btn btn-sm btn-secondary" onclick="downloadBackup('vigilant-backup-2024-01-15')">Download</button>
+                            <button class="btn btn-sm btn-danger" onclick="deleteBackup('vigilant-backup-2024-01-15')">Delete</button>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>vigilant-backup-2024-01-14</td>
+                        <td>2024-01-14 02:00:00</td>
+                        <td><span class="badge info">Full</span></td>
+                        <td>175 MB</td>
+                        <td>
+                            <button class="btn btn-sm btn-secondary" onclick="restoreBackup('vigilant-backup-2024-01-14')">Restore</button>
+                            <button class="btn btn-sm btn-secondary" onclick="downloadBackup('vigilant-backup-2024-01-14')">Download</button>
+                            <button class="btn btn-sm btn-danger" onclick="deleteBackup('vigilant-backup-2024-01-14')">Delete</button>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>vigilant-config-2024-01-13</td>
+                        <td>2024-01-13 15:30:00</td>
+                        <td><span class="badge neutral">Config</span></td>
+                        <td>5 MB</td>
+                        <td>
+                            <button class="btn btn-sm btn-secondary" onclick="restoreBackup('vigilant-config-2024-01-13')">Restore</button>
+                            <button class="btn btn-sm btn-secondary" onclick="downloadBackup('vigilant-config-2024-01-13')">Download</button>
+                            <button class="btn btn-sm btn-danger" onclick="deleteBackup('vigilant-config-2024-01-13')">Delete</button>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Automatic Backups -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Automatic Backups</h3>
+    </div>
+    <div class="card-body">
+        <form id="autoBackupForm">
+            <div class="form-group">
+                <label class="form-checkbox">
+                    <input type="checkbox" checked>
+                    Enable automatic backups
+                </label>
+            </div>
+            
+            <div class="form-group" style="margin-top: 16px;">
+                <label class="form-label">Backup Schedule</label>
+                <select class="form-select">
+                    <option value="daily">Daily</option>
+                    <option value="weekly" selected>Weekly</option>
+                    <option value="monthly">Monthly</option>
+                </select>
+            </div>
+            
+            <div class="form-group" style="margin-top: 16px;">
+                <label class="form-label">Retention Policy</label>
+                <select class="form-select">
+                    <option value="7">Keep last 7 backups</option>
+                    <option value="14">Keep last 14 backups</option>
+                    <option value="30" selected>Keep last 30 backups</option>
+                    <option value="unlimited">Keep all backups</option>
+                </select>
+            </div>
+            
+            <div style="margin-top: 24px; display: flex; gap: 12px;">
+                <button type="submit" class="btn btn-primary">Save Settings</button>
+                <button type="button" class="btn btn-secondary" onclick="document.getElementById('autoBackupForm').reset()">Reset</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('backupForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    Vigilant.showToast('Creating backup...', 'info');
+    // TODO: Implement API call to create backup
+    setTimeout(() => {
+        Vigilant.showToast('Backup created successfully', 'success');
+        refreshBackups();
+    }, 3000);
+});
+
+document.getElementById('autoBackupForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    Vigilant.showToast('Automatic backup settings saved', 'success');
+    // TODO: Implement API call to save auto backup settings
+});
+
+function restoreBackup(backupName) {
+    Vigilant.confirmAction(`Restore backup '${backupName}'? This will replace current configuration and cannot be undone.`, () => {
+        // TODO: Implement API call to restore backup
+        Vigilant.showToast(`Restoring backup '${backupName}'...`, 'info');
+    });
+}
+
+function downloadBackup(backupName) {
+    // TODO: Implement backup download
+    Vigilant.showToast(`Downloading '${backupName}'...`, 'info');
+}
+
+function deleteBackup(backupName) {
+    Vigilant.confirmAction(`Delete backup '${backupName}'? This action cannot be undone.`, () => {
+        // TODO: Implement API call to delete backup
+        Vigilant.showToast(`Backup '${backupName}' deleted`, 'success');
+        refreshBackups();
+    });
+}
+
+function refreshBackups() {
+    // TODO: Implement API call to refresh backups
+    Vigilant.showToast('Backups refreshed', 'info');
+}
+</script>
+{% endblock %}

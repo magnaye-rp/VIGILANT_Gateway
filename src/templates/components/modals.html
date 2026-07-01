@@ -1,0 +1,68 @@
+<!-- Reusable Modal Components -->
+
+<!-- Confirmation Modal -->
+{% macro confirm_modal(title, message, confirm_text='Confirm', cancel_text='Cancel', on_confirm='') -%}
+<div class="modal-overlay" id="confirmModal" style="display: none;">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 class="modal-title">{{ title }}</h3>
+            <button class="modal-close" onclick="closeModalById('confirmModal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p>{{ message }}</p>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModalById('confirmModal')">{{ cancel_text }}</button>
+            <button class="btn btn-danger" onclick="{{ on_confirm }}; closeModalById('confirmModal');">{{ confirm_text }}</button>
+        </div>
+    </div>
+</div>
+
+<script>
+function showConfirmModal() {
+    document.getElementById('confirmModal').style.display = 'flex';
+}
+function closeModalById(id) {
+    document.getElementById(id).style.display = 'none';
+}
+</script>
+{%- endmacro %}
+
+<!-- Form Modal -->
+{% macro form_modal(title, form_content, submit_text='Save', on_submit='') -%}
+<div class="modal-overlay" id="formModal" style="display: none;">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 class="modal-title">{{ title }}</h3>
+            <button class="modal-close" onclick="closeModalById('formModal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="modalForm" onsubmit="{{ on_submit }}">
+                {{ form_content|safe }}
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModalById('formModal')">Cancel</button>
+            <button class="btn btn-primary" onclick="document.getElementById('modalForm').dispatchEvent(new Event('submit'))">{{ submit_text }}</button>
+        </div>
+    </div>
+</div>
+{%- endmacro %}
+
+<!-- Info Modal -->
+{% macro info_modal(title, content) -%}
+<div class="modal-overlay" id="infoModal" style="display: none;">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 class="modal-title">{{ title }}</h3>
+            <button class="modal-close" onclick="closeModalById('infoModal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            {{ content|safe }}
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-primary" onclick="closeModalById('infoModal')">Close</button>
+        </div>
+    </div>
+</div>
+{%- endmacro %}

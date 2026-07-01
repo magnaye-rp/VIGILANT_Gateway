@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+
+{% block title %}DHCP{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">DHCP Configuration</h1>
+    <p class="page-subtitle">Configure DHCP server settings and manage leases</p>
+</div>
+
+<!-- DHCP Status -->
+<div class="card" style="margin-bottom: 24px;">
+    <div class="card-header">
+        <h3 class="card-title">DHCP Server Status</h3>
+        <span class="badge success">Running</span>
+    </div>
+    <div class="card-body">
+        <div class="grid-3">
+            <div>
+                <div style="font-size: 0.875rem; color: var(--text-muted);">Status</div>
+                <div style="font-size: 1.25rem; font-weight: 600; color: var(--success);">Enabled</div>
+            </div>
+            <div>
+                <div style="font-size: 0.875rem; color: var(--text-muted);">Active Leases</div>
+                <div style="font-size: 1.25rem; font-weight: 600;">5</div>
+            </div>
+            <div>
+                <div style="font-size: 0.875rem; color: var(--text-muted);">Lease Time</div>
+                <div style="font-size: 1.25rem; font-weight: 600;">24h</div>
+            </div>
+        </div>
+        <div style="margin-top: 16px; display: flex; gap: 12px;">
+            <button class="btn btn-secondary" onclick="toggleDhcp()">Disable DHCP</button>
+            <button class="btn btn-secondary" onclick="restartDhcp()">Restart Service</button>
+        </div>
+    </div>
+</div>
+
+<!-- DHCP Settings -->
+<div class="card" style="margin-bottom: 24px;">
+    <div class="card-header">
+        <h3 class="card-title">DHCP Settings</h3>
+    </div>
+    <div class="card-body">
+        <form id="dhcpForm">
+            <div class="grid-2">
+                <div class="form-group">
+                    <label class="form-label">Interface</label>
+                    <select class="form-select" id="dhcpInterface">
+                        <option value="enp0s6" selected>enp0s6 (LAN)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Gateway IP</label>
+                    <input type="text" class="form-input" value="192.168.10.1">
+                </div>
+            </div>
+            
+            <div class="grid-2">
+                <div class="form-group">
+                    <label class="form-label">DHCP Range Start</label>
+                    <input type="text" class="form-input" value="192.168.10.10">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">DHCP Range End</label>
+                    <input type="text" class="form-input" value="192.168.10.50">
+                </div>
+            </div>
+            
+            <div class="grid-2">
+                <div class="form-group">
+                    <label class="form-label">Subnet Mask</label>
+                    <input type="text" class="form-input" value="255.255.255.0">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Lease Time</label>
+                    <select class="form-select">
+                        <option value="1h">1 Hour</option>
+                        <option value="12h">12 Hours</option>
+                        <option value="24h" selected>24 Hours</option>
+                        <option value="7d">7 Days</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div style="margin-top: 24px; display: flex; gap: 12px;">
+                <button type="submit" class="btn btn-primary">Save Settings</button>
+                <button type="button" class="btn btn-secondary" onclick="document.getElementById('dhcpForm').reset()">Reset</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Static Leases -->
+<div class="card" style="margin-bottom: 24px;">
+    <div class="card-header">
+        <h3 class="card-title">Static Leases</h3>
+        <button class="btn btn-sm btn-primary" onclick="showAddLeaseModal()">+ Add Static Lease</button>
+    </div>
+    <div class="card-body" style="padding: 0;">
+        <div class="table-container" style="border: none; box-shadow: none;">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>MAC Address</th>
+                        <th>IP Address</th>
+                        <th>Hostname</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>00:11:22:33:44:55</td>
+                        <td>192.168.10.20</td>
+                        <td>server01</td>
+                        <td>
+                            <button class="btn btn-sm btn-secondary">Edit</button>
+                            <button class="btn btn-sm btn-danger">Delete</button>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>AA:BB:CC:DD:EE:FF</td>
+                        <td>192.168.10.25</td>
+                        <td>printer01</td>
+                        <td>
+                            <button class="btn btn-sm btn-secondary">Edit</button>
+                            <button class="btn btn-sm btn-danger">Delete</button>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Active Leases -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Active Leases</h3>
+        <button class="btn btn-sm btn-secondary" onclick="refreshLeases()">Refresh</button>
+    </div>
+    <div class="card-body" style="padding: 0;">
+        <div class="table-container" style="border: none; box-shadow: none;">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>IP Address</th>
+                        <th>MAC Address</th>
+                        <th>Hostname</th>
+                        <th>Lease Start</th>
+                        <th>Lease Expiry</th>
+                    </tr>
+                </thead>
+                <tbody id="activeLeases">
+                    <tr>
+                        <td>192.168.10.15</td>
+                        <td>11:22:33:44:55:66</td>
+                        <td>laptop-user</td>
+                        <td>2024-01-15 10:30:00</td>
+                        <td>2024-01-16 10:30:00</td>
+                    </tr>
+                    <tr>
+                        <td>192.168.10.30</td>
+                        <td>77:88:99:AA:BB:CC</td>
+                        <td>phone-user</td>
+                        <td>2024-01-15 11:00:00</td>
+                        <td>2024-01-16 11:00:00</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('dhcpForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    Vigilant.showToast('DHCP settings saved', 'success');
+    // TODO: Implement API call to save DHCP config
+});
+
+function toggleDhcp() {
+    Vigilant.confirmAction('Are you sure you want to disable DHCP? Clients will not receive IP addresses automatically.', () => {
+        // TODO: Implement API call to toggle DHCP
+        Vigilant.showToast('DHCP disabled', 'warning');
+    });
+}
+
+function restartDhcp() {
+    Vigilant.confirmAction('Restart DHCP service? This will temporarily interrupt network connectivity.', () => {
+        // TODO: Implement API call to restart DHCP
+        Vigilant.showToast('DHCP service restarted', 'success');
+    });
+}
+
+function showAddLeaseModal() {
+    // TODO: Show add static lease modal
+    Vigilant.showToast('Add static lease modal - TODO', 'info');
+}
+
+function refreshLeases() {
+    // TODO: Implement API call to refresh leases
+    Vigilant.showToast('Leases refreshed', 'info');
+}
+</script>
+{% endblock %}

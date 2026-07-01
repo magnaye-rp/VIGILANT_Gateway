@@ -1,0 +1,275 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">Dashboard</h1>
+    <p class="page-subtitle">Real-time network traffic monitoring and system status</p>
+</div>
+
+<!-- Stats Cards -->
+<div class="stats-grid" id="statsGrid">
+    <div class="stat-card">
+        <div class="stat-icon primary">📊</div>
+        <div class="stat-value" id="totalRequests">—</div>
+        <div class="stat-label">Total Requests</div>
+        <div class="stat-change positive" id="requestChange">+0% from last hour</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon danger">🛡️</div>
+        <div class="stat-value" id="blockedRequests">—</div>
+        <div class="stat-label">Harmful Blocked</div>
+        <div class="stat-change" id="blockChange">+0% from last hour</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon success">👥</div>
+        <div class="stat-value" id="activeClients">—</div>
+        <div class="stat-label">Active Clients</div>
+        <div class="stat-change positive" id="clientChange">+0% from last hour</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon warning">⚠️</div>
+        <div class="stat-value" id="throttleEvents">—</div>
+        <div class="stat-label">Throttle Events</div>
+        <div class="stat-change" id="throttleChange">+0% from last hour</div>
+    </div>
+</div>
+
+<!-- Category Breakdown -->
+<div class="card" style="margin-bottom: 24px;">
+    <div class="card-header">
+        <h3 class="card-title">Traffic Category Breakdown</h3>
+        <button class="btn btn-sm btn-secondary" onclick="refreshDashboard()">Refresh</button>
+    </div>
+    <div class="card-body">
+        <div id="categoryBars" style="display: flex; flex-direction: column; gap: 12px;">
+            <!-- Category bars will be inserted here -->
+        </div>
+    </div>
+</div>
+
+<div class="grid-2">
+    <!-- Recent Traffic -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">Recent Traffic</h3>
+            <a href="/logs" class="btn btn-sm btn-secondary">View All</a>
+        </div>
+        <div class="card-body" style="padding: 0;">
+            <div class="table-container" style="border: none; box-shadow: none;">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Client</th>
+                            <th>Host</th>
+                            <th>Category</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="recentTraffic">
+                        <!-- Traffic rows will be inserted here -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Throttle Events -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">Throttle Events</h3>
+            <span class="badge warning" id="throttleBadge">Active</span>
+        </div>
+        <div class="card-body" style="padding: 0;">
+            <div class="table-container" style="border: none; box-shadow: none;">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Client</th>
+                            <th>Host</th>
+                            <th>RPM</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="throttleEvents">
+                        <!-- Throttle events will be inserted here -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- System Resources -->
+<div class="card" style="margin-top: 24px;">
+    <div class="card-header">
+        <h3 class="card-title">System Resources</h3>
+        <button class="btn btn-sm btn-secondary" onclick="refreshSystemStats()">Refresh</button>
+    </div>
+    <div class="card-body">
+        <div class="grid-3">
+            <div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="color: var(--text-muted);">CPU Usage</span>
+                    <span style="font-weight: 600;" id="cpuUsage">—%</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="cpuBar" style="width: 0%"></div>
+                </div>
+            </div>
+            <div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="color: var(--text-muted);">Memory Usage</span>
+                    <span style="font-weight: 600;" id="memoryUsage">—%</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill success" id="memoryBar" style="width: 0%"></div>
+                </div>
+            </div>
+            <div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="color: var(--text-muted);">Disk Usage</span>
+                    <span style="font-weight: 600;" id="diskUsage">—%</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill warning" id="diskBar" style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+        <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-color);">
+            <div style="display: flex; justify-content: space-between; font-size: 0.875rem;">
+                <span style="color: var(--text-muted);">System Uptime</span>
+                <span style="font-weight: 500;" id="systemUptime">—</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Quick Actions -->
+<div class="card" style="margin-top: 24px;">
+    <div class="card-header">
+        <h3 class="card-title">Quick Actions</h3>
+    </div>
+    <div class="card-body">
+        <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+            <button class="btn btn-secondary" onclick="clearLogs()">
+                🗑️ Clear Logs
+            </button>
+            <button class="btn btn-secondary" onclick="window.location.href='/settings'">
+                ⚙️ Settings
+            </button>
+            <button class="btn btn-secondary" onclick="window.location.href='/logs'">
+                📝 View Logs
+            </button>
+            <button class="btn btn-danger" onclick="confirmRestart()">
+                🔄 Restart Services
+            </button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const CATEGORY_COLORS = {
+    'Educational': '#3fb950',
+    'Productive': '#58a6ff',
+    'Distracting': '#d29922',
+    'Harmful': '#f85149',
+    'Uncategorized': '#8b949e',
+    'Non-HTML': '#484f58'
+};
+
+async function refreshDashboard() {
+    const data = await Vigilant.apiGet('/api/stats');
+    if (!data) return;
+    
+    // Update stats
+    document.getElementById('totalRequests').textContent = Vigilant.formatNumber(data.total);
+    document.getElementById('blockedRequests').textContent = Vigilant.formatNumber(data.flagged);
+    document.getElementById('activeClients').textContent = data.clients;
+    document.getElementById('throttleEvents').textContent = data.throttles.length;
+    
+    // Update category bars
+    const maxCount = Math.max(...data.counts.map(c => c.count), 1);
+    const categoryBars = document.getElementById('categoryBars');
+    categoryBars.innerHTML = data.counts.map(c => `
+        <div style="display: flex; align-items: center; gap: 12px;">
+            <span style="width: 120px; font-size: 0.875rem; color: var(--text-secondary);">${c.category}</span>
+            <div class="progress-bar" style="flex: 1;">
+                <div class="progress-fill" style="width: ${(c.count / maxCount) * 100}%; background: ${CATEGORY_COLORS[c.category] || '#ccc'};"></div>
+            </div>
+            <span style="width: 60px; text-align: right; font-size: 0.875rem; font-weight: 600; color: var(--text-primary);">${c.count}</span>
+        </div>
+    `).join('');
+    
+    // Update recent traffic
+    const recentTraffic = document.getElementById('recentTraffic');
+    recentTraffic.innerHTML = data.recent.slice(0, 10).map(r => `
+        <tr>
+            <td style="font-size: 0.75rem;">${r.time.split(' ')[1]}</td>
+            <td>${r.client_ip}</td>
+            <td style="max-width: 150px; overflow: hidden; text-overflow: ellipsis;">${r.host}</td>
+            <td><span class="badge neutral">${r.category}</span></td>
+            <td>${r.flagged ? '<span class="badge danger">Blocked</span>' : '<span class="badge success">Allowed</span>'}</td>
+        </tr>
+    `).join('');
+    
+    // Update throttle events
+    const throttleEvents = document.getElementById('throttleEvents');
+    if (data.throttles.length > 0) {
+        throttleEvents.innerHTML = data.throttles.slice(0, 10).map(t => `
+            <tr>
+                <td style="font-size: 0.75rem;">${t.time.split(' ')[1]}</td>
+                <td>${t.client_ip}</td>
+                <td style="max-width: 100px; overflow: hidden; text-overflow: ellipsis;">${t.host}</td>
+                <td style="color: var(--danger); font-weight: 600;">${t.rpm}</td>
+                <td><span class="badge warning">${t.action}</span></td>
+            </tr>
+        `).join('');
+    } else {
+        throttleEvents.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 20px;">No throttle events</td></tr>';
+    }
+}
+
+async function refreshSystemStats() {
+    const stats = await Vigilant.apiGet('/api/system');
+    if (!stats) return;
+    
+    document.getElementById('cpuUsage').textContent = stats.cpu_percent + '%';
+    document.getElementById('cpuBar').style.width = stats.cpu_percent + '%';
+    
+    document.getElementById('memoryUsage').textContent = stats.memory_percent.toFixed(1) + '%';
+    document.getElementById('memoryBar').style.width = stats.memory_percent + '%';
+    
+    document.getElementById('diskUsage').textContent = stats.disk_percent.toFixed(1) + '%';
+    document.getElementById('diskBar').style.width = stats.disk_percent + '%';
+    
+    document.getElementById('systemUptime').textContent = stats.uptime;
+}
+
+async function clearLogs() {
+    Vigilant.confirmAction('Are you sure you want to clear all traffic logs and throttle events?', async () => {
+        await Vigilant.apiPost('/api/clear', {});
+        Vigilant.showToast('Logs cleared successfully', 'success');
+        refreshDashboard();
+    });
+}
+
+function confirmRestart() {
+    Vigilant.confirmAction('Are you sure you want to restart all VIGILANT services? This will temporarily interrupt network monitoring.', () => {
+        // TODO: Implement restart API endpoint
+        Vigilant.showToast('Service restart initiated', 'info');
+    });
+}
+
+// Auto-refresh dashboard every 5 seconds
+Vigilant.startAutoRefresh(() => {
+    refreshDashboard();
+    refreshSystemStats();
+}, 5000);
+</script>
+{% endblock %}

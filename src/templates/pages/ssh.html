@@ -1,0 +1,228 @@
+{% extends "base.html" %}
+
+{% block title %}SSH{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">SSH Configuration</h1>
+    <p class="page-subtitle">Configure SSH access and security settings</p>
+</div>
+
+<!-- SSH Status -->
+<div class="card" style="margin-bottom: 24px;">
+    <div class="card-header">
+        <h3 class="card-title">SSH Service Status</h3>
+        <span class="badge success">Running</span>
+    </div>
+    <div class="card-body">
+        <div class="grid-3">
+            <div>
+                <div style="font-size: 0.875rem; color: var(--text-muted);">Status</div>
+                <div style="font-size: 1.25rem; font-weight: 600; color: var(--success);">Enabled</div>
+            </div>
+            <div>
+                <div style="font-size: 0.875rem; color: var(--text-muted);">Port</div>
+                <div style="font-size: 1.25rem; font-weight: 600;">22</div>
+            </div>
+            <div>
+                <div style="font-size: 0.875rem; color: var(--text-muted);">Active Sessions</div>
+                <div style="font-size: 1.25rem; font-weight: 600;">2</div>
+            </div>
+        </div>
+        <div style="margin-top: 16px; display: flex; gap: 12px;">
+            <button class="btn btn-secondary" onclick="toggleSsh()">Disable SSH</button>
+            <button class="btn btn-secondary" onclick="restartSsh()">Restart Service</button>
+        </div>
+    </div>
+</div>
+
+<!-- SSH Settings -->
+<div class="card" style="margin-bottom: 24px;">
+    <div class="card-header">
+        <h3 class="card-title">SSH Settings</h3>
+    </div>
+    <div class="card-body">
+        <form id="sshForm">
+            <div class="grid-2">
+                <div class="form-group">
+                    <label class="form-label">Port</label>
+                    <input type="number" class="form-input" value="22" min="1" max="65535">
+                    <div class="form-help">Default SSH port is 22. Changing to a non-standard port improves security.</div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Protocol</label>
+                    <select class="form-select">
+                        <option value="2">SSH-2 only (recommended)</option>
+                        <option value="1">SSH-1 (deprecated)</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="form-group" style="margin-top: 16px;">
+                <label class="form-checkbox">
+                    <input type="checkbox" checked>
+                    Permit Root Login
+                </label>
+                <div class="form-help">Allow root user to login via SSH. Not recommended for security.</div>
+            </div>
+            
+            <div class="form-group" style="margin-top: 16px;">
+                <label class="form-checkbox">
+                    <input type="checkbox" checked>
+                    Password Authentication
+                </label>
+                <div class="form-help">Allow password-based authentication. Key-based authentication is more secure.</div>
+            </div>
+            
+            <div class="form-group" style="margin-top: 16px;">
+                <label class="form-checkbox">
+                    <input type="checkbox">
+                    Public Key Authentication
+                </label>
+                <div class="form-help">Require SSH keys for authentication. More secure than passwords.</div>
+            </div>
+            
+            <div class="form-group" style="margin-top: 16px;">
+                <label class="form-label">Max Authentication Attempts</label>
+                <input type="number" class="form-input" value="3" min="1" max="10">
+                <div class="form-help">Maximum number of authentication attempts before disconnecting.</div>
+            </div>
+            
+            <div class="form-group" style="margin-top: 16px;">
+                <label class="form-label">Login Grace Time (seconds)</label>
+                <input type="number" class="form-input" value="60" min="10" max="300">
+                <div class="form-help">Time allowed for successful authentication before disconnecting.</div>
+            </div>
+            
+            <div style="margin-top: 24px; display: flex; gap: 12px;">
+                <button type="submit" class="btn btn-primary">Save Settings</button>
+                <button type="button" class="btn btn-secondary" onclick="document.getElementById('sshForm').reset()">Reset</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- SSH Keys -->
+<div class="card" style="margin-bottom: 24px;">
+    <div class="card-header">
+        <h3 class="card-title">Authorized SSH Keys</h3>
+        <button class="btn btn-sm btn-primary" onclick="showAddKeyModal()">+ Add Key</button>
+    </div>
+    <div class="card-body" style="padding: 0;">
+        <div class="table-container" style="border: none; box-shadow: none;">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Key Type</th>
+                        <th>Fingerprint</th>
+                        <th>Comment</th>
+                        <th>Added</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>ssh-ed25519</td>
+                        <td>SHA256:abc123...</td>
+                        <td>admin@workstation</td>
+                        <td>2024-01-10</td>
+                        <td>
+                            <button class="btn btn-sm btn-danger">Delete</button>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>ssh-rsa</td>
+                        <td>SHA256:def456...</td>
+                        <td>backup@server</td>
+                        <td>2024-01-08</td>
+                        <td>
+                            <button class="btn btn-sm btn-danger">Delete</button>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Active Sessions -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Active SSH Sessions</h3>
+        <button class="btn btn-sm btn-secondary" onclick="refreshSessions()">Refresh</button>
+    </div>
+    <div class="card-body" style="padding: 0;">
+        <div class="table-container" style="border: none; box-shadow: none;">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>User</th>
+                        <th>IP Address</th>
+                        <th>Connected Since</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="sshSessions">
+                    <tr>
+                        <td>root</td>
+                        <td>192.168.10.15</td>
+                        <td>2024-01-15 09:30:00</td>
+                        <td>
+                            <button class="btn btn-sm btn-danger" onclick="terminateSession('root', '192.168.10.15')">Terminate</button>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>vigilant_admin</td>
+                        <td>192.168.10.30</td>
+                        <td>2024-01-15 10:15:00</td>
+                        <td>
+                            <button class="btn btn-sm btn-danger" onclick="terminateSession('vigilant_admin', '192.168.10.30')">Terminate</button>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('sshForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    Vigilant.showToast('SSH settings saved', 'success');
+    // TODO: Implement API call to save SSH config
+});
+
+function toggleSsh() {
+    Vigilant.confirmAction('Are you sure you want to disable SSH? You will lose remote access to the gateway.', () => {
+        // TODO: Implement API call to toggle SSH
+        Vigilant.showToast('SSH disabled', 'warning');
+    });
+}
+
+function restartSsh() {
+    Vigilant.confirmAction('Restart SSH service? This will disconnect all active sessions.', () => {
+        // TODO: Implement API call to restart SSH
+        Vigilant.showToast('SSH service restarted', 'success');
+    });
+}
+
+function showAddKeyModal() {
+    // TODO: Show add SSH key modal
+    Vigilant.showToast('Add SSH key modal - TODO', 'info');
+}
+
+function refreshSessions() {
+    // TODO: Implement API call to refresh SSH sessions
+    Vigilant.showToast('SSH sessions refreshed', 'info');
+}
+
+function terminateSession(user, ip) {
+    Vigilant.confirmAction(`Terminate SSH session for ${user} from ${ip}?`, () => {
+        // TODO: Implement API call to terminate session
+        Vigilant.showToast('Session terminated', 'success');
+    });
+}
+</script>
+{% endblock %}

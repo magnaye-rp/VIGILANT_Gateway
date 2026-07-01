@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VIGILANT Gateway - {% block title %}Dashboard{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <div class="logo-icon">V</div>
+                    <span>VIGILANT</span>
+                </div>
+            </div>
+            
+            <nav class="sidebar-nav">
+                <!-- Dashboard Section -->
+                <div class="nav-section">
+                    <div class="nav-section-title">Overview</div>
+                    <a href="/" class="nav-item {% if request.path == '/' %}active{% endif %}">
+                        <span class="icon">📊</span>
+                        <span>Dashboard</span>
+                    </a>
+                    <a href="/system" class="nav-item {% if request.path == '/system' %}active{% endif %}">
+                        <span class="icon">🖥️</span>
+                        <span>System Status</span>
+                    </a>
+                </div>
+
+                <!-- Network Section -->
+                <div class="nav-section">
+                    <div class="nav-section-title">Network</div>
+                    <a href="/network" class="nav-item {% if request.path == '/network' %}active{% endif %}">
+                        <span class="icon">🌐</span>
+                        <span>Network</span>
+                    </a>
+                    <a href="/interfaces" class="nav-item {% if request.path == '/interfaces' %}active{% endif %}">
+                        <span class="icon">🔌</span>
+                        <span>Interfaces</span>
+                    </a>
+                    <a href="/firewall" class="nav-item {% if request.path == '/firewall' %}active{% endif %}">
+                        <span class="icon">🛡️</span>
+                        <span>Firewall</span>
+                    </a>
+                    <a href="/dhcp" class="nav-item {% if request.path == '/dhcp' %}active{% endif %}">
+                        <span class="icon">📡</span>
+                        <span>DHCP</span>
+                    </a>
+                    <a href="/dns" class="nav-item {% if request.path == '/dns' %}active{% endif %}">
+                        <span class="icon">🔍</span>
+                        <span>DNS</span>
+                    </a>
+                    <a href="/routing" class="nav-item {% if request.path == '/routing' %}active{% endif %}">
+                        <span class="icon">➡️</span>
+                        <span>Routing</span>
+                    </a>
+                </div>
+
+                <!-- Services Section -->
+                <div class="nav-section">
+                    <div class="nav-section-title">Services</div>
+                    <a href="/vpn" class="nav-item {% if request.path == '/vpn' %}active{% endif %}">
+                        <span class="icon">🔐</span>
+                        <span>VPN</span>
+                    </a>
+                    <a href="/ssh" class="nav-item {% if request.path == '/ssh' %}active{% endif %}">
+                        <span class="icon">💻</span>
+                        <span>SSH</span>
+                    </a>
+                    <a href="/services" class="nav-item {% if request.path == '/services' %}active{% endif %}">
+                        <span class="icon">⚙️</span>
+                        <span>Services</span>
+                    </a>
+                </div>
+
+                <!-- System Section -->
+                <div class="nav-section">
+                    <div class="nav-section-title">System</div>
+                    <a href="/users" class="nav-item {% if request.path == '/users' %}active{% endif %}">
+                        <span class="icon">👥</span>
+                        <span>Users</span>
+                    </a>
+                    <a href="/logs" class="nav-item {% if request.path == '/logs' %}active{% endif %}">
+                        <span class="icon">📝</span>
+                        <span>Logs</span>
+                    </a>
+                    <a href="/storage" class="nav-item {% if request.path == '/storage' %}active{% endif %}">
+                        <span class="icon">💾</span>
+                        <span>Storage</span>
+                    </a>
+                    <a href="/updates" class="nav-item {% if request.path == '/updates' %}active{% endif %}">
+                        <span class="icon">🔄</span>
+                        <span>Updates</span>
+                    </a>
+                    <a href="/backup" class="nav-item {% if request.path == '/backup' %}active{% endif %}">
+                        <span class="icon">📦</span>
+                        <span>Backup & Restore</span>
+                    </a>
+                </div>
+
+                <!-- Monitoring Section -->
+                <div class="nav-section">
+                    <div class="nav-section-title">Monitoring</div>
+                    <a href="/monitoring" class="nav-item {% if request.path == '/monitoring' %}active{% endif %}">
+                        <span class="icon">📈</span>
+                        <span>Monitoring</span>
+                    </a>
+                    <a href="/security" class="nav-item {% if request.path == '/security' %}active{% endif %}">
+                        <span class="icon">🔒</span>
+                        <span>Security</span>
+                    </a>
+                </div>
+
+                <!-- Settings Section -->
+                <div class="nav-section">
+                    <div class="nav-section-title">Configuration</div>
+                    <a href="/settings" class="nav-item {% if request.path == '/settings' %}active{% endif %}">
+                        <span class="icon">⚙️</span>
+                        <span>Settings</span>
+                    </a>
+                </div>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Top Bar -->
+            <header class="top-bar">
+                <div class="top-bar-left">
+                    <button class="theme-toggle" id="menuToggle" style="border:none; padding:8px;">
+                        ☰
+                    </button>
+                    <div class="search-bar">
+                        <span class="search-icon">🔍</span>
+                        <input type="text" placeholder="Search settings, logs, clients...">
+                    </div>
+                </div>
+                
+                <div class="top-bar-right">
+                    <div class="status-indicators">
+                        <div class="status-item">
+                            <div class="status-dot" id="proxyStatus"></div>
+                            <span>Proxy</span>
+                        </div>
+                        <div class="status-item">
+                            <div class="status-dot" id="firewallStatus"></div>
+                            <span>Firewall</span>
+                        </div>
+                    </div>
+                    
+                    <button class="notification-btn" id="notificationBtn">
+                        🔔
+                        <span class="notification-badge" id="notificationBadge">3</span>
+                    </button>
+                    
+                    <button class="theme-toggle" id="themeToggle">
+                        🌙
+                    </button>
+                    
+                    <div class="user-menu" id="userMenu">
+                        <div class="user-avatar">A</div>
+                        <span class="user-name">Admin</span>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Page Content -->
+            <div class="page-content">
+                {% block content %}{% endblock %}
+            </div>
+        </main>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- Scripts -->
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

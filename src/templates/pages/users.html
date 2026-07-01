@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+
+{% block title %}Users{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">User Management</h1>
+    <p class="page-subtitle">Manage system users and permissions</p>
+</div>
+
+<!-- User List -->
+<div class="card" style="margin-bottom: 24px;">
+    <div class="card-header">
+        <h3 class="card-title">System Users</h3>
+        <button class="btn btn-sm btn-primary" onclick="showAddUserModal()">+ Add User</button>
+    </div>
+    <div class="card-body" style="padding: 0;">
+        <div class="table-container" style="border: none; box-shadow: none;">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Username</th>
+                        <th>UID</th>
+                        <th>Group</th>
+                        <th>Home Directory</th>
+                        <th>Shell</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>root</strong></td>
+                        <td>0</td>
+                        <td>root</td>
+                        <td>/root</td>
+                        <td>/bin/bash</td>
+                        <td><span class="badge success">Active</span></td>
+                        <td>
+                            <button class="btn btn-sm btn-secondary">Edit</button>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>vigilant_admin</strong></td>
+                        <td>1000</td>
+                        <td>vigilant_admin</td>
+                        <td>/home/vigilant_admin</td>
+                        <td>/bin/bash</td>
+                        <td><span class="badge success">Active</span></td>
+                        <td>
+                            <button class="btn btn-sm btn-secondary">Edit</button>
+                            <button class="btn btn-sm btn-secondary">Change Password</button>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>www-data</td>
+                        <td>33</td>
+                        <td>www-data</td>
+                        <td>/var/www</td>
+                        <td>/usr/sbin/nologin</td>
+                        <td><span class="badge neutral">System</span></td>
+                        <td>
+                            <button class="btn btn-sm btn-secondary">Edit</button>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Groups -->
+<div class="card" style="margin-bottom: 24px;">
+    <div class="card-header">
+        <h3 class="card-title">User Groups</h3>
+        <button class="btn btn-sm btn-primary" onclick="showAddGroupModal()">+ Add Group</button>
+    </div>
+    <div class="card-body" style="padding: 0;">
+        <div class="table-container" style="border: none; box-shadow: none;">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Group Name</th>
+                        <th>GID</th>
+                        <th>Members</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>root</strong></td>
+                        <td>0</td>
+                        <td>root</td>
+                        <td>
+                            <button class="btn btn-sm btn-secondary">Edit</button>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>vigilant_admin</strong></td>
+                        <td>1000</td>
+                        <td>vigilant_admin</td>
+                        <td>
+                            <button class="btn btn-sm btn-secondary">Edit</button>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>sudo</td>
+                        <td>27</td>
+                        <td>vigilant_admin</td>
+                        <td>
+                            <button class="btn btn-sm btn-secondary">Edit</button>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>www-data</td>
+                        <td>33</td>
+                        <td>www-data</td>
+                        <td>
+                            <button class="btn btn-sm btn-secondary">Edit</button>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Password Policy -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Password Policy</h3>
+    </div>
+    <div class="card-body">
+        <form id="passwordPolicyForm">
+            <div class="grid-2">
+                <div class="form-group">
+                    <label class="form-label">Minimum Password Length</label>
+                    <input type="number" class="form-input" value="8" min="6" max="32">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Password Expiry (days)</label>
+                    <input type="number" class="form-input" value="90" min="0" max="365">
+                    <div class="form-help">Set to 0 for no expiry</div>
+                </div>
+            </div>
+            
+            <div class="form-group" style="margin-top: 16px;">
+                <label class="form-checkbox">
+                    <input type="checkbox" checked>
+                    Require uppercase letters
+                </label>
+            </div>
+            
+            <div class="form-group" style="margin-top: 16px;">
+                <label class="form-checkbox">
+                    <input type="checkbox" checked>
+                    Require lowercase letters
+                </label>
+            </div>
+            
+            <div class="form-group" style="margin-top: 16px;">
+                <label class="form-checkbox">
+                    <input type="checkbox" checked>
+                    Require numbers
+                </label>
+            </div>
+            
+            <div class="form-group" style="margin-top: 16px;">
+                <label class="form-checkbox">
+                    <input type="checkbox" checked>
+                    Require special characters
+                </label>
+            </div>
+            
+            <div style="margin-top: 24px; display: flex; gap: 12px;">
+                <button type="submit" class="btn btn-primary">Save Policy</button>
+                <button type="button" class="btn btn-secondary" onclick="document.getElementById('passwordPolicyForm').reset()">Reset</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('passwordPolicyForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    Vigilant.showToast('Password policy saved', 'success');
+    // TODO: Implement API call to save password policy
+});
+
+function showAddUserModal() {
+    // TODO: Show add user modal
+    Vigilant.showToast('Add user modal - TODO', 'info');
+}
+
+function showAddGroupModal() {
+    // TODO: Show add group modal
+    Vigilant.showToast('Add group modal - TODO', 'info');
+}
+</script>
+{% endblock %}

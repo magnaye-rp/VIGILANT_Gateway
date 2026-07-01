@@ -17,6 +17,8 @@ NC='\033[0m' # No Color
 VIGILANT_USER="vigilant_admin"
 VIGILANT_HOME="/home/$VIGILANT_USER/vigilant"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WAN_INTERFACE=""
+LAN_INTERFACE=""
 
 # ─── Helper functions ───────────────────────────────────────────────────────
 log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
@@ -39,6 +41,7 @@ check_os() {
     log_success "Ubuntu detected"
 }
 
+<<<<<<< Updated upstream
 check_network_interfaces() {
     log_info "Checking network interfaces..."
     if ! ip link show enp0s31f6 > /dev/null 2>&1; then
@@ -48,7 +51,62 @@ check_network_interfaces() {
     fi
     if ! ip link show wlp1s0 > /dev/null 2>&1; then
         log_warn "wlp1s0 not found - you may need to adjust network interface names"
+=======
+detect_network_interfaces() {
+    log_info "Detecting available network interfaces..."
+    
+    # Get list of non-loopback interfaces
+    INTERFACES=($(ip link show | grep "^[0-9]:" | grep -v "lo" | awk -F: '{print $2}' | tr -d ' '))
+    
+    if [ ${#INTERFACES[@]} -eq 0 ]; then
+        log_error "No network interfaces found!"
+        exit 1
     fi
+    
+    log_info "Available network interfaces:"
+    for i in "${!INTERFACES[@]}"; do
+        iface="${INTERFACES[$i]}"
+        state=$(ip link show "$iface" | grep -oP '(?<=state )\w+' || echo "unknown")
+        ip_addr=$(ip -4 addr show "$iface" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1 || echo "none")
+        echo "  [$i] $iface - State: $state - IP: $ip_addr"
+    done
+    
+    echo ""
+    log_info "Select the WAN/Internet-facing interface (connects to upstream router/modem):"
+    read -p "Enter interface number or name: " wan_selection
+    
+    if [[ "$wan_selection" =~ ^[0-9]+$ ]] && [ "$wan_selection" -ge 0 ] && [ "$wan_selection" -lt ${#INTERFACES[@]} ]; then
+        WAN_INTERFACE="${INTERFACES[$wan_selection]}"
+    elif [[ " ${INTERFACES[@]} " =~ " ${wan_selection} " ]]; then
+        WAN_INTERFACE="$wan_selection"
+    else
+        log_error "Invalid selection: $wan_selection"
+        exit 1
+>>>>>>> Stashed changes
+    fi
+    
+    log_info "Select the LAN/Client-facing interface (hosts DHCP clients/hostapd):"
+    read -p "Enter interface number or name: " lan_selection
+    
+    if [[ "$lan_selection" =~ ^[0-9]+$ ]] && [ "$lan_selection" -ge 0 ] && [ "$lan_selection" -lt ${#INTERFACES[@]} ]; then
+        LAN_INTERFACE="${INTERFACES[$lan_selection]}"
+    elif [[ " ${INTERFACES[@]} " =~ " ${lan_selection} " ]]; then
+        LAN_INTERFACE="$lan_selection"
+    else
+        log_error "Invalid selection: $lan_selection"
+        exit 1
+    fi
+    
+    if [ "$WAN_INTERFACE" = "$LAN_INTERFACE" ]; then
+        log_error "WAN and LAN interfaces cannot be the same!"
+        exit 1
+    fi
+    
+    log_success "WAN Interface: $WAN_INTERFACE"
+    log_success "LAN Interface: $LAN_INTERFACE"
+    
+    # Export for child processes
+    export WAN_INTERFACE LAN_INTERFACE
 }
 
 # ─── Stage 0: Preflight Checks ──────────────────────────────────────────────
@@ -60,7 +118,7 @@ stage_0_preflight() {
     
     check_root
     check_os
-    check_network_interfaces
+    detect_network_interfaces
     
     log_info "Verifying setup.sh is in correct location..."
     if [ ! -f "$REPO_DIR/src/app.py" ]; then
@@ -196,11 +254,38 @@ stage_6_dns_dhcp() {
     log_info "Backing up dnsmasq.conf..."
     cp /etc/dnsmasq.conf /etc/dnsmasq.conf.bak
     
+<<<<<<< Updated upstream
     log_info "Appending VIGILANT config to dnsmasq..."
 cp "$REPO_DIR/src/config/dnsmasq.conf" /etc/dnsmasq.conf
+=======
+    log_info "Generating dnsmasq.conf with dynamic interface..."
+    sed "s/interface=enp0s6/interface=$LAN_INTERFACE/g" "$REPO_DIR/src/config/dnsmasq.conf" > /tmp/dnsmasq-vigilant.conf
+    cat /tmp/dnsmasq-vigilant.conf >> /etc/dnsmasq.conf
+    rm /tmp/dnsmasq-vigilant.conf
+>>>>>>> Stashed changes
     
     log_info "Restarting dnsmasq..."
     systemctl restart dnsmasq
+    
+    log_info "Configuring logrotate for dnsmasq..."
+    cat > /etc/logrotate.d/dnsmasq << 'EOF'
+/var/log/dnsmasq.log {
+    daily
+    copytruncate
+    rotate 7
+    compress
+    missingok
+    notifempty
+}
+EOF
+    
+    log_info "Validating logrotate configuration..."
+    if logrotate -d /etc/logrotate.d/dnsmasq > /dev/null 2>&1; then
+        log_success "Logrotate configuration validated"
+    else
+        log_warn "Logrotate configuration validation failed (may be non-critical)"
+    fi
+    
     log_success "DNS/DHCP configured"
 }
 
@@ -211,8 +296,8 @@ stage_7_firewall() {
     log_info "STAGE 7: FIREWALL RULES"
     log_info "═══════════════════════════════════════════"
     
-    log_info "Applying iptables rules..."
-    bash "$VIGILANT_HOME/scripts/setup-iptables.sh"
+    log_info "Applying iptables rules with dynamic interfaces..."
+    WAN_INTERFACE="$WAN_INTERFACE" LAN_INTERFACE="$LAN_INTERFACE" bash "$VIGILANT_HOME/scripts/setup-iptables.sh"
     log_success "Firewall rules applied"
 }
 
@@ -376,7 +461,7 @@ main() {
     echo ""
     echo "╔═══════════════════════════════════════════════════════════╗"
     echo "║     VIGILANT GATEWAY - AUTOMATED SETUP                   ║"
-    echo "║     https://github.com/yourusername/vigilant-gateway     ║"
+    echo "║     https://github.com/magnaye-rp/vigilant-gateway       ║"
     echo "╚═══════════════════════════════════════════════════════════╝"
     echo ""
     

@@ -1,0 +1,213 @@
+{% extends "base.html" %}
+
+{% block title %}Logs{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">System Logs</h1>
+    <p class="page-subtitle">View and search system and application logs</p>
+</div>
+
+<!-- Log Filters -->
+<div class="card" style="margin-bottom: 24px;">
+    <div class="card-header">
+        <h3 class="card-title">Log Filters</h3>
+    </div>
+    <div class="card-body">
+        <div class="grid-3">
+            <div class="form-group">
+                <label class="form-label">Log Source</label>
+                <select class="form-select" id="logSource">
+                    <option value="all">All Logs</option>
+                    <option value="traffic" selected>Traffic Log</option>
+                    <option value="throttle">Throttle Events</option>
+                    <option value="system">System Logs</option>
+                    <option value="firewall">Firewall Logs</option>
+                    <option value="dhcp">DHCP Logs</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Time Range</label>
+                <select class="form-select" id="timeRange">
+                    <option value="1h">Last Hour</option>
+                    <option value="24h" selected>Last 24 Hours</option>
+                    <option value="7d">Last 7 Days</option>
+                    <option value="30d">Last 30 Days</option>
+                    <option value="all">All Time</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Log Level</label>
+                <select class="form-select" id="logLevel">
+                    <option value="all">All Levels</option>
+                    <option value="info">Info</option>
+                    <option value="warning">Warning</option>
+                    <option value="error">Error</option>
+                    <option value="critical">Critical</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-group" style="margin-top: 16px;">
+            <label class="form-label">Search</label>
+            <input type="text" class="form-input" id="logSearch" placeholder="Search logs by IP, host, or keyword...">
+        </div>
+        <div style="margin-top: 16px; display: flex; gap: 12px;">
+            <button class="btn btn-primary" onclick="applyFilters()">Apply Filters</button>
+            <button class="btn btn-secondary" onclick="resetFilters()">Reset</button>
+            <button class="btn btn-secondary" onclick="exportLogs()">Export Logs</button>
+            <button class="btn btn-danger" onclick="clearLogs()">Clear Logs</button>
+        </div>
+    </div>
+</div>
+
+<!-- Traffic Log -->
+<div class="card" style="margin-bottom: 24px;">
+    <div class="card-header">
+        <h3 class="card-title">Traffic Log</h3>
+        <div style="display: flex; gap: 8px;">
+            <button class="btn btn-sm btn-secondary" onclick="refreshLogs()">Refresh</button>
+            <button class="btn btn-sm btn-secondary" onclick="autoScrollToggle()" id="autoScrollBtn">Auto-scroll: ON</button>
+        </div>
+    </div>
+    <div class="card-body" style="padding: 0;">
+        <div class="table-container" style="border: none; box-shadow: none; max-height: 500px; overflow-y: auto;">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>Client IP</th>
+                        <th>Host</th>
+                        <th>Path</th>
+                        <th>Method</th>
+                        <th>Category</th>
+                        <th>Flagged</th>
+                    </tr>
+                </thead>
+                <tbody id="trafficLog">
+                    <!-- Traffic log rows will be inserted here -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Throttle Events -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Throttle Events</h3>
+        <button class="btn btn-sm btn-secondary" onclick="refreshThrottleEvents()">Refresh</button>
+    </div>
+    <div class="card-body" style="padding: 0;">
+        <div class="table-container" style="border: none; box-shadow: none;">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>Client IP</th>
+                        <th>Host</th>
+                        <th>RPM Current</th>
+                        <th>RPM Baseline</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody id="throttleLog">
+                    <!-- Throttle event rows will be inserted here -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let autoScroll = true;
+
+async function refreshLogs() {
+    const source = document.getElementById('logSource').value;
+    const timeRange = document.getElementById('timeRange').value;
+    const logLevel = document.getElementById('logLevel').value;
+    const search = document.getElementById('logSearch').value;
+    
+    // TODO: Implement API call with filters
+    const data = await Vigilant.apiGet('/api/traffic');
+    if (!data) return;
+    
+    const trafficLog = document.getElementById('trafficLog');
+    trafficLog.innerHTML = data.slice(0, 100).map(r => `
+        <tr>
+            <td style="font-size: 0.75rem;">${Vigilant.formatDate(r.timestamp)}</td>
+            <td>${r.client_ip}</td>
+            <td style="max-width: 150px; overflow: hidden; text-overflow: ellipsis;">${r.host}</td>
+            <td style="max-width: 100px; overflow: hidden; text-overflow: ellipsis;">${r.path}</td>
+            <td>${r.method}</td>
+            <td><span class="badge neutral">${r.category}</span></td>
+            <td>${r.flagged ? '<span class="badge danger">Yes</span>' : '<span class="badge success">No</span>'}</td>
+        </tr>
+    `).join('');
+    
+    if (autoScroll) {
+        const container = document.querySelector('.table-container');
+        container.scrollTop = container.scrollHeight;
+    }
+}
+
+async function refreshThrottleEvents() {
+    const data = await Vigilant.apiGet('/api/stats');
+    if (!data) return;
+    
+    const throttleLog = document.getElementById('throttleLog');
+    throttleLog.innerHTML = data.throttles.map(t => `
+        <tr>
+            <td style="font-size: 0.75rem;">${t.time}</td>
+            <td>${t.client_ip}</td>
+            <td style="max-width: 100px; overflow: hidden; text-overflow: ellipsis;">${t.host}</td>
+            <td style="color: var(--danger); font-weight: 600;">${t.rpm}</td>
+            <td>${t.baseline}</td>
+            <td><span class="badge warning">${t.action}</span></td>
+        </tr>
+    `).join('');
+}
+
+function applyFilters() {
+    refreshLogs();
+    Vigilant.showToast('Filters applied', 'info');
+}
+
+function resetFilters() {
+    document.getElementById('logSource').value = 'traffic';
+    document.getElementById('timeRange').value = '24h';
+    document.getElementById('logLevel').value = 'all';
+    document.getElementById('logSearch').value = '';
+    refreshLogs();
+    Vigilant.showToast('Filters reset', 'info');
+}
+
+function exportLogs() {
+    // TODO: Implement log export
+    Vigilant.showToast('Logs exported', 'success');
+}
+
+function clearLogs() {
+    Vigilant.confirmAction('Are you sure you want to clear all logs? This action cannot be undone.', async () => {
+        await Vigilant.apiPost('/api/clear', {});
+        Vigilant.showToast('Logs cleared', 'success');
+        refreshLogs();
+        refreshThrottleEvents();
+    });
+}
+
+function autoScrollToggle() {
+    autoScroll = !autoScroll;
+    document.getElementById('autoScrollBtn').textContent = `Auto-scroll: ${autoScroll ? 'ON' : 'OFF'}`;
+}
+
+// Initial load and auto-refresh
+refreshLogs();
+refreshThrottleEvents();
+Vigilant.startAutoRefresh(() => {
+    refreshLogs();
+    refreshThrottleEvents();
+}, 5000);
+</script>
+{% endblock %}
