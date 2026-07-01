@@ -41,17 +41,6 @@ check_os() {
     log_success "Ubuntu detected"
 }
 
-<<<<<<< Updated upstream
-check_network_interfaces() {
-    log_info "Checking network interfaces..."
-    if ! ip link show enp0s31f6 > /dev/null 2>&1; then
-        log_warn "wlp1s0 not found - you may need to adjust network interface names"
-        log_warn "Current interfaces:"
-        ip link show | grep "^[0-9]:" | grep -v "lo"
-    fi
-    if ! ip link show wlp1s0 > /dev/null 2>&1; then
-        log_warn "wlp1s0 not found - you may need to adjust network interface names"
-=======
 detect_network_interfaces() {
     log_info "Detecting available network interfaces..."
     
@@ -82,7 +71,6 @@ detect_network_interfaces() {
     else
         log_error "Invalid selection: $wan_selection"
         exit 1
->>>>>>> Stashed changes
     fi
     
     log_info "Select the LAN/Client-facing interface (hosts DHCP clients/hostapd):"
@@ -254,15 +242,10 @@ stage_6_dns_dhcp() {
     log_info "Backing up dnsmasq.conf..."
     cp /etc/dnsmasq.conf /etc/dnsmasq.conf.bak
     
-<<<<<<< Updated upstream
-    log_info "Appending VIGILANT config to dnsmasq..."
-cp "$REPO_DIR/src/config/dnsmasq.conf" /etc/dnsmasq.conf
-=======
     log_info "Generating dnsmasq.conf with dynamic interface..."
     sed "s/interface=enp0s6/interface=$LAN_INTERFACE/g" "$REPO_DIR/src/config/dnsmasq.conf" > /tmp/dnsmasq-vigilant.conf
     cat /tmp/dnsmasq-vigilant.conf >> /etc/dnsmasq.conf
     rm /tmp/dnsmasq-vigilant.conf
->>>>>>> Stashed changes
     
     log_info "Restarting dnsmasq..."
     systemctl restart dnsmasq
