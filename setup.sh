@@ -357,9 +357,20 @@ stage_9_systemd_services() {
     cp "$REPO_DIR/src/systemd/vigilant-proxy.service" /etc/systemd/system/
     cp "$REPO_DIR/src/systemd/vigilant-dashboard.service" /etc/systemd/system/
     
-    # FIX: Inject the EnvironmentFile dependency directly into the firewall service definition
+    # 1. Inject the EnvironmentFile dependency directly into the firewall service definition
     log_info "Configuring environment dependencies for vigilant-firewall.service..."
     sed -i "/\[Service\]/a EnvironmentFile=$VIGILANT_HOME/.env" /etc/systemd/system/vigilant-firewall.service
+
+    # 2. FIX: Escape the backslashes inside the regex so Systemd passes them cleanly to mitmproxy
+    log_info "Fixing systemd escape sequences in vigilant-proxy.service..."
+    sed -i 's/\\./\\\\./g' /etc/systemd/system/vigilant-proxy.service
+    sed -i 's/\\(/\\\\(/g' /etc/systemd/system/vigilant-proxy.service
+    sed -i 's/\\)/\\\\)/g' /etc/systemd/system/vigilant-proxy.service
+
+    # 3. FIX: Ensure certificate directory permissions are correct for the user context
+    log_info "Fixing certificate store permissions for $VIGILANT_USER..."
+    mkdir -p /home/$VIGILANT_USER/.mitmproxy
+    chown -R "$VIGILANT_USER:$VIGILANT_USER" /home/$VIGILANT_USER/.mitmproxy
 
     log_info "Reloading systemd daemon..."
     systemctl daemon-reload
