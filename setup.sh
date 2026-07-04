@@ -357,20 +357,27 @@ stage_9_systemd_services() {
     cp "$REPO_DIR/src/systemd/vigilant-proxy.service" /etc/systemd/system/
     cp "$REPO_DIR/src/systemd/vigilant-dashboard.service" /etc/systemd/system/
     
-    # 1. Inject the EnvironmentFile dependency directly into the firewall service definition
+    # 1. Inject Network Environment variables for Firewall persistence
     log_info "Configuring environment dependencies for vigilant-firewall.service..."
     sed -i "/\[Service\]/a EnvironmentFile=$VIGILANT_HOME/.env" /etc/systemd/system/vigilant-firewall.service
 
-    # 2. FIX: Escape the backslashes inside the regex so Systemd passes them cleanly to mitmproxy
-    log_info "Fixing systemd escape sequences in vigilant-proxy.service..."
-    sed -i 's/\\./\\\\./g' /etc/systemd/system/vigilant-proxy.service
+    # 2. FIX: Force instantaneous Python stream flushes and define the proper Working Directory
+    log_info "Injecting execution environment parameters into vigilant-dashboard.service..."
+    sed -i "/\[Service\]/a Environment=PYTHONUNBUFFERED=1" /etc/systemd/system/vigilant-dashboard.service
+    sed -i "/\[Service\]/a WorkingDirectory=$VIGILANT_HOME" /etc/systemd/system/vigilant-dashboard.service
+
+    # 3. FIX: Safely escape the regex sequences in vigilant-proxy.service
+    log_info "Sanitizing systemd escape sequences for vigilant-proxy.service..."
+    # Replace single backslashes followed by a dot, open paren, or close paren with double backslashes
+    sed -i 's/\\\./\\\\./g' /etc/systemd/system/vigilant-proxy.service
     sed -i 's/\\(/\\\\(/g' /etc/systemd/system/vigilant-proxy.service
     sed -i 's/\\)/\\\\)/g' /etc/systemd/system/vigilant-proxy.service
 
-    # 3. FIX: Ensure certificate directory permissions are correct for the user context
-    log_info "Fixing certificate store permissions for $VIGILANT_USER..."
+    # 4. Ensure runtime file tree storage is completely clear for permissions
+    log_info "Validating security context permissions for $VIGILANT_USER..."
     mkdir -p /home/$VIGILANT_USER/.mitmproxy
     chown -R "$VIGILANT_USER:$VIGILANT_USER" /home/$VIGILANT_USER/.mitmproxy
+    chown -R "$VIGILANT_USER:$VIGILANT_USER" "$VIGILANT_HOME"
 
     log_info "Reloading systemd daemon..."
     systemctl daemon-reload
