@@ -173,10 +173,10 @@ stage_3_python_env() {
     source "$VIGILANT_HOME/venv/bin/activate"
     pip install --upgrade pip > /dev/null 2>&1
     
-    # FIX: Added psutil to the dependencies list
+    # FIX: Pinned mitmproxy to version 9.0.1 to avoid breaking API changes
     pip install \
         flask \
-        mitmproxy \
+        mitmproxy==9.0.1 \
         spacy \
         psutil \
         > /dev/null 2>&1
