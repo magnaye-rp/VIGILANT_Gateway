@@ -279,6 +279,14 @@ stage_7_firewall() {
     log_info "STAGE 7: FIREWALL RULES"
     log_info "═══════════════════════════════════════════"
     
+    # FIX: Save the chosen interfaces to an environment file for Systemd to read later
+    log_info "Saving network interface environment variables for systemd..."
+    cat << EOF > "$VIGILANT_HOME/.env"
+WAN_INTERFACE=$WAN_INTERFACE
+LAN_INTERFACE=$LAN_INTERFACE
+EOF
+    chown "$VIGILANT_USER:$VIGILANT_USER" "$VIGILANT_HOME/.env"
+
     log_info "Applying iptables rules with dynamic interfaces..."
     WAN_INTERFACE="$WAN_INTERFACE" LAN_INTERFACE="$LAN_INTERFACE" bash "$VIGILANT_HOME/scripts/setup-iptables.sh"
     log_success "Firewall rules applied"
@@ -349,6 +357,10 @@ stage_9_systemd_services() {
     cp "$REPO_DIR/src/systemd/vigilant-proxy.service" /etc/systemd/system/
     cp "$REPO_DIR/src/systemd/vigilant-dashboard.service" /etc/systemd/system/
     
+    # FIX: Inject the EnvironmentFile dependency directly into the firewall service definition
+    log_info "Configuring environment dependencies for vigilant-firewall.service..."
+    sed -i "/\[Service\]/a EnvironmentFile=$VIGILANT_HOME/.env" /etc/systemd/system/vigilant-firewall.service
+
     log_info "Reloading systemd daemon..."
     systemctl daemon-reload
     
