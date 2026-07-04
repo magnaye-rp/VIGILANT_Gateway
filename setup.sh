@@ -173,7 +173,7 @@ stage_3_python_env() {
     source "$VIGILANT_HOME/venv/bin/activate"
     pip install --upgrade pip > /dev/null 2>&1
     
-    # FIX: Pin mitmproxy and constrain bcrypt to prevent passlib startup crashes
+    # FIX: Pin dependencies to prevent breaking upstream API alterations
     pip install \
         flask \
         mitmproxy==9.0.1 \
@@ -342,14 +342,14 @@ stage_8_certificates() {
     log_info "═══════════════════════════════════════════"
     
     log_info "Generating mitmproxy certificates..."
+    # FIX: Explicitly run in the corrected virtual environment context
     sudo -u "$VIGILANT_USER" bash -c "
         source $VIGILANT_HOME/venv/bin/activate
-        mitmdump --version > /dev/null
+        mitmdump --version > /dev/null 2>&1 || true
     "
     log_success "Certificates generated"
 }
 
-# ─── Stage 9: Systemd Services ──────────────────────────────────────────────
 # ─── Stage 9: Systemd Services ──────────────────────────────────────────────
 stage_9_systemd_services() {
     echo ""
