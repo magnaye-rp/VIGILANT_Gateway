@@ -244,7 +244,7 @@ stage_6_dns_dhcp() {
     
     log_info "Generating dnsmasq.conf with dynamic interface..."
     sed "s/interface=enp0s6/interface=$LAN_INTERFACE/g" "$REPO_DIR/src/config/dnsmasq.conf" > /tmp/dnsmasq-vigilant.conf
-    cat /tmp/dnsmasq-vigilant.conf >> /etc/dnsmasq.conf
+    cat /tmp/dnsmasq-vigilant.conf > /etc/dnsmasq.conf
     rm /tmp/dnsmasq-vigilant.conf
     
     log_info "Restarting dnsmasq..."
