@@ -172,10 +172,13 @@ stage_3_python_env() {
     log_info "Installing Python packages..."
     source "$VIGILANT_HOME/venv/bin/activate"
     pip install --upgrade pip > /dev/null 2>&1
+    
+    # FIX: Added psutil to the dependencies list
     pip install \
         flask \
         mitmproxy \
         spacy \
+        psutil \
         > /dev/null 2>&1
     
     log_info "Downloading spaCy model (en_core_web_sm)..."
