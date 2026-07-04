@@ -173,12 +173,13 @@ stage_3_python_env() {
     source "$VIGILANT_HOME/venv/bin/activate"
     pip install --upgrade pip > /dev/null 2>&1
     
-    # FIX: Pinned mitmproxy to version 9.0.1 to avoid breaking API changes
+    # FIX: Pin mitmproxy and constrain bcrypt to prevent passlib startup crashes
     pip install \
         flask \
         mitmproxy==9.0.1 \
         spacy \
         psutil \
+        "bcrypt<4.1.0" \
         > /dev/null 2>&1
     
     log_info "Downloading spaCy model (en_core_web_sm)..."
