@@ -346,47 +346,93 @@ stage_8_certificates() {
 }
 
 # ─── Stage 9: Systemd Services ──────────────────────────────────────────────
+# ─── Stage 9: Systemd Services ──────────────────────────────────────────────
 stage_9_systemd_services() {
     echo ""
     log_info "═══════════════════════════════════════════"
     log_info "STAGE 9: SYSTEMD SERVICES"
     log_info "═══════════════════════════════════════════"
     
-    log_info "Installing systemd services..."
-    cp "$REPO_DIR/src/systemd/vigilant-firewall.service" /etc/systemd/system/
-    cp "$REPO_DIR/src/systemd/vigilant-proxy.service" /etc/systemd/system/
-    cp "$REPO_DIR/src/systemd/vigilant-dashboard.service" /etc/systemd/system/
-    
-    # 1. Inject Network Environment variables for Firewall persistence
-    log_info "Configuring environment dependencies for vigilant-firewall.service..."
-    sed -i "/\[Service\]/a EnvironmentFile=$VIGILANT_HOME/.env" /etc/systemd/system/vigilant-firewall.service
+    log_info "Generating custom systemd service files dynamically..."
 
-    # 2. FIX: Force instantaneous Python stream flushes and define the proper Working Directory
-    log_info "Injecting execution environment parameters into vigilant-dashboard.service..."
-    sed -i "/\[Service\]/a Environment=PYTHONUNBUFFERED=1" /etc/systemd/system/vigilant-dashboard.service
-    sed -i "/\[Service\]/a WorkingDirectory=$VIGILANT_HOME" /etc/systemd/system/vigilant-dashboard.service
+    # 1. Generate vigilant-firewall.service with dynamic EnvironmentFile link
+    log_info "Creating vigilant-firewall.service..."
+    cat << EOF > /etc/systemd/system/vigilant-firewall.service
+[Unit]
+Description=VIGILANT Firewall Rules
+After=network.target
 
-    # 3. FIX: Safely escape the regex sequences in vigilant-proxy.service
-    log_info "Sanitizing systemd escape sequences for vigilant-proxy.service..."
-    # Replace single backslashes followed by a dot, open paren, or close paren with double backslashes
-    sed -i 's/\\\./\\\\./g' /etc/systemd/system/vigilant-proxy.service
-    sed -i 's/\\(/\\\\(/g' /etc/systemd/system/vigilant-proxy.service
-    sed -i 's/\\)/\\\\)/g' /etc/systemd/system/vigilant-proxy.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=$VIGILANT_HOME/.env
+ExecStart=/usr/bin/bash $VIGILANT_HOME/scripts/setup-iptables.sh
 
-    # 4. Ensure runtime file tree storage is completely clear for permissions
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # 2. Generate vigilant-proxy.service with properly escaped Systemd literals
+    log_info "Creating vigilant-proxy.service..."
+    # Note the 'EOF' around the identifier ensures the content inside is kept literally untouched
+    cat << 'EOF' > /etc/systemd/system/vigilant-proxy.service
+[Unit]
+Description=VIGILANT Transparent Proxy (mitmproxy)
+After=network.target vigilant-firewall.service
+
+[Service]
+Type=simple
+User=vigilant_admin
+WorkingDirectory=/home/vigilant_admin/vigilant
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/vigilant_admin/vigilant/venv/bin/mitmdump \
+    --mode transparent \
+    --showhost \
+    --listen-host 0.0.0.0 \
+    --listen-port 8080 \
+    --set block_global=false \
+    --set ignore_hosts="^(.*\\.)?(facebook|twitter|x|tiktok|instagram|reddit|youtube)\\.com$" \
+    -s /home/vigilant_admin/vigilant/addons/vigilant_addon.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # 3. Generate vigilant-dashboard.service with strict working directory context
+    log_info "Creating vigilant-dashboard.service..."
+    cat << EOF > /etc/systemd/system/vigilant-dashboard.service
+[Unit]
+Description=VIGILANT Flask Dashboard
+After=network.target vigilant-proxy.service
+
+[Service]
+Type=simple
+User=vigilant_admin
+WorkingDirectory=$VIGILANT_HOME
+Environment=PYTHONUNBUFFERED=1
+ExecStart=$VIGILANT_HOME/venv/bin/python3 $VIGILANT_HOME/app.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # 4. Correct runtime directory permissions
     log_info "Validating security context permissions for $VIGILANT_USER..."
     mkdir -p /home/$VIGILANT_USER/.mitmproxy
     chown -R "$VIGILANT_USER:$VIGILANT_USER" /home/$VIGILANT_USER/.mitmproxy
     chown -R "$VIGILANT_USER:$VIGILANT_USER" "$VIGILANT_HOME"
 
-    log_info "Reloading systemd daemon..."
+    log_info "Forcing systemd daemon config reload..."
     systemctl daemon-reload
     
     log_info "Enabling services for auto-start..."
     systemctl enable vigilant-firewall vigilant-proxy vigilant-dashboard
-    log_success "Services installed and enabled"
+    log_success "Services installed and enabled dynamically"
 }
-
 # ─── Stage 10: Verification ─────────────────────────────────────────────────
 stage_10_verify() {
     echo ""
