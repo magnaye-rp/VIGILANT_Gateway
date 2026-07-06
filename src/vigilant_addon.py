@@ -285,7 +285,7 @@ class VIGILANTAddon:
         dns_thread.start()
         print("[VIGILANT] DNS log tailing thread started")
 
-    def tls_clienthello(self, layer: tls.TlsClientHello):
+    def tls_clienthello(self, layer):
         """TLS ClientHello hook for mobile SNI fallback tracking"""
         try:
             client_ip = layer.client_conn.peername[0]

@@ -223,7 +223,7 @@ def security():
     return render_template("pages/security.html")
 
 @app.route("/settings")
-def settings():
+def settings_page():
     """Settings page"""
     return render_template("pages/settings.html")
 
@@ -294,7 +294,7 @@ def config():
             return jsonify({"error": str(e)}), 400
 
 @app.route("/api/settings", methods=["POST"])
-def settings():
+def update_settings():
     """Update advanced settings"""
     try:
         data = request.get_json()
