@@ -254,17 +254,33 @@ stage_6_dns_dhcp() {
     log_info "Restarting dnsmasq..."
     systemctl restart dnsmasq
     
-    log_info "Configuring logrotate for dnsmasq..."
+    log_info "Setting up dnsmasq log with proper permissions for VIGILANT addon..."
+    # Create log file with world-readable permissions so vigilant_admin can access it
+    touch /var/log/dnsmasq.log
+    chmod 644 /var/log/dnsmasq.log
+    log_success "dnsmasq.log permissions set (644)"
+    
+    log_info "Configuring logrotate for dnsmasq with automatic permission management..."
     cat > /etc/logrotate.d/dnsmasq << 'EOF'
 /var/log/dnsmasq.log {
     daily
     copytruncate
     rotate 7
     compress
+    delaycompress
     missingok
     notifempty
+    postrotate
+        # Ensure dnsmasq.log remains world-readable after rotation (fixes Permission denied for vigilant_admin)
+        if [ -f /var/log/dnsmasq.log ]; then
+            chmod 644 /var/log/dnsmasq.log
+        fi
+        # Optionally signal dnsmasq to reopen its log file
+        systemctl reload dnsmasq > /dev/null 2>&1 || true
+    endscript
 }
 EOF
+    log_success "Logrotate configuration created at /etc/logrotate.d/dnsmasq"
     
     log_info "Validating logrotate configuration..."
     if logrotate -d /etc/logrotate.d/dnsmasq > /dev/null 2>&1; then
@@ -273,7 +289,7 @@ EOF
         log_warn "Logrotate configuration validation failed (may be non-critical)"
     fi
     
-    log_success "DNS/DHCP configured"
+    log_success "DNS/DHCP configured with logrotate permission management"
 }
 
 # ─── Stage 7: Firewall Setup ────────────────────────────────────────────────
