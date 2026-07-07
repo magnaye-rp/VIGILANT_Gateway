@@ -4,12 +4,12 @@ import time
 from pathlib import Path
 
 import psutil
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, render_template_string, request
 from flask_cors import CORS
 from jinja2 import TemplateNotFound
 
 
-app = Flask(__name__, static_folder="static")
+app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
 
 SERVER_IP = "192.168.10.1"
@@ -22,12 +22,30 @@ CONFIG_DEFAULTS = {
     "velocity_threshold": 30,
 }
 
-CONFIG_BOOL_KEYS = {"block_harmful", "block_distracting", "throttle_enabled"}
-CONFIG_INT_KEYS = {"velocity_threshold"}
 ALLOWED_CONFIG_KEYS = set(CONFIG_DEFAULTS)
-CONFIG_QUERY_KEYS = tuple(CONFIG_DEFAULTS.keys())
-
+BOOLEAN_CONFIG_KEYS = {"block_harmful", "block_distracting", "throttle_enabled"}
+INTEGER_CONFIG_KEYS = {"velocity_threshold"}
 TRAFFIC_CATEGORIES = ("Educational", "Productive", "Distracting", "Harmful")
+
+
+def _ensure_directory(path: Path) -> None:
+    if path.parent and not path.parent.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _open_db() -> sqlite3.Connection:
+    _ensure_directory(DB_PATH)
+    connection = sqlite3.connect(DB_PATH)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def _table_exists(connection: sqlite3.Connection, table_name: str) -> bool:
+    row = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
 
 
 def query_db(query: str, args=(), one: bool = False):
@@ -47,19 +65,35 @@ def query_db(query: str, args=(), one: bool = False):
         return None if one else []
 
 
-def _table_exists(connection: sqlite3.Connection, table_name: str) -> bool:
-    row = connection.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-        (table_name,),
-    ).fetchone()
-    return row is not None
+def _coerce_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in {0, 1}:
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    raise ValueError("Invalid boolean value")
 
 
-def _format_uptime() -> str:
-    uptime_seconds = max(0, int(time.time() - psutil.boot_time()))
-    hours = uptime_seconds // 3600
-    minutes = (uptime_seconds % 3600) // 60
-    return f"{hours}h {minutes}m"
+def _coerce_int(value):
+    if isinstance(value, bool):
+        raise ValueError("Invalid integer value")
+    integer_value = int(value)
+    if integer_value < 0:
+        raise ValueError("Integer value must be non-negative")
+    return integer_value
+
+
+def _coerce_config_value(key: str, value):
+    if key in BOOLEAN_CONFIG_KEYS:
+        return _coerce_bool(value)
+    if key in INTEGER_CONFIG_KEYS:
+        return _coerce_int(value)
+    raise ValueError(f"Unsupported configuration key: {key}")
 
 
 def _service_statuses() -> dict:
@@ -96,25 +130,61 @@ def _service_statuses() -> dict:
     }
 
 
-def _read_traffic_stats() -> dict:
-    stats = {
-        "connected_devices": 0,
-        "total_requests": 0,
-        "traffic_distribution": {
-            category: {"count": 0, "percentage": 0.0} for category in TRAFFIC_CATEGORIES
-        },
-    }
+def _format_uptime() -> str:
+    uptime_seconds = max(0, int(time.time() - psutil.boot_time()))
+    hours = uptime_seconds // 3600
+    minutes = (uptime_seconds % 3600) // 60
+    return f"{hours}h {minutes}m"
+
+
+def _traffic_percentage_metrics() -> dict:
+    distribution = {category: 0.0 for category in TRAFFIC_CATEGORIES}
 
     if not DB_PATH.exists():
-        return stats
+        return distribution
 
-    with sqlite3.connect(DB_PATH) as connection:
-        if not _table_exists(connection, "traffic_log"):
-            return stats
+    try:
+        with _open_db() as connection:
+            if not _table_exists(connection, "traffic_log"):
+                return distribution
 
-        window_start = int(time.time()) - 86400
+            total_row = connection.execute("SELECT COUNT(*) FROM traffic_log").fetchone()
+            total_logs = int(total_row[0] or 0) if total_row else 0
+            if total_logs <= 0:
+                return distribution
 
-        try:
+            category_rows = connection.execute(
+                """
+                SELECT LOWER(TRIM(category)) AS normalized_category, COUNT(*) AS category_count
+                FROM traffic_log
+                WHERE category IS NOT NULL AND TRIM(category) != ''
+                GROUP BY LOWER(TRIM(category))
+                """
+            ).fetchall()
+
+            category_counts = {str(row[0] or ""): int(row[1] or 0) for row in category_rows}
+
+            for category in TRAFFIC_CATEGORIES:
+                count = category_counts.get(category.lower(), 0)
+                distribution[category] = (count / total_logs) * 100.0
+
+    except sqlite3.Error as exc:
+        app.logger.warning("traffic percentage metrics unavailable: %s", exc)
+
+    return distribution
+
+
+def _connected_device_count() -> int:
+    if not DB_PATH.exists():
+        return 0
+
+    window_start = int(time.time()) - 86400
+
+    try:
+        with _open_db() as connection:
+            if not _table_exists(connection, "traffic_log"):
+                return 0
+
             row = connection.execute(
                 """
                 SELECT COUNT(DISTINCT client_ip)
@@ -123,37 +193,14 @@ def _read_traffic_stats() -> dict:
                 """,
                 (window_start,),
             ).fetchone()
-            stats["connected_devices"] = int(row[0] or 0)
-        except sqlite3.Error:
-            stats["connected_devices"] = 0
-
-        total_row = connection.execute("SELECT COUNT(*) FROM traffic_log").fetchone()
-        total_requests = int(total_row[0] or 0)
-        stats["total_requests"] = total_requests
-
-        category_rows = connection.execute(
-            """
-            SELECT LOWER(TRIM(category)) AS normalized_category, COUNT(*) AS request_count
-            FROM traffic_log
-            GROUP BY LOWER(TRIM(category))
-            """
-        ).fetchall()
-
-        counts = {str(row[0] or ""): int(row[1] or 0) for row in category_rows}
-
-        for category in TRAFFIC_CATEGORIES:
-            count = counts.get(category.lower(), 0)
-            percentage = round((count / total_requests) * 100, 2) if total_requests else 0.0
-            stats["traffic_distribution"][category] = {
-                "count": count,
-                "percentage": percentage,
-            }
-
-    return stats
+            return int(row[0] or 0) if row else 0
+    except sqlite3.Error as exc:
+        app.logger.warning("connected device scan failed: %s", exc)
+        return 0
 
 
 def init_config_db() -> None:
-    with sqlite3.connect(DB_PATH) as connection:
+    with _open_db() as connection:
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS config_settings (
@@ -163,17 +210,20 @@ def init_config_db() -> None:
             )
             """
         )
+
         now_ts = time.time()
-        connection.executemany(
-            """
-            INSERT INTO config_settings (key, value, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(key) DO UPDATE SET
-                value = excluded.value,
-                updated_at = excluded.updated_at
-            """,
-            [(key, str(value), now_ts) for key, value in CONFIG_DEFAULTS.items()],
-        )
+        for key, value in CONFIG_DEFAULTS.items():
+            connection.execute(
+                """
+                INSERT INTO config_settings (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+                """,
+                (key, str(value), now_ts),
+            )
+
         connection.commit()
 
 
@@ -183,45 +233,49 @@ def load_config() -> dict:
     if not DB_PATH.exists():
         return config
 
-    with sqlite3.connect(DB_PATH) as connection:
-        if not _table_exists(connection, "config_settings"):
-            return config
+    try:
+        with _open_db() as connection:
+            if not _table_exists(connection, "config_settings"):
+                return config
 
-        rows = connection.execute(
-            "SELECT key, value FROM config_settings WHERE key IN (?, ?, ?, ?)",
-            CONFIG_QUERY_KEYS,
-        ).fetchall()
+            rows = connection.execute(
+                "SELECT key, value FROM config_settings WHERE key IN (?, ?, ?, ?)",
+                tuple(CONFIG_DEFAULTS.keys()),
+            ).fetchall()
 
-    for key, raw_value in rows:
-        if key not in ALLOWED_CONFIG_KEYS:
-            continue
+        for row in rows:
+            key = str(row[0])
+            if key not in ALLOWED_CONFIG_KEYS:
+                continue
 
-        try:
-            if key in CONFIG_BOOL_KEYS:
-                if isinstance(raw_value, bool):
-                    config[key] = raw_value
-                else:
-                    lowered = str(raw_value).strip().lower()
-                    if lowered in {"1", "true", "yes", "on"}:
-                        config[key] = True
-                    elif lowered in {"0", "false", "no", "off"}:
-                        config[key] = False
-                    else:
-                        raise ValueError
-            elif key in CONFIG_INT_KEYS:
-                value = int(raw_value)
-                if value < 0:
-                    raise ValueError
-                config[key] = value
-        except (TypeError, ValueError):
-            config[key] = CONFIG_DEFAULTS[key]
+            raw_value = row[1]
+            try:
+                config[key] = _coerce_config_value(key, raw_value)
+            except (TypeError, ValueError):
+                config[key] = CONFIG_DEFAULTS[key]
+    except sqlite3.Error as exc:
+        app.logger.warning("load_config failed: %s", exc)
 
     return config
 
 
 def save_config(updates: dict) -> None:
-    now_ts = time.time()
-    with sqlite3.connect(DB_PATH) as connection:
+    if not isinstance(updates, dict):
+        return
+
+    filtered_updates = {}
+    for key, value in updates.items():
+        if key not in ALLOWED_CONFIG_KEYS:
+            continue
+        try:
+            filtered_updates[key] = _coerce_config_value(key, value)
+        except (TypeError, ValueError) as exc:
+            app.logger.warning("save_config rejected %s: %s", key, exc)
+
+    if not filtered_updates:
+        return
+
+    with _open_db() as connection:
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS config_settings (
@@ -231,60 +285,185 @@ def save_config(updates: dict) -> None:
             )
             """
         )
-        connection.executemany(
-            """
-            INSERT INTO config_settings (key, value, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(key) DO UPDATE SET
-                value = excluded.value,
-                updated_at = excluded.updated_at
-            """,
-            [(key, str(value), now_ts) for key, value in updates.items()],
-        )
+
+        now_ts = time.time()
+        for key, value in filtered_updates.items():
+            connection.execute(
+                """
+                INSERT INTO config_settings (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+                """,
+                (key, str(value), now_ts),
+            )
+
         connection.commit()
 
 
-def _coerce_config_value(key: str, value):
-    if key in CONFIG_BOOL_KEYS:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            lowered = value.strip().lower()
-            if lowered in {"1", "true", "yes", "on"}:
-                return True
-            if lowered in {"0", "false", "no", "off"}:
-                return False
-        if isinstance(value, int) and value in {0, 1}:
-            return bool(value)
-        raise ValueError(f"Invalid boolean value for {key}")
-
-    if key in CONFIG_INT_KEYS:
-        if isinstance(value, bool):
-            raise ValueError(f"Invalid integer value for {key}")
-        integer_value = int(value)
-        if integer_value < 0:
-            raise ValueError(f"{key} must be >= 0")
-        return integer_value
-
-    raise ValueError(f"Unsupported config key: {key}")
-
-
-def _normalize_config_payload(payload: dict) -> tuple[dict, list, list]:
+def _config_payload_from_request(payload: dict) -> tuple[dict, list[str]]:
     valid_updates = {}
     ignored_keys = []
-    validation_errors = []
 
-    for key, raw_value in payload.items():
+    for key, value in payload.items():
         if key not in ALLOWED_CONFIG_KEYS:
             ignored_keys.append(key)
             continue
 
-        try:
-            valid_updates[key] = _coerce_config_value(key, raw_value)
-        except (TypeError, ValueError) as exc:
-            validation_errors.append(str(exc))
+        valid_updates[key] = value
 
-    return valid_updates, ignored_keys, validation_errors
+    return valid_updates, ignored_keys
+
+
+def _dashboard_fallback_html(server_ip: str) -> str:
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VIGILANT GATEWAY</title>
+  <style>
+    :root {{
+      color-scheme: dark;
+      --bg: #07111f;
+      --panel: rgba(8, 18, 32, 0.9);
+      --panel-border: rgba(145, 188, 255, 0.18);
+      --text: #e7eef8;
+      --muted: #9fb0c7;
+      --accent: #7dd3fc;
+      --accent-2: #22c55e;
+      --danger: #fb7185;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(125, 211, 252, 0.18), transparent 30%),
+        radial-gradient(circle at top right, rgba(34, 197, 94, 0.12), transparent 25%),
+        linear-gradient(180deg, #07111f 0%, #050a12 100%);
+      color: var(--text);
+      min-height: 100vh;
+    }}
+    .shell {{ max-width: 1120px; margin: 0 auto; padding: 28px 18px 44px; }}
+    .hero {{
+      padding: 28px;
+      border: 1px solid var(--panel-border);
+      background: var(--panel);
+      border-radius: 24px;
+      box-shadow: 0 24px 72px rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(16px);
+    }}
+    .eyebrow {{
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: rgba(125, 211, 252, 0.12);
+      color: var(--accent);
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-bottom: 14px;
+    }}
+    h1 {{ margin: 0; font-size: clamp(2rem, 4vw, 3.6rem); line-height: 1.05; }}
+    .lede {{ max-width: 72ch; color: var(--muted); font-size: 1.02rem; line-height: 1.7; margin: 16px 0 0; }}
+    .grid {{
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 18px;
+    }}
+    .card {{
+      padding: 18px;
+      border-radius: 20px;
+      border: 1px solid var(--panel-border);
+      background: rgba(5, 10, 18, 0.7);
+      min-height: 150px;
+    }}
+    .card h2 {{ margin: 0 0 8px; font-size: 1.08rem; }}
+    .card p, .card li {{ color: var(--muted); line-height: 1.65; }}
+    .badge {{
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 8px;
+      padding: 7px 11px;
+      border-radius: 999px;
+      background: rgba(34, 197, 94, 0.14);
+      color: #c7f9d3;
+      font-size: 0.92rem;
+    }}
+    .tabs {{ margin-top: 22px; }}
+    .tab-strip {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }}
+    .tab-strip div {{
+      padding: 12px 14px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      font-weight: 600;
+    }}
+    .tab-panel {{
+      margin-top: 12px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }}
+    .pill {{
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px dashed rgba(125, 211, 252, 0.25);
+      color: var(--text);
+    }}
+    code {{ color: var(--accent); }}
+    @media (max-width: 900px) {{
+      .grid, .tab-strip, .tab-panel {{ grid-template-columns: 1fr; }}
+      .hero {{ padding: 20px; }}
+    }}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div class="eyebrow">VIGILANT Gateway staging shell</div>
+      <h1>Secure gateway control surface</h1>
+      <p class="lede">The dashboard template is unavailable, so the backend is serving a safe inline view at server IP <code>{server_ip}</code>. This fallback keeps the production route online while the full templates are staged.</p>
+      <div class="badge">200 OK fallback active</div>
+    </section>
+
+    <section class="grid" aria-label="dashboard overview">
+      <article class="card">
+        <h2>Tab 1: Dashboard</h2>
+        <p>Live status, uptime, connected device count, and traffic percentages are exposed through <code>/api/stats</code>.</p>
+      </article>
+      <article class="card">
+        <h2>Tab 2: Configurations</h2>
+        <p>Basic Mode and Advanced Mode share a strict whitelist. Only the mobile-safe and web-safe settings are accepted.</p>
+      </article>
+      <article class="card">
+        <h2>Tab 3: Setup Guide</h2>
+        <p>Use the setup guide to finish deployment wiring, confirm database seeding, and validate the gateway listener.</p>
+      </article>
+    </section>
+
+    <section class="tabs" aria-label="tab structure">
+      <div class="tab-strip">
+        <div>Tab 1 - Dashboard</div>
+        <div>Tab 2 - Configurations [Basic / Advanced Toggle]</div>
+        <div>Tab 3 - Setup Guide</div>
+      </div>
+      <div class="tab-panel">
+        <div class="pill">Server IP: <strong>{server_ip}</strong></div>
+        <div class="pill">Basic Mode: block harmful + distracting content</div>
+        <div class="pill">Advanced Mode: throttle enabled + velocity threshold</div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>"""
 
 
 @app.route("/")
@@ -292,68 +471,19 @@ def index():
     try:
         return render_template("pages/dashboard.html", server_ip=SERVER_IP)
     except TemplateNotFound as exc:
-        print(f"[index] TemplateNotFound while rendering pages/dashboard.html: {exc}")
-        app.logger.exception("Dashboard template missing for index route")
-        fallback_html = f"""<!doctype html>
-<html lang=\"en\">
-  <head>
-    <meta charset=\"utf-8\">
-    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
-    <title>VIGILANT GATEWAY</title>
-  </head>
-  <body style=\"font-family:system-ui,sans-serif;padding:32px;background:#0f172a;color:#e2e8f0;\">
-    <h1>VIGILANT GATEWAY</h1>
-    <p>The frontend templates are still staging. The backend is running with server IP <code>{SERVER_IP}</code> and the dashboard will render normally once <code>pages/dashboard.html</code> is available.</p>
-  </body>
-</html>"""
-        return fallback_html, 500
-
-
-@app.errorhandler(500)
-def handle_internal_error(exc):
-    app.logger.exception("Unhandled 500 error")
-    if request.accept_mimetypes.best == "application/json":
-        return (
-            jsonify(
-                {
-                    "error": "frontend templates are still staging",
-                    "server_ip": SERVER_IP,
-                    "template": "pages/dashboard.html",
-                }
-            ),
-            500,
-        )
-
-    return (
-        f"""<!doctype html>
-<html lang=\"en\">
-  <head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>VIGILANT GATEWAY</title></head>
-  <body style=\"font-family:system-ui,sans-serif;padding:32px;background:#0f172a;color:#e2e8f0;\">
-    <h1>VIGILANT GATEWAY</h1>
-    <p>Frontend templates are still staging. Dashboard rendering failed for <code>pages/dashboard.html</code>.</p>
-  </body>
-</html>""",
-        500,
-    )
+        print(f"TemplateNotFound while rendering pages/dashboard.html: {exc}")
+        app.logger.exception("Dashboard template missing; serving inline fallback")
+        return render_template_string(_dashboard_fallback_html(SERVER_IP)), 200
 
 
 @app.route("/api/stats")
 def api_stats():
     try:
-        traffic_stats = _read_traffic_stats()
         payload = {
-            "server_ip": SERVER_IP,
             "server_status": _service_statuses(),
-            "connected_devices": traffic_stats["connected_devices"],
+            "connected_devices": _connected_device_count(),
             "online_duration": _format_uptime(),
-            "traffic_distribution": traffic_stats["traffic_distribution"],
-            "total_requests": traffic_stats["total_requests"],
-            "tracking_model": {
-                "client_visibility": "passive_dns_and_tls_clienthello_sni",
-                "https_decryption": False,
-                "custom_root_certificate_required": False,
-            },
-            "generated_at": int(time.time()),
+            "percentage_metrics": _traffic_percentage_metrics(),
         }
         return jsonify(payload)
     except Exception as exc:
@@ -370,30 +500,38 @@ def api_config():
     if not isinstance(payload, dict):
         return jsonify({"error": "JSON object payload is required"}), 400
 
-    valid_updates, ignored_keys, validation_errors = _normalize_config_payload(payload)
+    valid_updates, ignored_keys = _config_payload_from_request(payload)
 
-    if validation_errors:
-        return jsonify({"error": "Invalid configuration values", "details": validation_errors}), 400
+    if not valid_updates and not ignored_keys:
+        return jsonify({"error": "No configuration keys supplied"}), 400
 
-    if not valid_updates:
-        return (
-            jsonify(
-                {
-                    "error": "No valid runtime configuration keys supplied",
-                    "allowed_keys": sorted(ALLOWED_CONFIG_KEYS),
-                    "ignored_keys": ignored_keys,
-                }
-            ),
-            400,
-        )
+    if valid_updates:
+        coerced_updates = {}
+        validation_errors = []
+        for key, value in valid_updates.items():
+            try:
+                coerced_updates[key] = _coerce_config_value(key, value)
+            except (TypeError, ValueError) as exc:
+                validation_errors.append(f"{key}: {exc}")
 
-    save_config(valid_updates)
-    response = load_config()
-    if ignored_keys:
-        response["ignored_keys"] = ignored_keys
-    return jsonify(response)
+        if validation_errors:
+            return jsonify({"error": "Invalid configuration values", "details": validation_errors}), 400
+
+        save_config(coerced_updates)
+
+    return jsonify(load_config())
+
+
+def _compile_config_integrity() -> None:
+    init_config_db()
+    current_config = load_config()
+    missing_defaults = {
+        key: value for key, value in CONFIG_DEFAULTS.items() if key not in current_config
+    }
+    if missing_defaults:
+        save_config(missing_defaults)
 
 
 if __name__ == "__main__":
-    init_config_db()
+    _compile_config_integrity()
     app.run(host="0.0.0.0", port=5000, debug=False)
