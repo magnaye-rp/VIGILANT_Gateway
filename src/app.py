@@ -5,10 +5,12 @@ from pathlib import Path
 
 import psutil
 from flask import Flask, jsonify, render_template, request
+from flask_cors import CORS
 from jinja2 import TemplateNotFound
 
 
 app = Flask(__name__, static_folder="static")
+CORS(app)
 
 SERVER_IP = "192.168.10.1"
 DB_PATH = Path(os.getenv("VIGILANT_DB_PATH", "/home/vigilant_admin/vigilant/logs/vigilant.db"))
@@ -26,6 +28,23 @@ ALLOWED_CONFIG_KEYS = set(CONFIG_DEFAULTS)
 CONFIG_QUERY_KEYS = tuple(CONFIG_DEFAULTS.keys())
 
 TRAFFIC_CATEGORIES = ("Educational", "Productive", "Distracting", "Harmful")
+
+
+def query_db(query: str, args=(), one: bool = False):
+    if not DB_PATH.exists():
+        return None if one else []
+
+    try:
+        with sqlite3.connect(DB_PATH) as connection:
+            connection.row_factory = sqlite3.Row
+            cursor = connection.execute(query, args)
+            rows = cursor.fetchall()
+            if one:
+                return rows[0] if rows else None
+            return rows
+    except sqlite3.Error as exc:
+        app.logger.warning("query_db failed: %s", exc)
+        return None if one else []
 
 
 def _table_exists(connection: sqlite3.Connection, table_name: str) -> bool:
@@ -133,7 +152,32 @@ def _read_traffic_stats() -> dict:
     return stats
 
 
-def _load_runtime_config() -> dict:
+def init_config_db() -> None:
+    with sqlite3.connect(DB_PATH) as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS config_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at REAL
+            )
+            """
+        )
+        now_ts = time.time()
+        connection.executemany(
+            """
+            INSERT INTO config_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            """,
+            [(key, str(value), now_ts) for key, value in CONFIG_DEFAULTS.items()],
+        )
+        connection.commit()
+
+
+def load_config() -> dict:
     config = dict(CONFIG_DEFAULTS)
 
     if not DB_PATH.exists():
@@ -175,22 +219,18 @@ def _load_runtime_config() -> dict:
     return config
 
 
-def _ensure_config_table(connection: sqlite3.Connection) -> None:
-    connection.execute(
-        """
-        CREATE TABLE IF NOT EXISTS config_settings (
-            key TEXT PRIMARY KEY,
-            value TEXT,
-            updated_at REAL
-        )
-        """
-    )
-
-
-def _write_runtime_config(updates: dict) -> None:
+def save_config(updates: dict) -> None:
     now_ts = time.time()
     with sqlite3.connect(DB_PATH) as connection:
-        _ensure_config_table(connection)
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS config_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at REAL
+            )
+            """
+        )
         connection.executemany(
             """
             INSERT INTO config_settings (key, value, updated_at)
@@ -254,11 +294,47 @@ def index():
     except TemplateNotFound as exc:
         print(f"[index] TemplateNotFound while rendering pages/dashboard.html: {exc}")
         app.logger.exception("Dashboard template missing for index route")
-        message = (
-            "Dashboard template unavailable: "
-            "pages/dashboard.html could not be located, so the unified layout cannot render."
+        fallback_html = f"""<!doctype html>
+<html lang=\"en\">
+  <head>
+    <meta charset=\"utf-8\">
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+    <title>VIGILANT GATEWAY</title>
+  </head>
+  <body style=\"font-family:system-ui,sans-serif;padding:32px;background:#0f172a;color:#e2e8f0;\">
+    <h1>VIGILANT GATEWAY</h1>
+    <p>The frontend templates are still staging. The backend is running with server IP <code>{SERVER_IP}</code> and the dashboard will render normally once <code>pages/dashboard.html</code> is available.</p>
+  </body>
+</html>"""
+        return fallback_html, 500
+
+
+@app.errorhandler(500)
+def handle_internal_error(exc):
+    app.logger.exception("Unhandled 500 error")
+    if request.accept_mimetypes.best == "application/json":
+        return (
+            jsonify(
+                {
+                    "error": "frontend templates are still staging",
+                    "server_ip": SERVER_IP,
+                    "template": "pages/dashboard.html",
+                }
+            ),
+            500,
         )
-        return message, 500
+
+    return (
+        f"""<!doctype html>
+<html lang=\"en\">
+  <head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>VIGILANT GATEWAY</title></head>
+  <body style=\"font-family:system-ui,sans-serif;padding:32px;background:#0f172a;color:#e2e8f0;\">
+    <h1>VIGILANT GATEWAY</h1>
+    <p>Frontend templates are still staging. Dashboard rendering failed for <code>pages/dashboard.html</code>.</p>
+  </body>
+</html>""",
+        500,
+    )
 
 
 @app.route("/api/stats")
@@ -288,7 +364,7 @@ def api_stats():
 @app.route("/api/config", methods=["GET", "POST"])
 def api_config():
     if request.method == "GET":
-        return jsonify(_load_runtime_config())
+        return jsonify(load_config())
 
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
@@ -311,12 +387,13 @@ def api_config():
             400,
         )
 
-    _write_runtime_config(valid_updates)
-    response = _load_runtime_config()
+    save_config(valid_updates)
+    response = load_config()
     if ignored_keys:
         response["ignored_keys"] = ignored_keys
     return jsonify(response)
 
 
 if __name__ == "__main__":
+    init_config_db()
     app.run(host="0.0.0.0", port=5000, debug=False)
