@@ -176,6 +176,7 @@ stage_3_python_env() {
     # FIX: Pin dependencies to prevent breaking upstream API alterations
     pip install \
         flask \
+        flask-cors \
         mitmproxy==9.0.1 \
         spacy \
         psutil \

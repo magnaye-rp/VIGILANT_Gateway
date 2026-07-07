@@ -5,8 +5,13 @@ from pathlib import Path
 
 import psutil
 from flask import Flask, jsonify, render_template, render_template_string, request
-from flask_cors import CORS
 from jinja2 import TemplateNotFound
+
+try:
+    from flask_cors import CORS
+except ImportError:
+    def CORS(app):
+        return app
 
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
