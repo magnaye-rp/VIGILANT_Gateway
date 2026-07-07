@@ -440,6 +440,9 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
+    log_info "Syncing the latest backend app.py into the runtime directory..."
+    cp "$REPO_DIR/src/app.py" "$VIGILANT_HOME/app.py"
+
     # 4. Correct runtime directory permissions
     log_info "Validating security context permissions for $VIGILANT_USER..."
     mkdir -p /home/$VIGILANT_USER/.mitmproxy
@@ -451,6 +454,12 @@ EOF
     
     log_info "Enabling services for auto-start..."
     systemctl enable vigilant-firewall vigilant-proxy vigilant-dashboard
+
+    log_info "Restarting services so the updated backend is loaded immediately..."
+    systemctl restart vigilant-firewall || true
+    systemctl restart vigilant-proxy || true
+    systemctl restart vigilant-dashboard || true
+
     log_success "Services installed and enabled dynamically"
 }
 # ─── Stage 10: Verification ─────────────────────────────────────────────────
