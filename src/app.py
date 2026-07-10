@@ -14,7 +14,12 @@ except ImportError:
         return app
 
 
-app = Flask(__name__, static_folder="static", template_folder="templates")
+BASE_DIR = Path(__file__).resolve().parent
+app = Flask(
+    __name__,
+    static_folder=str(BASE_DIR / "static"),
+    template_folder=str(BASE_DIR / "templates"),
+)
 CORS(app)
 
 SERVER_IP = "192.168.10.1"

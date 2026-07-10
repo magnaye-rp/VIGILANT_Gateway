@@ -153,7 +153,7 @@ stage_2_directories() {
     fi
     
     log_info "Creating directory structure..."
-    mkdir -p "$VIGILANT_HOME"/{addons,templates,scripts,logs,certs}
+    mkdir -p "$VIGILANT_HOME"/{addons,templates,static,scripts,logs,certs}
     chown -R "$VIGILANT_USER:$VIGILANT_USER" "$VIGILANT_HOME"
     chmod -R 755 "$VIGILANT_HOME"
     log_success "Directories created"
@@ -203,7 +203,10 @@ stage_4_copy_files() {
     cp "$REPO_DIR/src/vigilant_addon.py" "$VIGILANT_HOME/addons/"
     
     log_info "Copying templates..."
-    cp "$REPO_DIR/src/templates/dashboard.html" "$VIGILANT_HOME/templates/"
+    cp -a "$REPO_DIR/src/templates/." "$VIGILANT_HOME/templates/"
+
+    log_info "Copying static assets..."
+    cp -a "$REPO_DIR/src/static/." "$VIGILANT_HOME/static/"
     
     log_info "Copying scripts..."
     cp "$REPO_DIR/src/scripts/setup-iptables.sh" "$VIGILANT_HOME/scripts/"
