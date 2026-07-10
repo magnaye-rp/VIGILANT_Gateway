@@ -4,6 +4,7 @@ set -e
 # Use environment variables or fallback to defaults (for backward compatibility)
 WAN_INTERFACE="${WAN_INTERFACE:-enp0s5}"
 LAN_INTERFACE="${LAN_INTERFACE:-enp0s6}"
+APPLE_CAPTIVE_PORTAL_NET="17.0.0.0/8"
 
 echo "[1/7] Flushing existing rules..."
 iptables -t nat -F && iptables -t mangle -F
@@ -18,6 +19,10 @@ echo "[3/7] NAT - internet sharing from LAN to WAN..."
 iptables -t nat -A POSTROUTING -o "$WAN_INTERFACE" -j MASQUERADE
 
 echo "[4/7] Transparent redirect - HTTP and HTTPS to mitmproxy..."
+iptables -t nat -I PREROUTING 1 \
+  -i "$LAN_INTERFACE" -d "$APPLE_CAPTIVE_PORTAL_NET" -p tcp --dport 80 -j ACCEPT
+iptables -t nat -I PREROUTING 1 \
+  -i "$LAN_INTERFACE" -d "$APPLE_CAPTIVE_PORTAL_NET" -p tcp --dport 443 -j ACCEPT
 iptables -t nat -A PREROUTING \
   -i "$LAN_INTERFACE" -p tcp --dport 80 -j REDIRECT --to-port 8080
 iptables -t nat -A PREROUTING \

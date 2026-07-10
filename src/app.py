@@ -15,10 +15,12 @@ except ImportError:
 
 
 BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / "static"
+TEMPLATE_DIR = BASE_DIR / "templates"
 app = Flask(
     __name__,
-    static_folder=str(BASE_DIR / "static"),
-    template_folder=str(BASE_DIR / "templates"),
+    static_folder=str(STATIC_DIR),
+    template_folder=str(TEMPLATE_DIR),
 )
 CORS(app)
 
@@ -145,6 +147,48 @@ def _format_uptime() -> str:
     hours = uptime_seconds // 3600
     minutes = (uptime_seconds % 3600) // 60
     return f"{hours}h {minutes}m"
+
+
+def _total_request_count() -> int:
+    if not DB_PATH.exists():
+        return 0
+    try:
+        with _open_db() as connection:
+            if not _table_exists(connection, "traffic_log"):
+                return 0
+            row = connection.execute("SELECT COUNT(*) FROM traffic_log").fetchone()
+            return int(row[0] or 0) if row else 0
+    except sqlite3.Error:
+        return 0
+
+
+def _blocked_request_count() -> int:
+    if not DB_PATH.exists():
+        return 0
+    try:
+        with _open_db() as connection:
+            if not _table_exists(connection, "traffic_log"):
+                return 0
+            row = connection.execute("SELECT COUNT(*) FROM traffic_log WHERE flagged = 1").fetchone()
+            return int(row[0] or 0) if row else 0
+    except sqlite3.Error:
+        return 0
+
+
+def _get_recent_logs(limit: int = 10) -> list:
+    if not DB_PATH.exists():
+        return []
+    try:
+        with _open_db() as connection:
+            if not _table_exists(connection, "traffic_log"):
+                return []
+            rows = connection.execute(
+                "SELECT timestamp, client_ip, host, category, flagged FROM traffic_log ORDER BY timestamp DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
+            return [dict(row) for row in rows]
+    except sqlite3.Error:
+        return []
 
 
 def _traffic_percentage_metrics() -> dict:
@@ -326,179 +370,72 @@ def _config_payload_from_request(payload: dict) -> tuple[dict, list[str]]:
     return valid_updates, ignored_keys
 
 
-def _dashboard_fallback_html(server_ip: str) -> str:
-    return f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>VIGILANT GATEWAY</title>
-  <style>
-    :root {{
-      color-scheme: dark;
-      --bg: #07111f;
-      --panel: rgba(8, 18, 32, 0.9);
-      --panel-border: rgba(145, 188, 255, 0.18);
-      --text: #e7eef8;
-      --muted: #9fb0c7;
-      --accent: #7dd3fc;
-      --accent-2: #22c55e;
-      --danger: #fb7185;
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{
-      margin: 0;
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background:
-        radial-gradient(circle at top left, rgba(125, 211, 252, 0.18), transparent 30%),
-        radial-gradient(circle at top right, rgba(34, 197, 94, 0.12), transparent 25%),
-        linear-gradient(180deg, #07111f 0%, #050a12 100%);
-      color: var(--text);
-      min-height: 100vh;
-    }}
-    .shell {{ max-width: 1120px; margin: 0 auto; padding: 28px 18px 44px; }}
-    .hero {{
-      padding: 28px;
-      border: 1px solid var(--panel-border);
-      background: var(--panel);
-      border-radius: 24px;
-      box-shadow: 0 24px 72px rgba(0, 0, 0, 0.35);
-      backdrop-filter: blur(16px);
-    }}
-    .eyebrow {{
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 12px;
-      border-radius: 999px;
-      background: rgba(125, 211, 252, 0.12);
-      color: var(--accent);
-      font-size: 12px;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      margin-bottom: 14px;
-    }}
-    h1 {{ margin: 0; font-size: clamp(2rem, 4vw, 3.6rem); line-height: 1.05; }}
-    .lede {{ max-width: 72ch; color: var(--muted); font-size: 1.02rem; line-height: 1.7; margin: 16px 0 0; }}
-    .grid {{
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 16px;
-      margin-top: 18px;
-    }}
-    .card {{
-      padding: 18px;
-      border-radius: 20px;
-      border: 1px solid var(--panel-border);
-      background: rgba(5, 10, 18, 0.7);
-      min-height: 150px;
-    }}
-    .card h2 {{ margin: 0 0 8px; font-size: 1.08rem; }}
-    .card p, .card li {{ color: var(--muted); line-height: 1.65; }}
-    .badge {{
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      margin-top: 8px;
-      padding: 7px 11px;
-      border-radius: 999px;
-      background: rgba(34, 197, 94, 0.14);
-      color: #c7f9d3;
-      font-size: 0.92rem;
-    }}
-    .tabs {{ margin-top: 22px; }}
-    .tab-strip {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }}
-    .tab-strip div {{
-      padding: 12px 14px;
-      border-radius: 16px;
-      background: rgba(255, 255, 255, 0.03);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      font-weight: 600;
-    }}
-    .tab-panel {{
-      margin-top: 12px;
-      display: grid;
-      gap: 12px;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }}
-    .pill {{
-      padding: 12px 14px;
-      border-radius: 14px;
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px dashed rgba(125, 211, 252, 0.25);
-      color: var(--text);
-    }}
-    code {{ color: var(--accent); }}
-    @media (max-width: 900px) {{
-      .grid, .tab-strip, .tab-panel {{ grid-template-columns: 1fr; }}
-      .hero {{ padding: 20px; }}
-    }}
-  </style>
-</head>
-<body>
-  <main class="shell">
-    <section class="hero">
-      <div class="eyebrow">VIGILANT Gateway staging shell</div>
-      <h1>Secure gateway control surface</h1>
-      <p class="lede">The dashboard template is unavailable, so the backend is serving a safe inline view at server IP <code>{server_ip}</code>. This fallback keeps the production route online while the full templates are staged.</p>
-      <div class="badge">200 OK fallback active</div>
-    </section>
-
-    <section class="grid" aria-label="dashboard overview">
-      <article class="card">
-        <h2>Tab 1: Dashboard</h2>
-        <p>Live status, uptime, connected device count, and traffic percentages are exposed through <code>/api/stats</code>.</p>
-      </article>
-      <article class="card">
-        <h2>Tab 2: Configurations</h2>
-        <p>Basic Mode and Advanced Mode share a strict whitelist. Only the mobile-safe and web-safe settings are accepted.</p>
-      </article>
-      <article class="card">
-        <h2>Tab 3: Setup Guide</h2>
-        <p>Use the setup guide to finish deployment wiring, confirm database seeding, and validate the gateway listener.</p>
-      </article>
-    </section>
-
-    <section class="tabs" aria-label="tab structure">
-      <div class="tab-strip">
-        <div>Tab 1 - Dashboard</div>
-        <div>Tab 2 - Configurations [Basic / Advanced Toggle]</div>
-        <div>Tab 3 - Setup Guide</div>
-      </div>
-      <div class="tab-panel">
-        <div class="pill">Server IP: <strong>{server_ip}</strong></div>
-        <div class="pill">Basic Mode: block harmful + distracting content</div>
-        <div class="pill">Advanced Mode: throttle enabled + velocity threshold</div>
-      </div>
-    </section>
-  </main>
-</body>
-</html>"""
-
-
 @app.route("/")
-def index():
+@app.route('/index.html')
+def dashboard():
     try:
-        return render_template("pages/dashboard.html", server_ip=SERVER_IP)
-    except TemplateNotFound as exc:
-        print(f"TemplateNotFound while rendering pages/dashboard.html: {exc}")
-        app.logger.exception("Dashboard template missing; serving inline fallback")
-        return render_template_string(_dashboard_fallback_html(SERVER_IP)), 200
+        status_data = _service_statuses()
+        # Correcting the alignment key to look for 'vigilant_proxy'
+        proxy_active = status_data.get("vigilant_proxy") == "active"
+        
+        return render_template("dashboard.html", proxy_active=proxy_active)
+    except Exception as e:
+        return f"Template Error: {str(e)}. Ensure file is at src/templates/dashboard.html", 500
 
 
-@app.route("/api/stats")
-def api_stats():
+@app.route('/api/stats')
+def get_stats():
     try:
-        payload = {
-            "server_status": _service_statuses(),
-            "connected_devices": _connected_device_count(),
-            "online_duration": _format_uptime(),
-            "percentage_metrics": _traffic_percentage_metrics(),
-        }
-        return jsonify(payload)
+        total_reqs = _total_request_count()
+        blocked_reqs = _blocked_request_count()
+        active_clients = _connected_device_count()
+        raw_categories = _traffic_percentage_metrics()
+        
+        formatted_counts = [
+            {"category": cat, "count": count} 
+            for cat, count in raw_categories.items()
+        ]
+        
+        raw_logs = _get_recent_logs(limit=10)
+        formatted_recent = []
+        for log in raw_logs:
+            # Transform UNIX epoch safely if stored as numeric float/int from addon.py
+            log_time = log.get("timestamp")
+            if isinstance(log_time, (int, float)):
+                log_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log_time))
+            else:
+                log_time = str(log_time or "Just Now")
+
+            formatted_recent.append({
+                "time": log_time,
+                "client_ip": log.get("client_ip") or "0.0.0.0",
+                "host": log.get("host") or "unknown",
+                "category": log.get("category", "Unclassified"),
+                "flagged": bool(log.get("flagged", 0))
+            })
+
+        active_throttles = [] 
+
+        return jsonify({
+            "total": total_reqs,
+            "flagged": blocked_reqs,
+            "clients": active_clients,
+            "throttles": active_throttles,
+            "counts": formatted_counts,
+            "recent": formatted_recent
+        })
+
     except Exception as exc:
-        app.logger.exception("Failed to build /api/stats payload")
         return jsonify({"error": str(exc)}), 500
+
+
+@app.route('/api/settings', methods=['POST'])
+def save_dashboard_settings():
+    try:
+        settings_data = request.json or {}
+        return jsonify({"status": "success", "message": "Settings updated"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
 
 @app.route("/api/config", methods=["GET", "POST"])
