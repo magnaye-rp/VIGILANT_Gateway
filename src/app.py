@@ -380,7 +380,9 @@ def dashboard():
         
         return render_template("dashboard.html", proxy_active=proxy_active)
     except Exception as e:
-        return f"Template Error: {str(e)}. Ensure file is at src/templates/dashboard.html", 500
+        import traceback
+        error_msg = f"<h3>Jinja2 Error Details</h3><pre>{traceback.format_exc()}</pre>"
+        return error_msg, 500
 
 
 @app.route('/api/stats')
