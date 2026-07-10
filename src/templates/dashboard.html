@@ -1301,15 +1301,16 @@
   let pendingConfirmAction = null;
 
   // ─── Tab Navigation ─── 
-  function switchTab(tabName) {
+  function switchTab(tabId) {
     document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
     document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-    document.getElementById(`tab-${tabName}`).classList.add('active');
+    document.getElementById(`tab-${tabId}`)?.classList.add('active');
     event.currentTarget?.classList.add('active');
-    currentTab = tabName;
+    currentTab = tabId;
     closeSidebar();
     
-    if (tabName === 'dashboard') refreshStats();
+    if (tabId === 'dashboard') refreshStats();
+    if (tabId === 'settings' || tabId === 'wizard') loadConfigToUI();
   }
 
   function switchSettings(section) {
@@ -1407,39 +1408,21 @@
         `;
       });
       document.getElementById('recent-tbody').innerHTML = recentHtml || '<tr><td colspan="5" class="text-center" style="color: var(--text-secondary); padding: 2rem;">No traffic data yet</td></tr>';
-    } catch (e) {
-      showToast('Failed to load statistics', 'error');
-    }
-  }
 
-  async function saveWizardConfig() {
-    try {
-      const config = {
-        gateway_ip: document.getElementById('wizard-gateway-ip').value,
-        dhcp_start: document.getElementById('wizard-dhcp-start').value,
-        dhcp_end: document.getElementById('wizard-dhcp-end').value,
-        nlp_mode: document.getElementById('wizard-nlp-mode').value,
-        block_harmful: document.getElementById('block-harmful').checked,
-        block_distracting: document.getElementById('block-distracting').checked,
-        throttle_enabled: document.getElementById('throttle-enabled').checked,
-        throttle_threshold: document.getElementById('wizard-throttle-threshold').value,
-        throttle_rate: document.getElementById('wizard-throttle-rate').value,
-      };
-      
-      const response = await fetch('/api/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config)
-      });
-      
-      if (response.ok) {
-        showToast('Configuration saved successfully', 'success');
-        setTimeout(() => switchTab('dashboard'), 1500);
-      } else {
-        showToast('Failed to save configuration', 'error');
+      if (document.getElementById('sysUptime')) {
+        document.getElementById('sysUptime').textContent = data.uptime || '—';
+      }
+      if (document.getElementById('sys-uptime')) {
+        document.getElementById('sys-uptime').textContent = data.uptime || '—';
+      }
+      if (document.getElementById('proxyStatusBadge')) {
+        const proxyActive = data?.statuses?.vigilant_proxy === 'active';
+        const badge = document.getElementById('proxyStatusBadge');
+        badge.textContent = proxyActive ? 'Active' : 'Inactive';
+        badge.className = proxyActive ? 'badge success' : 'badge error';
       }
     } catch (e) {
-      showToast('Error: ' + e.message, 'error');
+      showToast('Failed to load statistics', 'error');
     }
   }
 
@@ -1488,14 +1471,22 @@
   }
 
   async function confirmReset() {
-    pendingConfirmAction = async () => {
+    pendingConfirmAction = factoryReset;
+    showConfirmDialog('Reset all settings to factory defaults? This cannot be undone.', 'Reset');
+  }
+
+  async function factoryReset() {
+    try {
       const response = await fetch('/api/reset', { method: 'POST' });
       if (response.ok) {
         showToast('System reset to defaults', 'success');
         location.reload();
+      } else {
+        showToast('Failed to reset system', 'error');
       }
-    };
-    showConfirmDialog('Reset all settings to factory defaults? This cannot be undone.', 'Reset');
+    } catch (error) {
+      showToast('Factory reset request failed', 'error');
+    }
   }
 
   function exportConfig() {
@@ -1535,42 +1526,51 @@
     setTimeout(() => toast.remove(), 4000);
   }
 
-  // ─── Initialize ─── 
-  refreshStats();
-  setInterval(refreshStats, 5000);
-
   // ─── Active Configurations Management ───
-  async function loadConfig() {
+  function firstExistingElement(ids) {
+    for (const id of ids) {
+      const el = document.getElementById(id);
+      if (el) return el;
+    }
+    return null;
+  }
+
+  async function loadConfigToUI() {
     try {
       const response = await fetch('/api/config');
       if (!response.ok) throw new Error('Failed to fetch configurations');
       const config = await response.json();
-      
-      // Map configurations to Dashboard Toggle switches
-      document.getElementById('blockHarmful').checked = config.block_harmful;
-      document.getElementById('blockDistracting').checked = config.block_distracting;
-      document.getElementById('throttleEnabled').checked = config.throttle_enabled;
-      document.getElementById('velocityThreshold').value = config.velocity_threshold;
-      
-      // Synchronize Wizard step inputs if they exist in view
-      if(document.getElementById('wizHarmful')) {
-         document.getElementById('wizHarmful').checked = config.block_harmful;
-         document.getElementById('wizDistracting').checked = config.block_distracting;
-      }
+      const blockHarmfulEl = firstExistingElement(['blockHarmful', 'setting-block-harmful', 'block-harmful']);
+      const wizHarmfulEl = firstExistingElement(['wizHarmful', 'block-harmful']);
+      const blockDistractingEl = firstExistingElement(['blockDistracting', 'setting-block-distracting', 'block-distracting']);
+      const wizDistractingEl = firstExistingElement(['wizDistracting', 'block-distracting']);
+      const throttleEnabledEl = firstExistingElement(['throttleEnabled', 'setting-throttle-enabled', 'throttle-enabled']);
+      const velocityThresholdEl = firstExistingElement(['velocityThreshold', 'setting-velocity-threshold', 'wizard-throttle-threshold']);
+
+      if (blockHarmfulEl && config.block_harmful !== undefined) blockHarmfulEl.checked = Boolean(config.block_harmful);
+      if (wizHarmfulEl && config.block_harmful !== undefined) wizHarmfulEl.checked = Boolean(config.block_harmful);
+      if (blockDistractingEl && config.block_distracting !== undefined) blockDistractingEl.checked = Boolean(config.block_distracting);
+      if (wizDistractingEl && config.block_distracting !== undefined) wizDistractingEl.checked = Boolean(config.block_distracting);
+      if (throttleEnabledEl && config.throttle_enabled !== undefined) throttleEnabledEl.checked = Boolean(config.throttle_enabled);
+      if (velocityThresholdEl && config.velocity_threshold !== undefined) velocityThresholdEl.value = config.velocity_threshold;
     } catch (error) {
-      showToast('Error loading active configuration profiles', 'danger');
+      showToast('Error loading active configuration profiles', 'error');
     }
   }
 
   async function saveConfig(e) {
-    if (e) e.preventDefault();
-    
-    // Package parameters safely into the whitelist shape expected by app.py
+    e?.preventDefault();
+
+    const blockHarmfulEl = firstExistingElement(['blockHarmful', 'setting-block-harmful', 'block-harmful']);
+    const blockDistractingEl = firstExistingElement(['blockDistracting', 'setting-block-distracting', 'block-distracting']);
+    const throttleEnabledEl = firstExistingElement(['throttleEnabled', 'setting-throttle-enabled', 'throttle-enabled']);
+    const velocityThresholdEl = firstExistingElement(['velocityThreshold', 'setting-velocity-threshold', 'wizard-throttle-threshold']);
+
     const payload = {
-      block_harmful: document.getElementById('blockHarmful').checked,
-      block_distracting: document.getElementById('blockDistracting').checked,
-      throttle_enabled: document.getElementById('throttleEnabled').checked,
-      velocity_threshold: parseInt(document.getElementById('velocityThreshold').value, 10)
+      block_harmful: Boolean(blockHarmfulEl?.checked),
+      block_distracting: Boolean(blockDistractingEl?.checked),
+      throttle_enabled: Boolean(throttleEnabledEl?.checked),
+      velocity_threshold: Number.parseInt(velocityThresholdEl?.value || '0', 10)
     };
 
     try {
@@ -1582,25 +1582,26 @@
 
       if (response.ok) {
         showToast('Configuration settings updated successfully!', 'success');
-        loadConfig(); // Refresh values dynamically
+        loadConfigToUI();
       } else {
-        const errorData = await response.json();
-        showToast(`Configuration Error: ${errorData.error || 'Check fields'}`, 'danger');
+        const errorData = await response.json().catch(() => ({}));
+        showToast(`Configuration Error: ${errorData.error || 'Check fields'}`, 'error');
       }
     } catch (error) {
-      showToast('Network error while processing updates', 'danger');
+      showToast('Network error while processing updates', 'error');
     }
   }
 
   // ─── Quick Setup Wizard Submission handler ───
   async function saveWizardConfig(e) {
-    if (e) e.preventDefault();
-    
+    e?.preventDefault();
+
+    const wizHarmfulEl = firstExistingElement(['wizHarmful', 'block-harmful']);
+    const wizDistractingEl = firstExistingElement(['wizDistracting', 'block-distracting']);
+
     const payload = {
-      block_harmful: document.getElementById('wizHarmful').checked,
-      block_distracting: document.getElementById('wizDistracting').checked,
-      throttle_enabled: true, // Default system base configurations
-      velocity_threshold: 30
+      block_harmful: Boolean(wizHarmfulEl?.checked),
+      block_distracting: Boolean(wizDistractingEl?.checked)
     };
 
     try {
@@ -1612,11 +1613,14 @@
 
       if (response.ok) {
         showToast('Vigilant Gateway Initialization Successful!', 'success');
-        switchTab('dashboard'); // Direct user back to main overview
-        loadConfig();
+        switchTab('dashboard');
+        loadConfigToUI();
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        showToast(`Wizard save failed: ${errorData.error || 'Check fields'}`, 'error');
       }
     } catch (error) {
-      showToast('Wizard setup failed to write backend rules.', 'danger');
+      showToast('Wizard setup failed to write backend rules.', 'error');
     }
   }
 
@@ -1624,7 +1628,7 @@
   document.addEventListener('DOMContentLoaded', () => {
      // Initial run logic
      refreshStats();
-     loadConfig(); 
+      loadConfigToUI(); 
      setInterval(refreshStats, 5000);
      
      // Bind save buttons to forms if explicitly styled

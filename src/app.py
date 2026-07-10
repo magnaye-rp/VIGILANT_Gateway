@@ -4,8 +4,7 @@ import time
 from pathlib import Path
 
 import psutil
-from flask import Flask, jsonify, render_template, render_template_string, request
-from jinja2 import TemplateNotFound
+from flask import Flask, jsonify, render_template, request
 
 try:
     from flask_cors import CORS
@@ -191,6 +190,22 @@ def _get_recent_logs(limit: int = 10) -> list:
         return []
 
 
+def _format_recent_log_entry(log: dict) -> dict:
+    timestamp_value = log.get("timestamp")
+    if isinstance(timestamp_value, (int, float)):
+        formatted_time = time.strftime('%H:%M:%S', time.localtime(timestamp_value))
+    else:
+        formatted_time = str(timestamp_value or "Just Now")
+
+    return {
+        "time": formatted_time,
+        "client_ip": log.get("client_ip") or "0.0.0.0",
+        "host": log.get("host") or "unknown",
+        "category": log.get("category", "Unclassified"),
+        "flagged": bool(log.get("flagged", 0)),
+    }
+
+
 def _traffic_percentage_metrics() -> dict:
     distribution = {category: 0.0 for category in TRAFFIC_CATEGORIES}
 
@@ -373,16 +388,8 @@ def _config_payload_from_request(payload: dict) -> tuple[dict, list[str]]:
 @app.route("/")
 @app.route('/index.html')
 def dashboard():
-    try:
-        status_data = _service_statuses()
-        # Correcting the alignment key to look for 'vigilant_proxy'
-        proxy_active = status_data.get("vigilant_proxy") == "active"
-        
-        return render_template("dashboard.html", proxy_active=proxy_active)
-    except Exception as e:
-        import traceback
-        error_msg = f"<h3>Jinja2 Error Details</h3><pre>{traceback.format_exc()}</pre>"
-        return error_msg, 500
+    proxy_active = _service_statuses().get("vigilant_proxy") == "active"
+    return render_template("dashboard.html", proxy_active=proxy_active)
 
 
 @app.route('/api/stats')
@@ -392,32 +399,14 @@ def get_stats():
         blocked_reqs = _blocked_request_count()
         active_clients = _connected_device_count()
         raw_categories = _traffic_percentage_metrics()
-        
+
         formatted_counts = [
-            {"category": cat, "count": count} 
-            for cat, count in raw_categories.items()
+            {"category": category, "count": count}
+            for category, count in raw_categories.items()
         ]
-        
+
         raw_logs = _get_recent_logs(limit=10)
-        formatted_recent = []
-        for log in raw_logs:
-            log_time = log.get("timestamp")
-            if isinstance(log_time, (int, float)):
-                log_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log_time))
-            else:
-                log_time = str(log_time or "Just Now")
-
-            formatted_recent.append({
-                "time": log_time,
-                "client_ip": log.get("client_ip") or "0.0.0.0",
-                "host": log.get("host") or "unknown",
-                "category": log.get("category", "Unclassified"),
-                "flagged": bool(log.get("flagged", 0))
-            })
-
-        # Fetch live system information values dynamically
-        status_map = _service_statuses()
-        system_uptime = _format_uptime()
+        formatted_recent = [_format_recent_log_entry(log) for log in raw_logs]
 
         return jsonify({
             "total": total_reqs,
@@ -425,8 +414,8 @@ def get_stats():
             "clients": active_clients,
             "counts": formatted_counts,
             "recent": formatted_recent,
-            "uptime": system_uptime,
-            "statuses": status_map
+            "uptime": _format_uptime(),
+            "statuses": _service_statuses(),
         })
 
     except Exception as exc:
@@ -436,10 +425,24 @@ def get_stats():
 @app.route('/api/settings', methods=['POST'])
 def save_dashboard_settings():
     try:
-        settings_data = request.json or {}
+        settings_data = request.get_json(silent=True) or {}
+        if not isinstance(settings_data, dict):
+            return jsonify({"error": "JSON object payload is required"}), 400
+
+        save_config(settings_data)
         return jsonify({"status": "success", "message": "Settings updated"})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/reset", methods=["POST"])
+def api_reset():
+    try:
+        save_config(CONFIG_DEFAULTS)
+        return jsonify({"status": "success", "message": "Settings reset to defaults"})
+    except Exception as exc:
+        app.logger.error("Failed to reset configuration: %s", exc)
+        return jsonify({"error": str(exc)}), 500
 
 
 @app.route("/api/config", methods=["GET", "POST"])
