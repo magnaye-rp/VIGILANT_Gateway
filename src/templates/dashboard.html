@@ -1538,6 +1538,102 @@
   // ─── Initialize ─── 
   refreshStats();
   setInterval(refreshStats, 5000);
+
+  // ─── Active Configurations Management ───
+  async function loadConfig() {
+    try {
+      const response = await fetch('/api/config');
+      if (!response.ok) throw new Error('Failed to fetch configurations');
+      const config = await response.json();
+      
+      // Map configurations to Dashboard Toggle switches
+      document.getElementById('blockHarmful').checked = config.block_harmful;
+      document.getElementById('blockDistracting').checked = config.block_distracting;
+      document.getElementById('throttleEnabled').checked = config.throttle_enabled;
+      document.getElementById('velocityThreshold').value = config.velocity_threshold;
+      
+      // Synchronize Wizard step inputs if they exist in view
+      if(document.getElementById('wizHarmful')) {
+         document.getElementById('wizHarmful').checked = config.block_harmful;
+         document.getElementById('wizDistracting').checked = config.block_distracting;
+      }
+    } catch (error) {
+      showToast('Error loading active configuration profiles', 'danger');
+    }
+  }
+
+  async function saveConfig(e) {
+    if (e) e.preventDefault();
+    
+    // Package parameters safely into the whitelist shape expected by app.py
+    const payload = {
+      block_harmful: document.getElementById('blockHarmful').checked,
+      block_distracting: document.getElementById('blockDistracting').checked,
+      throttle_enabled: document.getElementById('throttleEnabled').checked,
+      velocity_threshold: parseInt(document.getElementById('velocityThreshold').value, 10)
+    };
+
+    try {
+      const response = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (response.ok) {
+        showToast('Configuration settings updated successfully!', 'success');
+        loadConfig(); // Refresh values dynamically
+      } else {
+        const errorData = await response.json();
+        showToast(`Configuration Error: ${errorData.error || 'Check fields'}`, 'danger');
+      }
+    } catch (error) {
+      showToast('Network error while processing updates', 'danger');
+    }
+  }
+
+  // ─── Quick Setup Wizard Submission handler ───
+  async function saveWizardConfig(e) {
+    if (e) e.preventDefault();
+    
+    const payload = {
+      block_harmful: document.getElementById('wizHarmful').checked,
+      block_distracting: document.getElementById('wizDistracting').checked,
+      throttle_enabled: true, // Default system base configurations
+      velocity_threshold: 30
+    };
+
+    try {
+      const response = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (response.ok) {
+        showToast('Vigilant Gateway Initialization Successful!', 'success');
+        switchTab('dashboard'); // Direct user back to main overview
+        loadConfig();
+      }
+    } catch (error) {
+      showToast('Wizard setup failed to write backend rules.', 'danger');
+    }
+  }
+
+  // ─── Modify Setup Listeners to bind window actions ───
+  document.addEventListener('DOMContentLoaded', () => {
+     // Initial run logic
+     refreshStats();
+     loadConfig(); 
+     setInterval(refreshStats, 5000);
+     
+     // Bind save buttons to forms if explicitly styled
+     const settingsForm = document.getElementById('settingsForm');
+     if (settingsForm) settingsForm.addEventListener('submit', saveConfig);
+
+     const wizardForm = document.getElementById('wizardForm');
+     if (wizardForm) wizardForm.addEventListener('submit', saveWizardConfig);
+  });
 </script>
 
 </body>

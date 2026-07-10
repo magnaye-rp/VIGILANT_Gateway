@@ -401,7 +401,6 @@ def get_stats():
         raw_logs = _get_recent_logs(limit=10)
         formatted_recent = []
         for log in raw_logs:
-            # Transform UNIX epoch safely if stored as numeric float/int from addon.py
             log_time = log.get("timestamp")
             if isinstance(log_time, (int, float)):
                 log_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log_time))
@@ -416,20 +415,23 @@ def get_stats():
                 "flagged": bool(log.get("flagged", 0))
             })
 
-        active_throttles = [] 
+        # Fetch live system information values dynamically
+        status_map = _service_statuses()
+        system_uptime = _format_uptime()
 
         return jsonify({
             "total": total_reqs,
             "flagged": blocked_reqs,
             "clients": active_clients,
-            "throttles": active_throttles,
             "counts": formatted_counts,
-            "recent": formatted_recent
+            "recent": formatted_recent,
+            "uptime": system_uptime,
+            "statuses": status_map
         })
 
     except Exception as exc:
+        app.logger.error("Failed to compile /api/stats payload: %s", exc)
         return jsonify({"error": str(exc)}), 500
-
 
 @app.route('/api/settings', methods=['POST'])
 def save_dashboard_settings():
