@@ -3,6 +3,7 @@ import re
 import sqlite3
 import time
 import importlib
+import importlib.util
 from pathlib import Path
 
 try:
@@ -429,31 +430,38 @@ def _get_dev_mock_data() -> dict:
 
 
 def init_config_db() -> None:
-    with _open_db() as connection:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS config_settings (
-                key TEXT PRIMARY KEY,
-                value TEXT,
-                updated_at REAL
-            )
-            """
-        )
-
-        now_ts = time.time()
-        for key, value in CONFIG_DEFAULTS.items():
+    try:
+        with _open_db() as connection:
             connection.execute(
                 """
-                INSERT INTO config_settings (key, value, updated_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(key) DO UPDATE SET
-                    value = excluded.value,
-                    updated_at = excluded.updated_at
-                """,
-                (key, str(value), now_ts),
+                CREATE TABLE IF NOT EXISTS config_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT,
+                    updated_at REAL
+                )
+                """
             )
 
-        connection.commit()
+            now_ts = time.time()
+            for key, value in CONFIG_DEFAULTS.items():
+                connection.execute(
+                    """
+                    INSERT INTO config_settings (key, value, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(key) DO UPDATE SET
+                        value = excluded.value,
+                        updated_at = excluded.updated_at
+                    """,
+                    (key, str(value), now_ts),
+                )
+
+            connection.commit()
+    except sqlite3.Error as exc:
+        app.logger.debug(
+            "init_config_db: could not create or seed config_settings table "
+            "(access violation or locked database) — %s",
+            exc,
+        )
 
 
 def load_config() -> dict:
@@ -727,36 +735,43 @@ def api_config():
 
 def _init_traffic_db() -> None:
     """Initialize traffic_log table with schema matching vigilant_addon.py"""
-    with _open_db() as connection:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS traffic_log (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp   REAL,
-                client_ip   TEXT,
-                host        TEXT,
-                path        TEXT,
-                method      TEXT,
-                category    TEXT,
-                flagged     INTEGER DEFAULT 0,
-                entities    TEXT
+    try:
+        with _open_db() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS traffic_log (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp   REAL,
+                    client_ip   TEXT,
+                    host        TEXT,
+                    path        TEXT,
+                    method      TEXT,
+                    category    TEXT,
+                    flagged     INTEGER DEFAULT 0,
+                    entities    TEXT
+                )
+                """
             )
-            """
-        )
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS throttle_events (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp   REAL,
-                client_ip   TEXT,
-                host        TEXT,
-                rpm_current REAL,
-                rpm_baseline REAL,
-                action      TEXT
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS throttle_events (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp   REAL,
+                    client_ip   TEXT,
+                    host        TEXT,
+                    rpm_current REAL,
+                    rpm_baseline REAL,
+                    action      TEXT
+                )
+                """
             )
-            """
+            connection.commit()
+    except sqlite3.Error as exc:
+        app.logger.debug(
+            "_init_traffic_db: could not create traffic_log or throttle_events table "
+            "(access violation or locked database) — %s",
+            exc,
         )
-        connection.commit()
 
 
 def _populate_mock_traffic_data() -> None:
@@ -802,15 +817,30 @@ def _populate_mock_traffic_data() -> None:
 
 
 def _compile_config_integrity() -> None:
-    _init_traffic_db()
-    _populate_mock_traffic_data()
-    init_config_db()
-    current_config = load_config()
-    missing_defaults = {
-        key: value for key, value in CONFIG_DEFAULTS.items() if key not in current_config
-    }
-    if missing_defaults:
-        save_config(missing_defaults)
+    try:
+        _init_traffic_db()
+    except Exception as exc:
+        app.logger.debug("_compile_config_integrity: _init_traffic_db skipped — %s", exc)
+
+    try:
+        _populate_mock_traffic_data()
+    except Exception as exc:
+        app.logger.debug("_compile_config_integrity: _populate_mock_traffic_data skipped — %s", exc)
+
+    try:
+        init_config_db()
+    except Exception as exc:
+        app.logger.debug("_compile_config_integrity: init_config_db skipped — %s", exc)
+
+    try:
+        current_config = load_config()
+        missing_defaults = {
+            key: value for key, value in CONFIG_DEFAULTS.items() if key not in current_config
+        }
+        if missing_defaults:
+            save_config(missing_defaults)
+    except Exception as exc:
+        app.logger.debug("_compile_config_integrity: default config backfill skipped — %s", exc)
 
 
 if __name__ == "__main__":
