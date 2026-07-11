@@ -1310,6 +1310,7 @@
     closeSidebar();
     
     if (tabId === 'dashboard') refreshStats();
+    if (tabId === 'traffic') loadTrafficLogs();
     if (tabId === 'settings' || tabId === 'wizard') loadConfigToUI();
   }
 
@@ -1397,7 +1398,7 @@
         const categoryClass = `category-badge ${String(r.category || 'unclassified').toLowerCase()}`;
         recentHtml += `
           <tr>
-            <td>${new Date(r.time).toLocaleTimeString()}</td>
+            <td>${r.time}</td>
             <td style="font-family: monospace; font-size: 0.9rem;">${r.client_ip}</td>
             <td>${r.host}</td>
             <td><span class="${categoryClass}">${r.category}</span></td>
@@ -1503,12 +1504,37 @@
     return saveConfig(e);
   }
 
+  async function loadTrafficLogs() {
+    try {
+      const response = await fetch('/api/stats');
+      const data = await response.json();
+
+      let trafficHtml = '';
+      (data.recent || []).forEach(r => {
+        const categoryClass = `category-badge ${String(r.category || 'unclassified').toLowerCase()}`;
+        trafficHtml += `
+          <tr>
+            <td>${r.time}</td>
+            <td style="font-family: monospace; font-size: 0.9rem;">${r.client_ip}</td>
+            <td>${r.host}</td>
+            <td><span class="${categoryClass}">${r.category}</span></td>
+            <td>${r.flagged ? '🚫 Blocked' : '✓'}</td>
+          </tr>
+        `;
+      });
+      document.getElementById('traffic-tbody').innerHTML = trafficHtml || '<tr><td colspan="5" class="text-center" style="color: var(--text-secondary); padding: 2rem;">No traffic data yet</td></tr>';
+    } catch (e) {
+      showToast('Failed to load traffic logs', 'error');
+    }
+  }
+
   async function clearTrafficLogs() {
     pendingConfirmAction = async () => {
       const response = await fetch('/api/clear', { method: 'POST' });
       if (response.ok) {
         showToast('Traffic logs cleared', 'success');
         refreshStats();
+        loadTrafficLogs();
       }
     };
     showConfirmDialog('Clear all traffic logs and throttle events? This cannot be undone.', 'Clear');
