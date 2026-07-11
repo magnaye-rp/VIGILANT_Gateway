@@ -4,6 +4,8 @@ import sqlite3
 import time
 import importlib
 import importlib.util
+import platform
+import json
 from pathlib import Path
 
 try:
@@ -19,6 +21,9 @@ except ImportError:
     def CORS(app):
         return app
 
+
+# Environment detector: Production server vs local MacBook Air development
+IS_PRODUCTION = (platform.system() == "Linux" and os.path.exists("/home/vigilant_admin"))
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -400,34 +405,49 @@ def _parse_netplan_config() -> dict:
 
 def _get_network_config() -> dict:
     """Get network configuration from config files or use dev defaults"""
-    dnsmasq_settings = _parse_dnsmasq_config()
-    netplan_settings = _parse_netplan_config()
-    
-    # Merge settings, preferring netplan for interfaces
-    return {
-        "upstream_interface": netplan_settings.get("upstream_interface", "enp0s31f6"),
-        "distribution_interface": dnsmasq_settings.get("interface", netplan_settings.get("distribution_interface", "wlp1s0")),
-        "gateway_ip": dnsmasq_settings.get("listen_address", "192.168.10.1"),
-        "dhcp_start": dnsmasq_settings.get("dhcp_start", "192.168.10.10"),
-        "dhcp_end": dnsmasq_settings.get("dhcp_end", "192.168.10.50"),
-        "dns_servers": ",".join(dnsmasq_settings.get("dns_servers", ["8.8.8.8", "8.8.4.4"]))
-    }
+    if IS_PRODUCTION:
+        # Production: Parse actual config files
+        dnsmasq_settings = _parse_dnsmasq_config()
+        netplan_settings = _parse_netplan_config()
+        
+        # Merge settings, preferring netplan for interfaces
+        return {
+            "upstream_interface": netplan_settings.get("upstream_interface", "enp0s31f6"),
+            "distribution_interface": dnsmasq_settings.get("interface", netplan_settings.get("distribution_interface", "wlp1s0")),
+            "gateway_ip": dnsmasq_settings.get("listen_address", "192.168.10.1"),
+            "dhcp_start": dnsmasq_settings.get("dhcp_start", "192.168.10.10"),
+            "dhcp_end": dnsmasq_settings.get("dhcp_end", "192.168.10.50"),
+            "dns_servers": ",".join(dnsmasq_settings.get("dns_servers", ["8.8.8.8", "8.8.4.4"]))
+        }
+    else:
+        # Local MacBook Air development: Hardcoded mock configuration
+        return {
+            "upstream_interface": "en0",
+            "distribution_interface": "wlp1s0",
+            "gateway_ip": "192.168.10.1",
+            "dhcp_start": "192.168.10.10",
+            "dhcp_end": "192.168.10.50",
+            "dns_servers": "8.8.8.8,8.8.4.4"
+        }
 
 
 def _get_network_interfaces() -> list:
     """Get list of available network interfaces from system"""
-    if psutil is not None:
-        try:
-            interfaces = list(psutil.net_if_addrs().keys())
-            # Filter out loopback and virtual interfaces for cleaner list
-            filtered = [iface for iface in interfaces if not iface.startswith('lo') and not iface.startswith('veth') and not iface.startswith('docker')]
-            if filtered:
-                return sorted(filtered)
-        except Exception as exc:
-            app.logger.warning("Failed to get network interfaces via psutil: %s", exc)
-    
-    # Fallback to mock interfaces for local MacBook Air development
-    return ["wlp1s0", "en0"]
+    if IS_PRODUCTION:
+        # Production: Use psutil to detect actual hardware interfaces
+        if psutil is not None:
+            try:
+                interfaces = list(psutil.net_if_addrs().keys())
+                # Filter out loopback and virtual interfaces for cleaner list
+                filtered = [iface for iface in interfaces if not iface.startswith('lo') and not iface.startswith('veth') and not iface.startswith('docker')]
+                if filtered:
+                    return sorted(filtered)
+            except Exception as exc:
+                app.logger.warning("Failed to get network interfaces via psutil: %s", exc)
+        return []
+    else:
+        # Local MacBook Air development: Hardcoded mock interfaces
+        return ["en0", "wlp1s0", "lo0"]
 
 
 def _get_dev_mock_data() -> dict:
@@ -745,6 +765,18 @@ def api_config():
             return jsonify({"error": "Invalid configuration values", "details": validation_errors}), 400
 
         save_config(coerced_updates)
+        
+        # If in local development, also save to dev_config.json for simulation
+        if not IS_PRODUCTION:
+            dev_config_path = BASE_DIR / "dev_config.json"
+            try:
+                current_config = load_config()
+                current_config.update(coerced_updates)
+                with open(dev_config_path, 'w') as f:
+                    json.dump(current_config, f, indent=2)
+                app.logger.info(f"Configuration saved to {dev_config_path}")
+            except Exception as exc:
+                app.logger.warning(f"Failed to save dev_config.json: {exc}")
 
     config = load_config()
     network_config = _get_network_config()
