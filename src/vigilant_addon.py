@@ -288,7 +288,7 @@ class VIGILANTAddon:
     def tls_clienthello(self, layer):
         """TLS ClientHello hook for mobile SNI fallback tracking"""
         try:
-            client_ip = layer.client_conn.peername[0]
+            client_ip = layer.context.client_conn.peername[0] if hasattr(layer, "context") else layer.client_conn.peername[0]
             sni = layer.client_hello.sni
             
             if sni:
