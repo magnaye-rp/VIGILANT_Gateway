@@ -1211,11 +1211,13 @@
 
       let html = '';
       counts.forEach(c => {
-        const percent = data.total > 0 ? Math.round((c.count / data.total) * 100) : 0;
+        const count = c.count ?? 0;
+        const category = c.category ?? 'Unknown';
+        const percent = data.total > 0 ? Math.round((count / data.total) * 100) : 0;
         html += `
           <div style="text-align: center; padding: 1rem; background: var(--surface); border-radius: 8px;">
-            <div style="font-size: 1.5rem; font-weight: 700; color: var(--primary); margin-bottom: 0.5rem;">${c.count}</div>
-            <div style="font-size: 0.85rem; color: var(--text-secondary); text-transform: uppercase;">${c.category}</div>
+            <div style="font-size: 1.5rem; font-weight: 700; color: var(--primary); margin-bottom: 0.5rem;">${count}</div>
+            <div style="font-size: 0.85rem; color: var(--text-secondary); text-transform: uppercase;">${category}</div>
             <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.25rem;">${percent}%</div>
           </div>
         `;

@@ -300,7 +300,8 @@ def _format_recent_log_entry(log: dict) -> dict:
 
 
 def _traffic_percentage_metrics() -> dict:
-    distribution = {category: 0.0 for category in TRAFFIC_CATEGORIES}
+    """Return actual counts per category (not percentages)"""
+    distribution = {category: 0 for category in TRAFFIC_CATEGORIES}
 
     if not DB_PATH.exists():
         return distribution
@@ -308,11 +309,6 @@ def _traffic_percentage_metrics() -> dict:
     try:
         with _open_db() as connection:
             if not _table_exists(connection, "traffic_log"):
-                return distribution
-
-            total_row = connection.execute("SELECT COUNT(*) FROM traffic_log").fetchone()
-            total_logs = int(total_row[0] or 0) if total_row else 0
-            if total_logs <= 0:
                 return distribution
 
             category_rows = connection.execute(
@@ -328,10 +324,10 @@ def _traffic_percentage_metrics() -> dict:
 
             for category in TRAFFIC_CATEGORIES:
                 count = category_counts.get(category.lower(), 0)
-                distribution[category] = (count / total_logs) * 100.0
+                distribution[category] = count
 
     except sqlite3.Error as exc:
-        app.logger.warning("traffic percentage metrics unavailable: %s", exc)
+        app.logger.warning("traffic count metrics unavailable: %s", exc)
 
     return distribution
 
@@ -714,7 +710,7 @@ def get_stats():
         raw_categories = _traffic_percentage_metrics()
 
         formatted_counts = [
-            {"category": category, "count": round(count, 1)}
+            {"category": category, "count": int(count)}
             for category, count in raw_categories.items()
         ]
 
@@ -755,8 +751,35 @@ def get_stats():
         })
 
     except Exception as exc:
+        print(f"STATS ENDPOINT CRASH: {exc}")
         app.logger.error("Failed to compile /api/stats payload: %s", exc)
-        return jsonify({"error": str(exc)}), 500
+        # Return safe fallback JSON with all zeroes to prevent UI lockup
+        return jsonify({
+            "total": 0,
+            "flagged": 0,
+            "clients": 0,
+            "counts": [
+                {"category": "Educational", "count": 0},
+                {"category": "Productive", "count": 0},
+                {"category": "Distracting", "count": 0},
+                {"category": "Harmful", "count": 0}
+            ],
+            "recent": [],
+            "uptime": "0h 0m",
+            "statuses": _service_statuses(),
+            "pagination": {
+                "page": page,
+                "per_page": per_page,
+                "total_pages": 1,
+                "total_items": 0
+            },
+            "system_metrics": {
+                "cpu_percent": 0.0,
+                "memory_percent": 0.0,
+                "disk_percent": 0.0
+            },
+            "network_config": _get_network_config()
+        })
 
 @app.route('/api/settings', methods=['POST'])
 def save_dashboard_settings():
