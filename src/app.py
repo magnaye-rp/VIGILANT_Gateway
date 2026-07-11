@@ -46,8 +46,8 @@ CONFIG_DEFAULTS = {
     "block_distracting": False,
     "throttle_enabled": True,
     "velocity_threshold": 30,
-    "wan_interface": "enp0s31f6",
-    "lan_interface": "wlp1s0",
+    "upstream_interface": "enp0s31f6",
+    "distribution_interface": "wlp1s0",
     "gateway_ip": "192.168.10.1",
     "dhcp_start": "192.168.10.10",
     "dhcp_end": "192.168.10.50",
@@ -57,7 +57,7 @@ CONFIG_DEFAULTS = {
 ALLOWED_CONFIG_KEYS = set(CONFIG_DEFAULTS)
 BOOLEAN_CONFIG_KEYS = {"block_harmful", "block_distracting", "throttle_enabled"}
 INTEGER_CONFIG_KEYS = {"velocity_threshold"}
-STRING_CONFIG_KEYS = {"wan_interface", "lan_interface", "gateway_ip", "dhcp_start", "dhcp_end", "dns_servers"}
+STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "dns_servers"}
 TRAFFIC_CATEGORIES = ("Educational", "Productive", "Distracting", "Harmful")
 DEFAULT_SYSTEM_METRICS = {
     "cpu_percent": 0.0,
@@ -372,8 +372,8 @@ def _parse_netplan_config() -> dict:
         config_path = Path("/etc/netplan/00-installer-config.yaml")
     
     settings = {
-        "wan_interface": "enp0s31f6",
-        "lan_interface": "wlp1s0",
+        "upstream_interface": "enp0s31f6",
+        "distribution_interface": "wlp1s0",
         "lan_address": "192.168.10.1/24"
     }
     
@@ -388,9 +388,9 @@ def _parse_netplan_config() -> dict:
                     ethernets = netplan_config["network"].get("ethernets", {})
                     for iface_name, iface_config in ethernets.items():
                         if iface_config.get("dhcp4") == True:
-                            settings["wan_interface"] = iface_name
+                            settings["upstream_interface"] = iface_name
                         elif "addresses" in iface_config:
-                            settings["lan_interface"] = iface_name
+                            settings["distribution_interface"] = iface_name
                             settings["lan_address"] = iface_config["addresses"][0] if iface_config["addresses"] else "192.168.10.1/24"
         except Exception as exc:
             app.logger.warning("Failed to parse netplan-config.yaml: %s", exc)
@@ -405,8 +405,8 @@ def _get_network_config() -> dict:
     
     # Merge settings, preferring netplan for interfaces
     return {
-        "wan_interface": netplan_settings.get("wan_interface", "enp0s31f6"),
-        "lan_interface": dnsmasq_settings.get("interface", netplan_settings.get("lan_interface", "wlp1s0")),
+        "upstream_interface": netplan_settings.get("upstream_interface", "enp0s31f6"),
+        "distribution_interface": dnsmasq_settings.get("interface", netplan_settings.get("distribution_interface", "wlp1s0")),
         "gateway_ip": dnsmasq_settings.get("listen_address", "192.168.10.1"),
         "dhcp_start": dnsmasq_settings.get("dhcp_start", "192.168.10.10"),
         "dhcp_end": dnsmasq_settings.get("dhcp_end", "192.168.10.50"),
@@ -414,18 +414,35 @@ def _get_network_config() -> dict:
     }
 
 
+def _get_network_interfaces() -> list:
+    """Get list of available network interfaces from system"""
+    if psutil is not None:
+        try:
+            interfaces = list(psutil.net_if_addrs().keys())
+            # Filter out loopback and virtual interfaces for cleaner list
+            filtered = [iface for iface in interfaces if not iface.startswith('lo') and not iface.startswith('veth') and not iface.startswith('docker')]
+            if filtered:
+                return sorted(filtered)
+        except Exception as exc:
+            app.logger.warning("Failed to get network interfaces via psutil: %s", exc)
+    
+    # Fallback to mock interfaces for local MacBook Air development
+    return ["wlp1s0", "en0"]
+
+
 def _get_dev_mock_data() -> dict:
     """Return mock data for local development environment"""
     return {
-        "wan_interface": "en0",
-        "lan_interface": "en1",
+        "upstream_interface": "en0",
+        "distribution_interface": "wlp1s0",
         "gateway_ip": "192.168.10.1",
         "dhcp_start": "192.168.10.10",
         "dhcp_end": "192.168.10.50",
         "dns_servers": "8.8.8.8,8.8.4.4",
         "cpu_percent": 12.5,
         "memory_percent": 45.2,
-        "disk_percent": 62.8
+        "disk_percent": 62.8,
+        "available_interfaces": ["en0", "wlp1s0", "lo0"]
     }
 
 
@@ -594,6 +611,9 @@ def get_stats():
         # Network configuration from config files
         network_config = _get_network_config()
         
+        # Add available network interfaces
+        network_config["available_interfaces"] = _get_network_interfaces()
+        
         # Use dev mock data if in local development environment
         is_dev_env = DB_PATH == LOCAL_DB_PATH
         if is_dev_env:
@@ -689,6 +709,9 @@ def api_config():
         config = load_config()
         # Add network configuration from config files
         network_config = _get_network_config()
+        
+        # Add available network interfaces
+        network_config["available_interfaces"] = _get_network_interfaces()
         
         # Use dev mock data if in local development environment
         is_dev_env = DB_PATH == LOCAL_DB_PATH

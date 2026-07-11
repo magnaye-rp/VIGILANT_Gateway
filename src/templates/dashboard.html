@@ -859,97 +859,112 @@
 
       <!-- Setup Wizard Tab -->
       <div id="tab-wizard" class="tab-content">
-        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Quick Setup Wizard</h2>
-
-        <div class="wizard-steps" id="wizard-steps">
-          <div class="wizard-step active" data-step="1">
-            <div class="wizard-number">1</div>
-            <span>Network</span>
-          </div>
-          <div class="wizard-step" data-step="2">
-            <div class="wizard-number">2</div>
-            <span>Filtering</span>
-          </div>
-          <div class="wizard-step" data-step="3">
-            <div class="wizard-number">3</div>
-            <span>Throttling</span>
-          </div>
-          <div class="wizard-step" data-step="4">
-            <div class="wizard-number">4</div>
-            <span>Review</span>
-          </div>
-        </div>
+        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Network Configuration Control Plane</h2>
 
         <div class="card">
-          <!-- Step 1: Network -->
-          <div id="wizard-step-1" class="wizard-content">
-            <div class="card-header">
-              <div class="card-title">Network Configuration</div>
+          <div class="card-header">
+            <div class="card-title">Network Interface Configuration</div>
+            <div class="card-subtitle">Configure gateway interfaces and network settings</div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Upstream Interface (Internet Input)</label>
+              <select id="wizard-upstream-interface">
+                <option value="">Loading interfaces...</option>
+              </select>
+              <div class="form-hint">External network interface for internet connectivity</div>
             </div>
+            <div class="form-group">
+              <label class="form-label">Distribution Interface (Local Network AP)</label>
+              <select id="wizard-distribution-interface">
+                <option value="">Loading interfaces...</option>
+              </select>
+              <div class="form-hint">Internal network interface for client devices</div>
+            </div>
+          </div>
+
+          <div class="form-row">
             <div class="form-group">
               <label class="form-label">Gateway IP Address</label>
               <input type="text" id="wizard-gateway-ip" placeholder="192.168.10.1" value="192.168.10.1">
               <div class="form-hint">IP address for the admin interface</div>
             </div>
             <div class="form-group">
-              <label class="form-label">DHCP Range</label>
-              <div class="form-row">
-                <input type="text" id="wizard-dhcp-start" placeholder="192.168.10.10" value="192.168.10.10">
-                <input type="text" id="wizard-dhcp-end" placeholder="192.168.10.50" value="192.168.10.50">
-              </div>
-              <div class="form-hint">Client IP address range</div>
+              <label class="form-label">DHCP Range Start</label>
+              <input type="text" id="wizard-dhcp-start" placeholder="192.168.10.10" value="192.168.10.10">
+              <div class="form-hint">First IP in client range</div>
             </div>
-            <div class="btn-group">
-              <button class="btn-primary" onclick="wizardNext()">Continue to Filtering</button>
+            <div class="form-group">
+              <label class="form-label">DHCP Range End</label>
+              <input type="text" id="wizard-dhcp-end" placeholder="192.168.10.50" value="192.168.10.50">
+              <div class="form-hint">Last IP in client range</div>
             </div>
           </div>
 
-          <!-- Step 2: Filtering -->
-          <div id="wizard-step-2" class="wizard-content hidden">
-            <div class="card-header">
-              <div class="card-title">Content Filtering</div>
-            </div>
-            <div class="form-group">
-              <label class="form-label">NLP Model Accuracy</label>
-              <select id="wizard-nlp-mode">
-                <option value="fast">Fast (Lower accuracy, ~70%)</option>
-                <option value="balanced" selected>Balanced (Good accuracy, ~85%)</option>
-                <option value="strict">Strict (Higher accuracy, ~95%)</option>
-              </select>
-              <div class="form-hint">Trade-off between speed and accuracy</div>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Categories to Block</label>
-              <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-                <div>
+          <div class="form-group">
+            <label class="form-label">Upstream DNS Servers</label>
+            <textarea id="wizard-dns-servers" rows="2" placeholder="8.8.8.8&#10;8.8.4.4">8.8.8.8
+8.8.4.4</textarea>
+            <div class="form-hint">DNS servers for upstream resolution (one per line)</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Content Filtering Configuration</div>
+            <div class="card-subtitle">Configure NLP model and content categories</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">NLP Model Accuracy</label>
+            <select id="wizard-nlp-mode">
+              <option value="fast">Fast (Lower accuracy, ~70%)</option>
+              <option value="balanced" selected>Balanced (Good accuracy, ~85%)</option>
+              <option value="strict">Strict (Higher accuracy, ~95%)</option>
+            </select>
+            <div class="form-hint">Trade-off between speed and accuracy</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Categories to Block</label>
+            <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+              <div>
+                <div class="toggle-switch">
                   <input type="checkbox" id="block-harmful" checked>
-                  <label for="block-harmful" style="display: inline; margin-left: 0.5rem;">Harmful content</label>
+                  <div class="switch"></div>
+                  <span style="font-weight: 600; color: var(--danger);">Harmful content</span>
                 </div>
-                <div>
+                <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem; margin-left: 4.5rem;">Adult content, violence, extremism</div>
+              </div>
+              <div>
+                <div class="toggle-switch">
                   <input type="checkbox" id="block-distracting">
-                  <label for="block-distracting" style="display: inline; margin-left: 0.5rem;">Distracting sites</label>
+                  <div class="switch"></div>
+                  <span style="font-weight: 600; color: var(--warning);">Distracting sites</span>
                 </div>
+                <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem; margin-left: 4.5rem;">Social media, entertainment, memes</div>
               </div>
             </div>
-            <div class="btn-group">
-              <button class="btn-secondary" onclick="wizardPrev()">Back</button>
-              <button class="btn-primary" onclick="wizardNext()">Continue to Throttling</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Doomscroll Prevention Configuration</div>
+            <div class="card-subtitle">Configure velocity-based throttling for social media</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Enable Throttling</label>
+            <div class="toggle-switch">
+              <input type="checkbox" id="throttle-enabled" checked>
+              <div class="switch"></div>
+              <span id="throttle-status">Enabled</span>
             </div>
           </div>
 
-          <!-- Step 3: Throttling -->
-          <div id="wizard-step-3" class="wizard-content hidden">
-            <div class="card-header">
-              <div class="card-title">Doomscroll Prevention</div>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Enable Throttling</label>
-              <div class="toggle-switch">
-                <input type="checkbox" id="throttle-enabled" checked>
-                <div class="switch"></div>
-                <span id="throttle-status">Enabled</span>
-              </div>
-            </div>
+          <div class="form-row">
             <div class="form-group">
               <label class="form-label">Request Threshold (per minute)</label>
               <input type="number" id="wizard-throttle-threshold" value="30" min="10" max="100">
@@ -964,42 +979,11 @@
               </select>
               <div class="form-hint">Bandwidth limit for throttled clients</div>
             </div>
-            <div class="btn-group">
-              <button class="btn-secondary" onclick="wizardPrev()">Back</button>
-              <button class="btn-primary" onclick="wizardNext()">Review Settings</button>
-            </div>
           </div>
+        </div>
 
-          <!-- Step 4: Review -->
-          <div id="wizard-step-4" class="wizard-content hidden">
-            <div class="card-header">
-              <div class="card-title">Review & Save</div>
-            </div>
-            <div style="background: var(--surface); padding: 1.5rem; border-radius: 8px; margin-bottom: 1.5rem;">
-              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; font-size: 0.9rem;">
-                <div>
-                  <div style="color: var(--text-secondary); margin-bottom: 0.25rem;">Gateway IP</div>
-                  <div style="font-weight: 600;" id="review-gateway-ip"></div>
-                </div>
-                <div>
-                  <div style="color: var(--text-secondary); margin-bottom: 0.25rem;">DHCP Range</div>
-                  <div style="font-weight: 600;" id="review-dhcp-range"></div>
-                </div>
-                <div>
-                  <div style="color: var(--text-secondary); margin-bottom: 0.25rem;">NLP Mode</div>
-                  <div style="font-weight: 600;" id="review-nlp-mode"></div>
-                </div>
-                <div>
-                  <div style="color: var(--text-secondary); margin-bottom: 0.25rem;">Throttle Rate</div>
-                  <div style="font-weight: 600;" id="review-throttle-rate"></div>
-                </div>
-              </div>
-            </div>
-            <div class="btn-group">
-              <button class="btn-secondary" onclick="wizardPrev()">Back</button>
-              <button class="btn-success" onclick="saveWizardConfig()" style="width: auto;">Save Configuration</button>
-            </div>
-          </div>
+        <div class="btn-group">
+          <button class="btn-success" onclick="saveWizardConfig(event)" style="width: auto;">Save All Configuration</button>
         </div>
       </div>
 
@@ -1021,16 +1005,16 @@
               <div class="card-title">Network Configuration</div>
             </div>
             <div class="form-group">
-              <label class="form-label">WAN Interface</label>
-              <select id="setting-wan-interface">
+              <label class="form-label">Upstream Interface (Internet Input)</label>
+              <select id="setting-upstream-interface">
                 <option>enp0s5</option>
                 <option>eth0</option>
                 <option>eno1</option>
               </select>
             </div>
             <div class="form-group">
-              <label class="form-label">LAN Interface</label>
-              <select id="setting-lan-interface">
+              <label class="form-label">Distribution Interface (Local Network AP)</label>
+              <select id="setting-distribution-interface">
                 <option>enp0s6</option>
                 <option>eth1</option>
                 <option>wlan0</option>
@@ -1326,7 +1310,7 @@
     
     if (tabId === 'dashboard') refreshStats();
     if (tabId === 'traffic') loadTrafficLogs();
-    if (tabId === 'settings' || tabId === 'wizard') loadConfigToUI();
+    if (tabId === 'settings' || tabId === 'wizard') loadWizardConfig();
   }
 
   function switchSettings(section) {
@@ -1343,45 +1327,6 @@
 
   function closeSidebar() {
     document.getElementById('sidebar').classList.remove('open');
-  }
-
-  // ─── Wizard Navigation ─── 
-  function wizardNext() {
-    if (currentWizardStep < 4) {
-      document.getElementById(`wizard-step-${currentWizardStep}`).classList.add('hidden');
-      currentWizardStep++;
-      document.getElementById(`wizard-step-${currentWizardStep}`).classList.remove('hidden');
-      updateWizardSteps();
-      if (currentWizardStep === 4) updateReview();
-    }
-  }
-
-  function wizardPrev() {
-    if (currentWizardStep > 1) {
-      document.getElementById(`wizard-step-${currentWizardStep}`).classList.add('hidden');
-      currentWizardStep--;
-      document.getElementById(`wizard-step-${currentWizardStep}`).classList.remove('hidden');
-      updateWizardSteps();
-    }
-  }
-
-  function updateWizardSteps() {
-    document.querySelectorAll('.wizard-step').forEach((el, i) => {
-      el.classList.remove('active', 'completed');
-      if (i + 1 < currentWizardStep) el.classList.add('completed');
-      if (i + 1 === currentWizardStep) el.classList.add('active');
-    });
-  }
-
-  function updateReview() {
-    document.getElementById('review-gateway-ip').textContent = document.getElementById('wizard-gateway-ip').value;
-    document.getElementById('review-dhcp-range').textContent = 
-      document.getElementById('wizard-dhcp-start').value + ' - ' + 
-      document.getElementById('wizard-dhcp-end').value;
-    document.getElementById('review-nlp-mode').textContent = 
-      document.getElementById('wizard-nlp-mode').options[document.getElementById('wizard-nlp-mode').selectedIndex].text;
-    document.getElementById('review-throttle-rate').textContent = 
-      document.getElementById('wizard-throttle-rate').value + ' Kbps';
   }
 
   // ─── API Calls ─── 
@@ -1457,8 +1402,8 @@
       
       // Update network configuration displays if on settings or wizard tab
       if (currentTab === 'settings' || currentTab === 'wizard') {
-        syncConfigInputs(['setting-wan-interface'], networkConfig.wan_interface);
-        syncConfigInputs(['setting-lan-interface'], networkConfig.lan_interface);
+        syncConfigInputs(['setting-upstream-interface'], networkConfig.upstream_interface);
+        syncConfigInputs(['setting-distribution-interface'], networkConfig.distribution_interface);
         syncConfigInputs(['setting-gateway-ip', 'wizard-gateway-ip'], networkConfig.gateway_ip);
         syncConfigInputs(['wizard-dhcp-start'], networkConfig.dhcp_start);
         syncConfigInputs(['wizard-dhcp-end'], networkConfig.dhcp_end);
@@ -1468,7 +1413,7 @@
           dnsServersEl.value = networkConfig.dns_servers;
         }
         
-        updateInterfaceDropdowns(networkConfig.wan_interface, networkConfig.lan_interface);
+        updateInterfaceDropdowns(networkConfig.upstream_interface, networkConfig.distribution_interface);
       }
     } catch (e) {
       showToast('Failed to load statistics', 'error');
@@ -1500,7 +1445,7 @@
     });
   }
 
-  async function loadConfigToUI() {
+  async function loadWizardConfig() {
     try {
       const response = await fetch('/api/config');
       if (!response.ok) {
@@ -1509,73 +1454,159 @@
 
       const config = await response.json();
       
+      // Populate network interface dropdowns
+      populateInterfaceDropdowns(config.available_interfaces || []);
+      
       // Sync filtering settings
       syncConfigInputs(['blockHarmful', 'setting-block-harmful', 'block-harmful', 'wizHarmful'], config.block_harmful);
       syncConfigInputs(['blockDistracting', 'setting-block-distracting', 'block-distracting', 'wizDistracting'], config.block_distracting);
       syncConfigInputs(['throttleEnabled', 'setting-throttle-enabled', 'throttle-enabled'], config.throttle_enabled);
       syncConfigInputs(['velocityThreshold', 'setting-velocity-threshold', 'wizard-throttle-threshold'], config.velocity_threshold);
       
-      // Sync network settings
-      syncConfigInputs(['setting-wan-interface'], config.wan_interface);
-      syncConfigInputs(['setting-lan-interface'], config.lan_interface);
-      syncConfigInputs(['setting-gateway-ip', 'wizard-gateway-ip'], config.gateway_ip);
+      // Sync network settings for wizard
+      syncConfigInputs(['wizard-upstream-interface'], config.upstream_interface);
+      syncConfigInputs(['wizard-distribution-interface'], config.distribution_interface);
+      syncConfigInputs(['wizard-gateway-ip'], config.gateway_ip);
       syncConfigInputs(['wizard-dhcp-start'], config.dhcp_start);
       syncConfigInputs(['wizard-dhcp-end'], config.dhcp_end);
       
-      // Sync DNS servers
-      const dnsServersEl = document.getElementById('setting-dns-servers');
+      // Sync DNS servers for wizard
+      const dnsServersEl = document.getElementById('wizard-dns-servers');
       if (dnsServersEl && config.dns_servers) {
         dnsServersEl.value = config.dns_servers;
       }
       
+      // Sync settings tab network settings
+      syncConfigInputs(['setting-upstream-interface'], config.upstream_interface);
+      syncConfigInputs(['setting-distribution-interface'], config.distribution_interface);
+      syncConfigInputs(['setting-gateway-ip'], config.gateway_ip);
+      
+      const settingsDnsEl = document.getElementById('setting-dns-servers');
+      if (settingsDnsEl && config.dns_servers) {
+        settingsDnsEl.value = config.dns_servers;
+      }
+      
       // Update network interface dropdowns with actual values
-      updateInterfaceDropdowns(config.wan_interface, config.lan_interface);
+      updateInterfaceDropdowns(config.upstream_interface, config.distribution_interface);
       
     } catch (error) {
       showToast('Failed to load configuration', 'danger');
     }
   }
+
+  async function loadConfigToUI() {
+    return loadWizardConfig();
+  }
+
+  function populateInterfaceDropdowns(interfaces) {
+    const upstreamSelect = document.getElementById('wizard-upstream-interface');
+    const distributionSelect = document.getElementById('wizard-distribution-interface');
+    
+    if (!upstreamSelect || !distributionSelect) return;
+    
+    // Clear existing options
+    upstreamSelect.innerHTML = '';
+    distributionSelect.innerHTML = '';
+    
+    // Add default option
+    const defaultOption = document.createElement('option');
+    defaultOption.value = '';
+    defaultOption.textContent = 'Select interface...';
+    upstreamSelect.appendChild(defaultOption.cloneNode(true));
+    distributionSelect.appendChild(defaultOption);
+    
+    // Add available interfaces
+    interfaces.forEach(iface => {
+      const upstreamOption = document.createElement('option');
+      upstreamOption.value = iface;
+      upstreamOption.textContent = iface;
+      upstreamSelect.appendChild(upstreamOption);
+      
+      const distributionOption = document.createElement('option');
+      distributionOption.value = iface;
+      distributionOption.textContent = iface;
+      distributionSelect.appendChild(distributionOption);
+    });
+  }
   
-  function updateInterfaceDropdowns(wanIface, lanIface) {
-    // Update WAN interface dropdown
-    const wanSelect = document.getElementById('setting-wan-interface');
-    if (wanSelect) {
-      // Check if the interface already exists in options
+  function updateInterfaceDropdowns(upstreamIface, distributionIface) {
+    // Update wizard upstream interface dropdown
+    const wizardUpstreamSelect = document.getElementById('wizard-upstream-interface');
+    if (wizardUpstreamSelect) {
       let optionExists = false;
-      for (let opt of wanSelect.options) {
-        if (opt.value === wanIface) {
+      for (let opt of wizardUpstreamSelect.options) {
+        if (opt.value === upstreamIface) {
           optionExists = true;
           opt.selected = true;
           break;
         }
       }
-      // If not exists, add it
-      if (!optionExists && wanIface) {
+      if (!optionExists && upstreamIface) {
         const newOption = document.createElement('option');
-        newOption.value = wanIface;
-        newOption.textContent = wanIface;
+        newOption.value = upstreamIface;
+        newOption.textContent = upstreamIface;
         newOption.selected = true;
-        wanSelect.appendChild(newOption);
+        wizardUpstreamSelect.appendChild(newOption);
       }
     }
     
-    // Update LAN interface dropdown
-    const lanSelect = document.getElementById('setting-lan-interface');
-    if (lanSelect) {
+    // Update wizard distribution interface dropdown
+    const wizardDistributionSelect = document.getElementById('wizard-distribution-interface');
+    if (wizardDistributionSelect) {
       let optionExists = false;
-      for (let opt of lanSelect.options) {
-        if (opt.value === lanIface) {
+      for (let opt of wizardDistributionSelect.options) {
+        if (opt.value === distributionIface) {
           optionExists = true;
           opt.selected = true;
           break;
         }
       }
-      if (!optionExists && lanIface) {
+      if (!optionExists && distributionIface) {
         const newOption = document.createElement('option');
-        newOption.value = lanIface;
-        newOption.textContent = lanIface;
+        newOption.value = distributionIface;
+        newOption.textContent = distributionIface;
         newOption.selected = true;
-        lanSelect.appendChild(newOption);
+        wizardDistributionSelect.appendChild(newOption);
+      }
+    }
+
+    // Update settings upstream interface dropdown
+    const settingsUpstreamSelect = document.getElementById('setting-upstream-interface');
+    if (settingsUpstreamSelect) {
+      let optionExists = false;
+      for (let opt of settingsUpstreamSelect.options) {
+        if (opt.value === upstreamIface) {
+          optionExists = true;
+          opt.selected = true;
+          break;
+        }
+      }
+      if (!optionExists && upstreamIface) {
+        const newOption = document.createElement('option');
+        newOption.value = upstreamIface;
+        newOption.textContent = upstreamIface;
+        newOption.selected = true;
+        settingsUpstreamSelect.appendChild(newOption);
+      }
+    }
+    
+    // Update settings distribution interface dropdown
+    const settingsDistributionSelect = document.getElementById('setting-distribution-interface');
+    if (settingsDistributionSelect) {
+      let optionExists = false;
+      for (let opt of settingsDistributionSelect.options) {
+        if (opt.value === distributionIface) {
+          optionExists = true;
+          opt.selected = true;
+          break;
+        }
+      }
+      if (!optionExists && distributionIface) {
+        const newOption = document.createElement('option');
+        newOption.value = distributionIface;
+        newOption.textContent = distributionIface;
+        newOption.selected = true;
+        settingsDistributionSelect.appendChild(newOption);
       }
     }
   }
@@ -1589,8 +1620,8 @@
     const velocityThresholdEl = getConfigInput(['velocityThreshold', 'setting-velocity-threshold', 'wizard-throttle-threshold']);
     
     // Network settings
-    const wanInterfaceEl = document.getElementById('setting-wan-interface');
-    const lanInterfaceEl = document.getElementById('setting-lan-interface');
+    const upstreamInterfaceEl = document.getElementById('wizard-upstream-interface');
+    const distributionInterfaceEl = document.getElementById('wizard-distribution-interface');
     const gatewayIpEl = getConfigInput(['setting-gateway-ip', 'wizard-gateway-ip']);
     const dhcpStartEl = document.getElementById('wizard-dhcp-start');
     const dhcpEndEl = document.getElementById('wizard-dhcp-end');
@@ -1602,8 +1633,8 @@
       throttle_enabled: Boolean(throttleEnabledEl?.checked),
       velocity_threshold: Number.parseInt(velocityThresholdEl?.value || '0', 10) || 0,
       // Network configuration
-      wan_interface: wanInterfaceEl?.value || 'enp0s31f6',
-      lan_interface: lanInterfaceEl?.value || 'wlp1s0',
+      upstream_interface: upstreamInterfaceEl?.value || 'enp0s31f6',
+      distribution_interface: distributionInterfaceEl?.value || 'wlp1s0',
       gateway_ip: gatewayIpEl?.value || '192.168.10.1',
       dhcp_start: dhcpStartEl?.value || '192.168.10.10',
       dhcp_end: dhcpEndEl?.value || '192.168.10.50',
@@ -1750,12 +1781,33 @@
   async function saveWizardConfig(e) {
     e?.preventDefault();
 
-    const wizHarmfulEl = getConfigInput(['wizHarmful', 'block-harmful']);
-    const wizDistractingEl = getConfigInput(['wizDistracting', 'block-distracting']);
+    // Gather all form inputs
+    const blockHarmfulEl = getConfigInput(['block-harmful']);
+    const blockDistractingEl = getConfigInput(['block-distracting']);
+    const throttleEnabledEl = getConfigInput(['throttle-enabled']);
+    const velocityThresholdEl = getConfigInput(['wizard-throttle-threshold']);
+    
+    // Network settings
+    const upstreamInterfaceEl = document.getElementById('wizard-upstream-interface');
+    const distributionInterfaceEl = document.getElementById('wizard-distribution-interface');
+    const gatewayIpEl = document.getElementById('wizard-gateway-ip');
+    const dhcpStartEl = document.getElementById('wizard-dhcp-start');
+    const dhcpEndEl = document.getElementById('wizard-dhcp-end');
+    const dnsServersEl = document.getElementById('wizard-dns-servers');
+    const throttleRateEl = document.getElementById('wizard-throttle-rate');
 
     const payload = {
-      block_harmful: Boolean(wizHarmfulEl?.checked),
-      block_distracting: Boolean(wizDistractingEl?.checked)
+      block_harmful: Boolean(blockHarmfulEl?.checked),
+      block_distracting: Boolean(blockDistractingEl?.checked),
+      throttle_enabled: Boolean(throttleEnabledEl?.checked),
+      velocity_threshold: Number.parseInt(velocityThresholdEl?.value || '30', 10) || 30,
+      // Network configuration
+      upstream_interface: upstreamInterfaceEl?.value || 'en0',
+      distribution_interface: distributionInterfaceEl?.value || 'wlp1s0',
+      gateway_ip: gatewayIpEl?.value || '192.168.10.1',
+      dhcp_start: dhcpStartEl?.value || '192.168.10.10',
+      dhcp_end: dhcpEndEl?.value || '192.168.10.50',
+      dns_servers: dnsServersEl?.value || '8.8.8.8,8.8.4.4'
     };
 
     try {
@@ -1766,15 +1818,14 @@
       });
 
       if (response.ok) {
-        showToast('Wizard configuration saved successfully', 'success');
-        switchTab('dashboard');
-        await loadConfigToUI();
+        showToast('Network settings applied successfully!', 'success');
+        await loadWizardConfig();
       } else {
         const errorData = await response.json().catch(() => ({}));
-        showToast(errorData.error || 'Failed to save wizard configuration', 'danger');
+        showToast(errorData.error || 'Failed to save configuration', 'danger');
       }
     } catch (error) {
-      showToast('Wizard setup failed to write backend rules', 'danger');
+      showToast('Error saving configuration: ' + error.message, 'danger');
     }
   }
 
