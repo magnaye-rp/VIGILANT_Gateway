@@ -977,5 +977,4 @@ def _compile_config_integrity() -> None:
 
 if __name__ == "__main__":
     _compile_config_integrity()
-    # Use port 5002 for local development to avoid conflicts
-    app.run(host="0.0.0.0", port=5002, debug=False)
+    app.run(host="0.0.0.0", port=5000, debug=False)
