@@ -2,6 +2,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import threading
 import time
 import importlib
 import importlib.util
@@ -952,27 +953,34 @@ def api_system_control():
                 return jsonify({"error": f"Proxy restart error: {str(e)}"}), 500
                 
         elif action == "reload_config":
+            # Use delayed background thread to allow Flask to send response before restart
+            def delayed_dashboard_restart():
+                try:
+                    time.sleep(1.5)  # Give Flask time to send response
+                    result = subprocess.run(
+                        ["sudo", "systemctl", "restart", "vigilant-dashboard.service"],
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=30
+                    )
+                    print(f"Dashboard restart successful: {result.stdout}")
+                except subprocess.TimeoutExpired:
+                    print("Dashboard restart timed out")
+                except subprocess.CalledProcessError as e:
+                    print(f"Dashboard restart failed: {e.stderr}")
+                except Exception as e:
+                    print(f"Dashboard restart error: {str(e)}")
+            
             try:
-                result = subprocess.run(
-                    ["sudo", "systemctl", "restart", "vigilant-dashboard.service"],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=30
-                )
-                print(f"Dashboard restart successful: {result.stdout}")
+                threading.Thread(target=delayed_dashboard_restart, daemon=True).start()
                 return jsonify({
                     "status": "success",
-                    "message": "Dashboard service restarted successfully"
+                    "message": "Dashboard reload scheduled successfully"
                 })
-            except subprocess.TimeoutExpired:
-                return jsonify({"error": "Dashboard restart timed out"}), 500
-            except subprocess.CalledProcessError as e:
-                print(f"Dashboard restart failed: {e.stderr}")
-                return jsonify({"error": f"Dashboard restart failed: {e.stderr}"}), 500
             except Exception as e:
-                print(f"Dashboard restart error: {str(e)}")
-                return jsonify({"error": f"Dashboard restart error: {str(e)}"}), 500
+                print(f"Failed to schedule dashboard restart: {str(e)}")
+                return jsonify({"error": f"Failed to schedule dashboard restart: {str(e)}"}), 500
                 
         elif action == "reload_firewall":
             try:
