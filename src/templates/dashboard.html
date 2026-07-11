@@ -1117,7 +1117,7 @@
                 <div style="font-size: 0.85rem; color: var(--text-secondary);">mitmproxy transparent gateway</div>
               </div>
               <div style="display: flex; gap: 0.5rem;">
-                <button class="btn-secondary" style="padding: 0.5rem 1rem;">Restart</button>
+                <button id="btn-restart-proxy" class="btn-secondary" style="padding: 0.5rem 1rem;" onclick="executeSystemControl('restart_proxy', this)">Restart</button>
               </div>
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem; background: var(--surface); border-radius: 8px;">
@@ -1126,7 +1126,7 @@
                 <div style="font-size: 0.85rem; color: var(--text-secondary);">Flask admin interface</div>
               </div>
               <div style="display: flex; gap: 0.5rem;">
-                <button class="btn-secondary" style="padding: 0.5rem 1rem;">Restart</button>
+                <button id="btn-restart-dashboard" class="btn-secondary" style="padding: 0.5rem 1rem;" onclick="executeSystemControl('reload_config', this)">Restart</button>
               </div>
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem; background: var(--surface); border-radius: 8px;">
@@ -1135,7 +1135,7 @@
                 <div style="font-size: 0.85rem; color: var(--text-secondary);">iptables and network configuration</div>
               </div>
               <div style="display: flex; gap: 0.5rem;">
-                <button class="btn-secondary" style="padding: 0.5rem 1rem;">Reload</button>
+                <button id="btn-reload-firewall" class="btn-secondary" style="padding: 0.5rem 1rem;" onclick="executeSystemControl('reload_firewall', this)">Reload</button>
               </div>
             </div>
           </div>
@@ -1643,6 +1643,49 @@
 
   function importConfig() {
     showToast('Import feature coming soon', 'warning');
+  }
+
+  async function executeSystemControl(action, buttonElement) {
+    const originalText = buttonElement.textContent;
+    const actionLabels = {
+      'restart_proxy': '🔄 Restarting proxy...',
+      'reload_config': '🔄 Restarting dashboard...',
+      'reload_firewall': '🔄 Reloading firewall...'
+    };
+    
+    // Disable button and show loading state
+    buttonElement.disabled = true;
+    buttonElement.textContent = actionLabels[action] || '🔄 Processing...';
+    
+    try {
+      const response = await fetch('/api/system/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action })
+      });
+      
+      const data = await response.json();
+      
+      if (response.ok && data.status === 'success') {
+        showToast(data.message || 'Operation completed successfully', 'success');
+        
+        // Refresh stats after a short delay to show updated service status
+        setTimeout(() => {
+          refreshStats();
+        }, 1000);
+      } else {
+        showToast(data.error || 'Operation failed', 'error');
+      }
+    } catch (error) {
+      console.error('System control error:', error);
+      showToast('Network error: Could not execute command', 'error');
+    } finally {
+      // Restore button state after 2 seconds
+      setTimeout(() => {
+        buttonElement.disabled = false;
+        buttonElement.textContent = originalText;
+      }, 2000);
+    }
   }
 
   function showConfirmDialog(message, action) {

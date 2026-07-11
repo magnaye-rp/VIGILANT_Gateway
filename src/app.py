@@ -1,6 +1,7 @@
 import os
 import re
 import sqlite3
+import subprocess
 import time
 import importlib
 import importlib.util
@@ -893,6 +894,114 @@ def api_config():
     network_config = _get_network_config()
     config.update(network_config)
     return jsonify({"status": "success", "message": "Configuration applied successfully", "config": config})
+
+
+@app.route("/api/system/control", methods=["POST"])
+def api_system_control():
+    """Execute system control commands for service management"""
+    try:
+        payload = request.get_json(silent=True) or {}
+        if not isinstance(payload, dict):
+            return jsonify({"error": "JSON object payload is required"}), 400
+
+        action = payload.get("action", "").strip()
+        
+        # Detect if running in local development (macOS) vs production (Linux)
+        is_production = os.path.exists("/home/vigilant_admin")
+        
+        if not is_production:
+            # Mock mode for local macOS development
+            print(f"[MOCK] System control action: {action}")
+            if action == "restart_proxy":
+                print("[MOCK] Would execute: sudo systemctl restart vigilant-proxy.service")
+            elif action == "reload_config":
+                print("[MOCK] Would execute: sudo systemctl restart vigilant-dashboard.service")
+            elif action == "reload_firewall":
+                print("[MOCK] Would execute: sudo netplan apply")
+            else:
+                return jsonify({"error": f"Unknown action: {action}"}), 400
+            
+            return jsonify({
+                "status": "success",
+                "message": f"Action '{action}' executed (mock mode)",
+                "mock": True
+            })
+        
+        # Production mode - execute actual systemctl commands
+        if action == "restart_proxy":
+            try:
+                result = subprocess.run(
+                    ["sudo", "systemctl", "restart", "vigilant-proxy.service"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                print(f"Proxy restart successful: {result.stdout}")
+                return jsonify({
+                    "status": "success",
+                    "message": "Proxy service restarted successfully"
+                })
+            except subprocess.TimeoutExpired:
+                return jsonify({"error": "Proxy restart timed out"}), 500
+            except subprocess.CalledProcessError as e:
+                print(f"Proxy restart failed: {e.stderr}")
+                return jsonify({"error": f"Proxy restart failed: {e.stderr}"}), 500
+            except Exception as e:
+                print(f"Proxy restart error: {str(e)}")
+                return jsonify({"error": f"Proxy restart error: {str(e)}"}), 500
+                
+        elif action == "reload_config":
+            try:
+                result = subprocess.run(
+                    ["sudo", "systemctl", "restart", "vigilant-dashboard.service"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                print(f"Dashboard restart successful: {result.stdout}")
+                return jsonify({
+                    "status": "success",
+                    "message": "Dashboard service restarted successfully"
+                })
+            except subprocess.TimeoutExpired:
+                return jsonify({"error": "Dashboard restart timed out"}), 500
+            except subprocess.CalledProcessError as e:
+                print(f"Dashboard restart failed: {e.stderr}")
+                return jsonify({"error": f"Dashboard restart failed: {e.stderr}"}), 500
+            except Exception as e:
+                print(f"Dashboard restart error: {str(e)}")
+                return jsonify({"error": f"Dashboard restart error: {str(e)}"}), 500
+                
+        elif action == "reload_firewall":
+            try:
+                result = subprocess.run(
+                    ["sudo", "netplan", "apply"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                print(f"Firewall reload successful: {result.stdout}")
+                return jsonify({
+                    "status": "success",
+                    "message": "Network configuration reloaded successfully"
+                })
+            except subprocess.TimeoutExpired:
+                return jsonify({"error": "Firewall reload timed out"}), 500
+            except subprocess.CalledProcessError as e:
+                print(f"Firewall reload failed: {e.stderr}")
+                return jsonify({"error": f"Firewall reload failed: {e.stderr}"}), 500
+            except Exception as e:
+                print(f"Firewall reload error: {str(e)}")
+                return jsonify({"error": f"Firewall reload error: {str(e)}"}), 500
+        else:
+            return jsonify({"error": f"Unknown action: {action}"}), 400
+            
+    except Exception as exc:
+        print(f"System control endpoint error: {exc}")
+        return jsonify({"error": f"System control error: {str(exc)}"}), 500
 
 
 def _init_traffic_db() -> None:
