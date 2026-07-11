@@ -714,7 +714,7 @@ def get_stats():
         raw_categories = _traffic_percentage_metrics()
 
         formatted_counts = [
-            {"category": category, "count": count}
+            {"category": category, "count": round(count, 1)}
             for category, count in raw_categories.items()
         ]
 
