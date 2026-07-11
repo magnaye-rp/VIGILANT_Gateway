@@ -1305,7 +1305,7 @@
     document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
     document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
     document.getElementById(`tab-${tabId}`)?.classList.add('active');
-    event.currentTarget?.classList.add('active');
+    window.event?.currentTarget?.classList.add('active');
     currentTab = tabId;
     closeSidebar();
     
@@ -1317,7 +1317,7 @@
     document.querySelectorAll('.settings-panel').forEach(el => el.classList.add('hidden'));
     document.querySelectorAll('.tabs .tab').forEach(el => el.classList.remove('active'));
     document.getElementById(`settings-${section}`).classList.remove('hidden');
-    event.currentTarget?.classList.add('active');
+    window.event?.currentTarget?.classList.add('active');
   }
 
   // ─── Mobile Sidebar ─── 
@@ -1373,15 +1373,14 @@
     try {
       const response = await fetch('/api/stats');
       const data = await response.json();
-      
+
       document.getElementById('stat-total').textContent = data.total;
       document.getElementById('stat-flagged').textContent = data.flagged;
       document.getElementById('stat-clients').textContent = data.clients;
       document.getElementById('stat-throttled').textContent = data.throttles?.length || 0;
 
-      // Category breakdown
       let html = '';
-      data.counts.forEach(c => {
+      (data.counts || []).forEach(c => {
         const percent = data.total > 0 ? Math.round((c.count / data.total) * 100) : 0;
         html += `
           <div style="text-align: center; padding: 1rem; background: var(--surface); border-radius: 8px;">
@@ -1393,10 +1392,9 @@
       });
       document.getElementById('category-breakdown').innerHTML = html;
 
-      // Recent activity
       let recentHtml = '';
       (data.recent || []).slice(0, 10).forEach(r => {
-        const categoryClass = `category-badge ${r.category.toLowerCase()}`;
+        const categoryClass = `category-badge ${String(r.category || 'unclassified').toLowerCase()}`;
         recentHtml += `
           <tr>
             <td>${new Date(r.time).toLocaleTimeString()}</td>
@@ -1409,54 +1407,100 @@
       });
       document.getElementById('recent-tbody').innerHTML = recentHtml || '<tr><td colspan="5" class="text-center" style="color: var(--text-secondary); padding: 2rem;">No traffic data yet</td></tr>';
 
-      if (document.getElementById('sysUptime')) {
-        document.getElementById('sysUptime').textContent = data.uptime || '—';
+      const systemUptime = document.getElementById('sysUptime') || document.getElementById('sys-uptime');
+      if (systemUptime) {
+        systemUptime.textContent = data.uptime || '—';
       }
-      if (document.getElementById('sys-uptime')) {
-        document.getElementById('sys-uptime').textContent = data.uptime || '—';
-      }
-      if (document.getElementById('proxyStatusBadge')) {
+
+      const proxyStatusBadge = document.getElementById('proxyStatusBadge');
+      if (proxyStatusBadge) {
         const proxyActive = data?.statuses?.vigilant_proxy === 'active';
-        const badge = document.getElementById('proxyStatusBadge');
-        badge.textContent = proxyActive ? 'Active' : 'Inactive';
-        badge.className = proxyActive ? 'badge success' : 'badge error';
+        proxyStatusBadge.textContent = proxyActive ? 'Active' : 'Inactive';
+        proxyStatusBadge.className = proxyActive ? 'badge success' : 'badge error';
       }
     } catch (e) {
       showToast('Failed to load statistics', 'error');
     }
   }
 
-  async function saveSettings() {
+  function getConfigInput(ids) {
+    for (const id of ids) {
+      const element = document.getElementById(id);
+      if (element) {
+        return element;
+      }
+    }
+    return null;
+  }
+
+  function syncConfigInputs(ids, value) {
+    ids.forEach(id => {
+      const element = document.getElementById(id);
+      if (!element) {
+        return;
+      }
+
+      if (element.type === 'checkbox') {
+        element.checked = Boolean(value);
+      } else {
+        element.value = value ?? '';
+      }
+    });
+  }
+
+  async function loadConfigToUI() {
     try {
-      const settings = {
-        wan_interface: document.getElementById('setting-wan-interface')?.value,
-        lan_interface: document.getElementById('setting-lan-interface')?.value,
-        gateway_ip: document.getElementById('setting-gateway-ip')?.value,
-        dns_servers: document.getElementById('setting-dns-servers')?.value,
-        nlp_model: document.getElementById('setting-nlp-model')?.value,
-        block_harmful: document.getElementById('setting-block-harmful')?.checked,
-        block_distracting: document.getElementById('setting-block-distracting')?.checked,
-        throttle_enabled: document.getElementById('setting-throttle-enabled')?.checked,
-        velocity_threshold: document.getElementById('setting-velocity-threshold')?.value,
-        throttle_duration: document.getElementById('setting-throttle-duration')?.value,
-        throttle_rate: document.getElementById('setting-throttle-rate')?.value,
-        target_domains: document.getElementById('setting-target-domains')?.value,
-      };
-      
-      const response = await fetch('/api/settings', {
+      const response = await fetch('/api/config');
+      if (!response.ok) {
+        throw new Error('Failed to fetch configuration');
+      }
+
+      const config = await response.json();
+      syncConfigInputs(['blockHarmful', 'setting-block-harmful', 'block-harmful', 'wizHarmful'], config.block_harmful);
+      syncConfigInputs(['blockDistracting', 'setting-block-distracting', 'block-distracting', 'wizDistracting'], config.block_distracting);
+      syncConfigInputs(['throttleEnabled', 'setting-throttle-enabled', 'throttle-enabled'], config.throttle_enabled);
+      syncConfigInputs(['velocityThreshold', 'setting-velocity-threshold', 'wizard-throttle-threshold'], config.velocity_threshold);
+    } catch (error) {
+      showToast('Failed to load configuration', 'danger');
+    }
+  }
+
+  async function saveConfig(e) {
+    e?.preventDefault();
+
+    const blockHarmfulEl = getConfigInput(['blockHarmful', 'setting-block-harmful', 'block-harmful']);
+    const blockDistractingEl = getConfigInput(['blockDistracting', 'setting-block-distracting', 'block-distracting']);
+    const throttleEnabledEl = getConfigInput(['throttleEnabled', 'setting-throttle-enabled', 'throttle-enabled']);
+    const velocityThresholdEl = getConfigInput(['velocityThreshold', 'setting-velocity-threshold', 'wizard-throttle-threshold']);
+
+    const payload = {
+      block_harmful: Boolean(blockHarmfulEl?.checked),
+      block_distracting: Boolean(blockDistractingEl?.checked),
+      throttle_enabled: Boolean(throttleEnabledEl?.checked),
+      velocity_threshold: Number.parseInt(velocityThresholdEl?.value || '0', 10) || 0,
+    };
+
+    try {
+      const response = await fetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settings)
+        body: JSON.stringify(payload)
       });
-      
+
       if (response.ok) {
-        showToast('Settings saved successfully', 'success');
+        showToast('Configuration saved successfully', 'success');
+        await loadConfigToUI();
       } else {
-        showToast('Failed to save settings', 'error');
+        const errorData = await response.json().catch(() => ({}));
+        showToast(errorData.error || 'Failed to save configuration', 'danger');
       }
     } catch (e) {
-      showToast('Error: ' + e.message, 'error');
+      showToast('Error: ' + e.message, 'danger');
     }
+  }
+
+  async function saveSettings(e) {
+    return saveConfig(e);
   }
 
   async function clearTrafficLogs() {
@@ -1491,14 +1535,12 @@
 
   function exportConfig() {
     showToast('Exporting configuration...', 'warning');
-    // Implementation would download config file
   }
 
   function importConfig() {
     showToast('Import feature coming soon', 'warning');
   }
 
-  // ─── Modal Management ─── 
   function showConfirmDialog(message, action) {
     document.getElementById('modalMessage').textContent = message;
     document.getElementById('confirmBtn').textContent = action;
@@ -1517,7 +1559,6 @@
     }
   }
 
-  // ─── Toast Notifications ─── 
   function showToast(message, type = 'info') {
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
@@ -1526,78 +1567,11 @@
     setTimeout(() => toast.remove(), 4000);
   }
 
-  // ─── Active Configurations Management ───
-  function firstExistingElement(ids) {
-    for (const id of ids) {
-      const el = document.getElementById(id);
-      if (el) return el;
-    }
-    return null;
-  }
-
-  async function loadConfigToUI() {
-    try {
-      const response = await fetch('/api/config');
-      if (!response.ok) throw new Error('Failed to fetch configurations');
-      const config = await response.json();
-      const blockHarmfulEl = firstExistingElement(['blockHarmful', 'setting-block-harmful', 'block-harmful']);
-      const wizHarmfulEl = firstExistingElement(['wizHarmful', 'block-harmful']);
-      const blockDistractingEl = firstExistingElement(['blockDistracting', 'setting-block-distracting', 'block-distracting']);
-      const wizDistractingEl = firstExistingElement(['wizDistracting', 'block-distracting']);
-      const throttleEnabledEl = firstExistingElement(['throttleEnabled', 'setting-throttle-enabled', 'throttle-enabled']);
-      const velocityThresholdEl = firstExistingElement(['velocityThreshold', 'setting-velocity-threshold', 'wizard-throttle-threshold']);
-
-      if (blockHarmfulEl && config.block_harmful !== undefined) blockHarmfulEl.checked = Boolean(config.block_harmful);
-      if (wizHarmfulEl && config.block_harmful !== undefined) wizHarmfulEl.checked = Boolean(config.block_harmful);
-      if (blockDistractingEl && config.block_distracting !== undefined) blockDistractingEl.checked = Boolean(config.block_distracting);
-      if (wizDistractingEl && config.block_distracting !== undefined) wizDistractingEl.checked = Boolean(config.block_distracting);
-      if (throttleEnabledEl && config.throttle_enabled !== undefined) throttleEnabledEl.checked = Boolean(config.throttle_enabled);
-      if (velocityThresholdEl && config.velocity_threshold !== undefined) velocityThresholdEl.value = config.velocity_threshold;
-    } catch (error) {
-      showToast('Error loading active configuration profiles', 'error');
-    }
-  }
-
-  async function saveConfig(e) {
-    e?.preventDefault();
-
-    const blockHarmfulEl = firstExistingElement(['blockHarmful', 'setting-block-harmful', 'block-harmful']);
-    const blockDistractingEl = firstExistingElement(['blockDistracting', 'setting-block-distracting', 'block-distracting']);
-    const throttleEnabledEl = firstExistingElement(['throttleEnabled', 'setting-throttle-enabled', 'throttle-enabled']);
-    const velocityThresholdEl = firstExistingElement(['velocityThreshold', 'setting-velocity-threshold', 'wizard-throttle-threshold']);
-
-    const payload = {
-      block_harmful: Boolean(blockHarmfulEl?.checked),
-      block_distracting: Boolean(blockDistractingEl?.checked),
-      throttle_enabled: Boolean(throttleEnabledEl?.checked),
-      velocity_threshold: Number.parseInt(velocityThresholdEl?.value || '0', 10)
-    };
-
-    try {
-      const response = await fetch('/api/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      if (response.ok) {
-        showToast('Configuration settings updated successfully!', 'success');
-        loadConfigToUI();
-      } else {
-        const errorData = await response.json().catch(() => ({}));
-        showToast(`Configuration Error: ${errorData.error || 'Check fields'}`, 'error');
-      }
-    } catch (error) {
-      showToast('Network error while processing updates', 'error');
-    }
-  }
-
-  // ─── Quick Setup Wizard Submission handler ───
   async function saveWizardConfig(e) {
     e?.preventDefault();
 
-    const wizHarmfulEl = firstExistingElement(['wizHarmful', 'block-harmful']);
-    const wizDistractingEl = firstExistingElement(['wizDistracting', 'block-distracting']);
+    const wizHarmfulEl = getConfigInput(['wizHarmful', 'block-harmful']);
+    const wizDistractingEl = getConfigInput(['wizDistracting', 'block-distracting']);
 
     const payload = {
       block_harmful: Boolean(wizHarmfulEl?.checked),
@@ -1612,31 +1586,28 @@
       });
 
       if (response.ok) {
-        showToast('Vigilant Gateway Initialization Successful!', 'success');
+        showToast('Wizard configuration saved successfully', 'success');
         switchTab('dashboard');
-        loadConfigToUI();
+        await loadConfigToUI();
       } else {
         const errorData = await response.json().catch(() => ({}));
-        showToast(`Wizard save failed: ${errorData.error || 'Check fields'}`, 'error');
+        showToast(errorData.error || 'Failed to save wizard configuration', 'danger');
       }
     } catch (error) {
-      showToast('Wizard setup failed to write backend rules.', 'error');
+      showToast('Wizard setup failed to write backend rules', 'danger');
     }
   }
 
-  // ─── Modify Setup Listeners to bind window actions ───
   document.addEventListener('DOMContentLoaded', () => {
-     // Initial run logic
-     refreshStats();
-      loadConfigToUI(); 
-     setInterval(refreshStats, 5000);
-     
-     // Bind save buttons to forms if explicitly styled
-     const settingsForm = document.getElementById('settingsForm');
-     if (settingsForm) settingsForm.addEventListener('submit', saveConfig);
+    refreshStats();
+    loadConfigToUI();
+    setInterval(refreshStats, 5000);
 
-     const wizardForm = document.getElementById('wizardForm');
-     if (wizardForm) wizardForm.addEventListener('submit', saveWizardConfig);
+    const settingsForm = document.getElementById('settingsForm');
+    if (settingsForm) settingsForm.addEventListener('submit', saveConfig);
+
+    const wizardForm = document.getElementById('wizardForm');
+    if (wizardForm) wizardForm.addEventListener('submit', saveWizardConfig);
   });
 </script>
 
