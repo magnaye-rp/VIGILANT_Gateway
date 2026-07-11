@@ -52,12 +52,17 @@ CONFIG_DEFAULTS = {
     "dhcp_start": "192.168.10.10",
     "dhcp_end": "192.168.10.50",
     "dns_servers": "8.8.8.8,8.8.4.4",
+    # Advanced fields
+    "nlp_accuracy": "balanced",
+    "throttle_rate": 256,
+    "enable_https": True,
+    "log_retention": 30,
 }
 
 ALLOWED_CONFIG_KEYS = set(CONFIG_DEFAULTS)
-BOOLEAN_CONFIG_KEYS = {"block_harmful", "block_distracting", "throttle_enabled"}
-INTEGER_CONFIG_KEYS = {"velocity_threshold"}
-STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "dns_servers"}
+BOOLEAN_CONFIG_KEYS = {"block_harmful", "block_distracting", "throttle_enabled", "enable_https"}
+INTEGER_CONFIG_KEYS = {"velocity_threshold", "throttle_rate", "log_retention"}
+STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "dns_servers", "nlp_accuracy"}
 TRAFFIC_CATEGORIES = ("Educational", "Productive", "Distracting", "Harmful")
 DEFAULT_SYSTEM_METRICS = {
     "cpu_percent": 0.0,
@@ -414,6 +419,104 @@ def _get_network_config() -> dict:
     }
 
 
+def _write_dnsmasq_config(config: dict) -> bool:
+    """Write dnsmasq configuration file"""
+    config_path = Path("/home/vigilant_admin/vigilant/src/config/dnsmasq.conf")
+    fallback_path = Path("/etc/dnsmasq.conf")
+    
+    # Use fallback path for local development
+    if not config_path.parent.exists():
+        config_path = fallback_path
+    
+    try:
+        # Parse existing config to preserve comments and structure
+        existing_lines = []
+        if config_path.exists():
+            with open(config_path, 'r') as f:
+                existing_lines = f.readlines()
+        
+        # Build new config content
+        new_config = []
+        dns_servers = config.get("dns_servers", "8.8.8.8,8.8.4.4").split(",")
+        
+        new_config.append(f"# VIGILANT Gateway dnsmasq configuration\n")
+        new_config.append(f"# Auto-generated on {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        new_config.append(f"\n")
+        new_config.append(f"# Network interface\n")
+        new_config.append(f"interface={config.get('distribution_interface', 'wlp1s0')}\n")
+        new_config.append(f"\n")
+        new_config.append(f"# DHCP settings\n")
+        new_config.append(f"dhcp-range={config.get('dhcp_start', '192.168.10.10')},{config.get('dhcp_end', '192.168.10.50')},12h\n")
+        new_config.append(f"dhcp-option=3,{config.get('gateway_ip', '192.168.10.1')}\n")
+        new_config.append(f"dhcp-option=6,{config.get('gateway_ip', '192.168.10.1')}\n")
+        new_config.append(f"\n")
+        new_config.append(f"# DNS settings\n")
+        new_config.append(f"listen-address={config.get('gateway_ip', '192.168.10.1')}\n")
+        for dns in dns_servers:
+            new_config.append(f"server={dns.strip()}\n")
+        new_config.append(f"\n")
+        new_config.append(f"# Cache settings\n")
+        new_config.append(f"cache-size=1000\n")
+        
+        # Write to file
+        _ensure_directory(config_path)
+        with open(config_path, 'w') as f:
+            f.writelines(new_config)
+        
+        app.logger.info("Successfully wrote dnsmasq.conf")
+        return True
+        
+    except Exception as exc:
+        app.logger.warning("Failed to write dnsmasq.conf: %s", exc)
+        return False
+
+
+def _write_netplan_config(config: dict) -> bool:
+    """Write netplan configuration file"""
+    config_path = Path("/home/vigilant_admin/vigilant/src/config/netplan-config.yaml")
+    fallback_path = Path("/etc/netplan/00-installer-config.yaml")
+    
+    # Use fallback path for local development
+    if not config_path.parent.exists():
+        config_path = fallback_path
+    
+    if yaml is None:
+        app.logger.warning("PyYAML not available, skipping netplan config write")
+        return False
+    
+    try:
+        # Build netplan configuration
+        netplan_config = {
+            "network": {
+                "version": 2,
+                "ethernets": {
+                    config.get("upstream_interface", "enp0s31f6"): {
+                        "dhcp4": True,
+                        "dhcp4-overrides": {
+                            "use-dns": False
+                        }
+                    },
+                    config.get("distribution_interface", "wlp1s0"): {
+                        "addresses": [f"{config.get('gateway_ip', '192.168.10.1')}/24"],
+                        "dhcp4": False
+                    }
+                }
+            }
+        }
+        
+        # Write to file
+        _ensure_directory(config_path)
+        with open(config_path, 'w') as f:
+            yaml.dump(netplan_config, f, default_flow_style=False)
+        
+        app.logger.info("Successfully wrote netplan-config.yaml")
+        return True
+        
+    except Exception as exc:
+        app.logger.warning("Failed to write netplan-config.yaml: %s", exc)
+        return False
+
+
 def _get_network_interfaces() -> list:
     """Get list of available network interfaces from system"""
     if psutil is not None:
@@ -639,7 +742,34 @@ def save_dashboard_settings():
 def api_reset():
     try:
         save_config(CONFIG_DEFAULTS)
+        # Write network configuration files with defaults
+        _write_dnsmasq_config(CONFIG_DEFAULTS)
+        _write_netplan_config(CONFIG_DEFAULTS)
         return jsonify({"status": "success", "message": "Settings reset to defaults"})
+    except Exception as exc:
+        app.logger.error("Failed to reset configuration: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/config/reset", methods=["POST"])
+def api_config_reset():
+    """Reset configuration to factory defaults"""
+    try:
+        # Clear existing config and restore defaults
+        with _open_db() as connection:
+            if _table_exists(connection, "config_settings"):
+                connection.execute("DELETE FROM config_settings")
+                connection.commit()
+        
+        # Save factory defaults
+        save_config(CONFIG_DEFAULTS)
+        
+        # Write network configuration files with defaults
+        _write_dnsmasq_config(CONFIG_DEFAULTS)
+        _write_netplan_config(CONFIG_DEFAULTS)
+        
+        app.logger.info("Configuration reset to factory defaults")
+        return jsonify({"status": "success", "message": "Configuration reset to factory defaults"})
     except Exception as exc:
         app.logger.error("Failed to reset configuration: %s", exc)
         return jsonify({"error": str(exc)}), 500
@@ -710,11 +840,27 @@ def api_config():
             return jsonify({"error": "Invalid configuration values", "details": validation_errors}), 400
 
         save_config(coerced_updates)
+        
+        # Write network configuration files if network settings changed
+        network_keys = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "dns_servers"}
+        if any(key in coerced_updates for key in network_keys):
+            # Get full config for file writing
+            full_config = load_config()
+            full_config.update(coerced_updates)
+            
+            # Write dnsmasq and netplan configs
+            dnsmasq_written = _write_dnsmasq_config(full_config)
+            netplan_written = _write_netplan_config(full_config)
+            
+            if not dnsmasq_written:
+                app.logger.warning("Failed to write dnsmasq.conf, configuration saved to database only")
+            if not netplan_written:
+                app.logger.warning("Failed to write netplan-config.yaml, configuration saved to database only")
 
     config = load_config()
     network_config = _get_network_config()
     config.update(network_config)
-    return jsonify(config)
+    return jsonify({"status": "success", "message": "Configuration applied successfully", "config": config})
 
 
 def _init_traffic_db() -> None:
