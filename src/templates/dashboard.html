@@ -1193,6 +1193,18 @@
               <tbody id="traffic-tbody"></tbody>
             </table>
           </div>
+          
+          <!-- Pagination Controls -->
+          <div id="pagination-controls" style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border);">
+            <div style="color: var(--text-secondary); font-size: 0.9rem;">
+              Page <span id="current-page">1</span> of <span id="total-pages">1</span>
+              (<span id="total-items">0</span> total items)
+            </div>
+            <div style="display: flex; gap: 0.5rem;">
+              <button class="btn-secondary" id="prev-page" onclick="changePage(-1)" style="padding: 0.5rem 1rem;">Previous</button>
+              <button class="btn-secondary" id="next-page" onclick="changePage(1)" style="padding: 0.5rem 1rem;">Next</button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1299,6 +1311,9 @@
   let currentTab = 'dashboard';
   let currentWizardStep = 1;
   let pendingConfirmAction = null;
+  let currentPage = 1;
+  let perPage = 10;
+  let totalPages = 1;
 
   // ─── Tab Navigation ─── 
   function switchTab(tabId) {
@@ -1408,9 +1423,25 @@
       });
       document.getElementById('recent-tbody').innerHTML = recentHtml || '<tr><td colspan="5" class="text-center" style="color: var(--text-secondary); padding: 2rem;">No traffic data yet</td></tr>';
 
-      const systemUptime = document.getElementById('sysUptime') || document.getElementById('sys-uptime');
+      // Update system metrics
+      const systemUptime = document.getElementById('sys-uptime');
       if (systemUptime) {
         systemUptime.textContent = data.uptime || '—';
+      }
+
+      const sysCpu = document.getElementById('sys-cpu');
+      if (sysCpu && data.system_metrics) {
+        sysCpu.textContent = data.system_metrics.cpu_percent + '%';
+      }
+
+      const sysMemory = document.getElementById('sys-memory');
+      if (sysMemory && data.system_metrics) {
+        sysMemory.textContent = data.system_metrics.memory_percent + '%';
+      }
+
+      const sysDisk = document.getElementById('sys-disk');
+      if (sysDisk && data.system_metrics) {
+        sysDisk.textContent = data.system_metrics.disk_percent + '%';
       }
 
       const proxyStatusBadge = document.getElementById('proxyStatusBadge');
@@ -1506,7 +1537,7 @@
 
   async function loadTrafficLogs() {
     try {
-      const response = await fetch('/api/stats');
+      const response = await fetch(`/api/stats?page=${currentPage}&per_page=${perPage}`);
       const data = await response.json();
 
       let trafficHtml = '';
@@ -1523,8 +1554,29 @@
         `;
       });
       document.getElementById('traffic-tbody').innerHTML = trafficHtml || '<tr><td colspan="5" class="text-center" style="color: var(--text-secondary); padding: 2rem;">No traffic data yet</td></tr>';
+
+      // Update pagination controls
+      if (data.pagination) {
+        currentPage = data.pagination.page;
+        totalPages = data.pagination.total_pages;
+        document.getElementById('current-page').textContent = currentPage;
+        document.getElementById('total-pages').textContent = totalPages;
+        document.getElementById('total-items').textContent = data.pagination.total_items;
+        
+        // Enable/disable buttons
+        document.getElementById('prev-page').disabled = currentPage <= 1;
+        document.getElementById('next-page').disabled = currentPage >= totalPages;
+      }
     } catch (e) {
       showToast('Failed to load traffic logs', 'error');
+    }
+  }
+
+  function changePage(delta) {
+    const newPage = currentPage + delta;
+    if (newPage >= 1 && newPage <= totalPages) {
+      currentPage = newPage;
+      loadTrafficLogs();
     }
   }
 

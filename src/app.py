@@ -182,7 +182,7 @@ def _blocked_request_count() -> int:
         return 0
 
 
-def _get_recent_logs(limit: int = 10) -> list:
+def _get_recent_logs(limit: int = 10, offset: int = 0) -> list:
     if not DB_PATH.exists():
         return []
     try:
@@ -190,8 +190,8 @@ def _get_recent_logs(limit: int = 10) -> list:
             if not _table_exists(connection, "traffic_log"):
                 return []
             rows = connection.execute(
-                "SELECT timestamp, client_ip, host, category, flagged FROM traffic_log ORDER BY timestamp DESC LIMIT ?",
-                (limit,)
+                "SELECT timestamp, client_ip, host, category, flagged FROM traffic_log ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+                (limit, offset)
             ).fetchall()
             return [dict(row) for row in rows]
     except sqlite3.Error:
@@ -403,6 +403,16 @@ def dashboard():
 @app.route('/api/stats')
 def get_stats():
     try:
+        # Pagination parameters
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 10, type=int)
+        
+        # Validate pagination parameters
+        page = max(1, page)
+        per_page = max(1, min(per_page, 100))  # Cap at 100 per page
+        
+        offset = (page - 1) * per_page
+        
         total_reqs = _total_request_count()
         blocked_reqs = _blocked_request_count()
         active_clients = _connected_device_count()
@@ -413,8 +423,16 @@ def get_stats():
             for category, count in raw_categories.items()
         ]
 
-        raw_logs = _get_recent_logs(limit=10)
+        raw_logs = _get_recent_logs(limit=per_page, offset=offset)
         formatted_recent = [_format_recent_log_entry(log) for log in raw_logs]
+        
+        # Calculate pagination metadata
+        total_pages = (total_reqs + per_page - 1) // per_page if total_reqs > 0 else 1
+        
+        # System metrics using psutil
+        cpu_usage = psutil.cpu_percent(interval=0.1)
+        memory_usage = psutil.virtual_memory().percent
+        disk_usage = psutil.disk_usage('/').percent
 
         return jsonify({
             "total": total_reqs,
@@ -424,6 +442,17 @@ def get_stats():
             "recent": formatted_recent,
             "uptime": _format_uptime(),
             "statuses": _service_statuses(),
+            "pagination": {
+                "page": page,
+                "per_page": per_page,
+                "total_pages": total_pages,
+                "total_items": total_reqs
+            },
+            "system_metrics": {
+                "cpu_percent": cpu_usage,
+                "memory_percent": memory_usage,
+                "disk_percent": disk_usage
+            }
         })
 
     except Exception as exc:
@@ -519,17 +548,18 @@ def _init_traffic_db() -> None:
 
 
 def _populate_mock_traffic_data() -> None:
-    """Populate traffic_log with 10 rows of mock data for local development"""
+    """Populate traffic_log with 25 rows of mock data for local development"""
     import random
     
     mock_categories = ["Educational", "Productive", "Distracting", "Harmful", "Uncategorized"]
     mock_hosts = [
         "wikipedia.org", "github.com", "reddit.com", "twitter.com", 
-        "youtube.com", "stackoverflow.com", "docs.python.org", "khanacademy.org"
+        "youtube.com", "stackoverflow.com", "docs.python.org", "khanacademy.org",
+        "notion.so", "slack.com", "tiktok.com", "instagram.com", "facebook.com"
     ]
-    mock_client_ips = ["192.168.10.15", "192.168.10.20", "192.168.10.25", "192.168.10.30"]
-    mock_methods = ["GET", "POST", "GET", "GET", "GET"]
-    mock_paths = ["/api/data", "/home", "/user/profile", "/search", "/video/watch"]
+    mock_client_ips = ["192.168.10.15", "192.168.10.20", "192.168.10.25", "192.168.10.30", "192.168.10.35"]
+    mock_methods = ["GET", "POST", "GET", "GET", "GET", "PUT", "DELETE"]
+    mock_paths = ["/api/data", "/home", "/user/profile", "/search", "/video/watch", "/settings", "/dashboard"]
     
     with _open_db() as connection:
         # Check if table is empty
@@ -537,9 +567,9 @@ def _populate_mock_traffic_data() -> None:
         if count > 0:
             return  # Already has data
         
-        # Insert 10 mock rows
+        # Insert 25 mock rows
         now = time.time()
-        for i in range(10):
+        for i in range(25):
             timestamp = now - (i * 300)  # Stagger timestamps by 5 minutes
             client_ip = random.choice(mock_client_ips)
             host = random.choice(mock_hosts)

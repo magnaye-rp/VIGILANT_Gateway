@@ -288,8 +288,16 @@ class VIGILANTAddon:
     def tls_clienthello(self, layer):
         """TLS ClientHello hook for mobile SNI fallback tracking"""
         try:
-            client_ip = layer.context.client_conn.peername[0] if hasattr(layer, "context") else layer.client_conn.peername[0]
-            sni = layer.client_hello.sni
+            # In modern mitmproxy, ClientHelloData does not have direct .client_conn property
+            # Access client IP through the context block
+            if hasattr(layer, "context") and hasattr(layer.context, "client_conn"):
+                client_ip = layer.context.client_conn.peername[0]
+            else:
+                # Fallback for older mitmproxy versions or different contexts
+                print(f"[VIGILANT] TLS ClientHello: Unable to determine client IP, skipping SNI tracking")
+                return
+            
+            sni = layer.client_hello.sni if hasattr(layer, "client_hello") else None
             
             if sni:
                 # Check if SNI belongs to bypassed social domains
@@ -310,6 +318,8 @@ class VIGILANTAddon:
                 if any(base in d for d in SOCIAL_DOMAINS):
                     log_request(client_ip, sni, "(TLS_SNI)", "TLS", "Mobile_Bypass", False, [])
                     print(f"[VIGILANT] TLS SNI bypass logged: {client_ip} -> {sni}")
+        except AttributeError as e:
+            print(f"[VIGILANT] TLS ClientHello attribute error: {e}")
         except Exception as e:
             print(f"[VIGILANT] TLS ClientHello error: {e}")
     
