@@ -24,7 +24,8 @@ app = Flask(
 CORS(app)
 
 SERVER_IP = "192.168.10.1"
-DB_PATH = Path(os.getenv("VIGILANT_DB_PATH", "/home/vigilant_admin/vigilant/logs/vigilant.db"))
+# Use local path for development, production path via env var
+DB_PATH = Path(os.getenv("VIGILANT_DB_PATH", BASE_DIR / "logs" / "vigilant.db"))
 
 CONFIG_DEFAULTS = {
     "block_harmful": True,
@@ -476,7 +477,84 @@ def api_config():
     return jsonify(load_config())
 
 
+def _init_traffic_db() -> None:
+    """Initialize traffic_log table with schema matching vigilant_addon.py"""
+    with _open_db() as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS traffic_log (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp   REAL,
+                client_ip   TEXT,
+                host        TEXT,
+                path        TEXT,
+                method      TEXT,
+                category    TEXT,
+                flagged     INTEGER DEFAULT 0,
+                entities    TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS throttle_events (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp   REAL,
+                client_ip   TEXT,
+                host        TEXT,
+                rpm_current REAL,
+                rpm_baseline REAL,
+                action      TEXT
+            )
+            """
+        )
+        connection.commit()
+
+
+def _populate_mock_traffic_data() -> None:
+    """Populate traffic_log with 10 rows of mock data for local development"""
+    import random
+    
+    mock_categories = ["Educational", "Productive", "Distracting", "Harmful", "Uncategorized"]
+    mock_hosts = [
+        "wikipedia.org", "github.com", "reddit.com", "twitter.com", 
+        "youtube.com", "stackoverflow.com", "docs.python.org", "khanacademy.org"
+    ]
+    mock_client_ips = ["192.168.10.15", "192.168.10.20", "192.168.10.25", "192.168.10.30"]
+    mock_methods = ["GET", "POST", "GET", "GET", "GET"]
+    mock_paths = ["/api/data", "/home", "/user/profile", "/search", "/video/watch"]
+    
+    with _open_db() as connection:
+        # Check if table is empty
+        count = connection.execute("SELECT COUNT(*) FROM traffic_log").fetchone()[0]
+        if count > 0:
+            return  # Already has data
+        
+        # Insert 10 mock rows
+        now = time.time()
+        for i in range(10):
+            timestamp = now - (i * 300)  # Stagger timestamps by 5 minutes
+            client_ip = random.choice(mock_client_ips)
+            host = random.choice(mock_hosts)
+            path = random.choice(mock_paths)
+            method = random.choice(mock_methods)
+            category = random.choice(mock_categories)
+            flagged = 1 if category == "Harmful" else 0
+            entities = "[]"
+            
+            connection.execute(
+                """
+                INSERT INTO traffic_log (timestamp, client_ip, host, path, method, category, flagged, entities)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (timestamp, client_ip, host, path, method, category, flagged, entities)
+            )
+        connection.commit()
+
+
 def _compile_config_integrity() -> None:
+    _init_traffic_db()
+    _populate_mock_traffic_data()
     init_config_db()
     current_config = load_config()
     missing_defaults = {
@@ -488,4 +566,5 @@ def _compile_config_integrity() -> None:
 
 if __name__ == "__main__":
     _compile_config_integrity()
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    # Use port 5001 for local development to avoid conflicts with macOS AirPlay
+    app.run(host="0.0.0.0", port=5001, debug=False)
