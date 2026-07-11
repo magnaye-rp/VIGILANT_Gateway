@@ -821,6 +821,7 @@ def api_config():
         return jsonify(config)
 
     payload = request.get_json(silent=True)
+    print(f"INCOMING SAVE PAYLOAD: {payload}")
     if not isinstance(payload, dict):
         return jsonify({"error": "JSON object payload is required"}), 400
 

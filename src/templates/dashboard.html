@@ -1518,15 +1518,20 @@
         body: JSON.stringify(payload)
       });
 
-      if (response.ok) {
-        showToast('Configuration saved successfully', 'success');
+      if (!response.ok) {
+        throw new Error(`Server returned HTTP status ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (data.status === 'success') {
+        showToast('Configuration applied and saved!', 'success');
         await loadConfigToUI();
       } else {
-        const errorData = await response.json().catch(() => ({}));
-        showToast(errorData.error || 'Failed to save configuration', 'danger');
+        showToast('Save failed: ' + (data.message || 'Unknown error'), 'danger');
       }
     } catch (e) {
-      showToast('Error: ' + e.message, 'danger');
+      console.error('Configuration save error:', e);
+      showToast('Network error: Could not reach backend data layer.', 'danger');
     }
   }
 
