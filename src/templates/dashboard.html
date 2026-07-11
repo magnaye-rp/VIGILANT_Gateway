@@ -244,6 +244,10 @@
       animation: fadeIn 0.3s ease-in;
     }
 
+    .d-none {
+      display: none !important;
+    }
+
     @keyframes fadeIn {
       from { opacity: 0; }
       to { opacity: 1; }
@@ -763,13 +767,9 @@
         <div class="nav-icon">📊</div>
         <span>Dashboard</span>
       </div>
-      <div class="nav-item" onclick="switchTab('wizard')">
-        <div class="nav-icon">✨</div>
-        <span>Setup Wizard</span>
-      </div>
       <div class="nav-item" onclick="switchTab('settings')">
         <div class="nav-icon">⚙️</div>
-        <span>Settings</span>
+        <span>Settings & Setup</span>
       </div>
       <div class="nav-item" onclick="switchTab('traffic')">
         <div class="nav-icon">📡</div>
@@ -857,285 +857,175 @@
         </div>
       </div>
 
-      <!-- Setup Wizard Tab -->
-      <div id="tab-wizard" class="tab-content">
-        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Network Configuration Control Plane</h2>
-
-        <div class="card">
-          <div class="card-header">
-            <div class="card-title">Network Interface Configuration</div>
-            <div class="card-subtitle">Configure gateway interfaces and network settings</div>
-          </div>
-
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label">Upstream Interface (Internet Input)</label>
-              <select id="wizard-upstream-interface">
-                <option value="">Loading interfaces...</option>
-              </select>
-              <div class="form-hint">External network interface for internet connectivity</div>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Distribution Interface (Local Network AP)</label>
-              <select id="wizard-distribution-interface">
-                <option value="">Loading interfaces...</option>
-              </select>
-              <div class="form-hint">Internal network interface for client devices</div>
-            </div>
-          </div>
-
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label">Gateway IP Address</label>
-              <input type="text" id="wizard-gateway-ip" placeholder="192.168.10.1" value="192.168.10.1">
-              <div class="form-hint">IP address for the admin interface</div>
-            </div>
-            <div class="form-group">
-              <label class="form-label">DHCP Range Start</label>
-              <input type="text" id="wizard-dhcp-start" placeholder="192.168.10.10" value="192.168.10.10">
-              <div class="form-hint">First IP in client range</div>
-            </div>
-            <div class="form-group">
-              <label class="form-label">DHCP Range End</label>
-              <input type="text" id="wizard-dhcp-end" placeholder="192.168.10.50" value="192.168.10.50">
-              <div class="form-hint">Last IP in client range</div>
-            </div>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">Upstream DNS Servers</label>
-            <textarea id="wizard-dns-servers" rows="2" placeholder="8.8.8.8&#10;8.8.4.4">8.8.8.8
-8.8.4.4</textarea>
-            <div class="form-hint">DNS servers for upstream resolution (one per line)</div>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-header">
-            <div class="card-title">Content Filtering Configuration</div>
-            <div class="card-subtitle">Configure NLP model and content categories</div>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">NLP Model Accuracy</label>
-            <select id="wizard-nlp-mode">
-              <option value="fast">Fast (Lower accuracy, ~70%)</option>
-              <option value="balanced" selected>Balanced (Good accuracy, ~85%)</option>
-              <option value="strict">Strict (Higher accuracy, ~95%)</option>
-            </select>
-            <div class="form-hint">Trade-off between speed and accuracy</div>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">Categories to Block</label>
-            <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-              <div>
-                <div class="toggle-switch">
-                  <input type="checkbox" id="block-harmful" checked>
-                  <div class="switch"></div>
-                  <span style="font-weight: 600; color: var(--danger);">Harmful content</span>
-                </div>
-                <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem; margin-left: 4.5rem;">Adult content, violence, extremism</div>
-              </div>
-              <div>
-                <div class="toggle-switch">
-                  <input type="checkbox" id="block-distracting">
-                  <div class="switch"></div>
-                  <span style="font-weight: 600; color: var(--warning);">Distracting sites</span>
-                </div>
-                <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem; margin-left: 4.5rem;">Social media, entertainment, memes</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-header">
-            <div class="card-title">Doomscroll Prevention Configuration</div>
-            <div class="card-subtitle">Configure velocity-based throttling for social media</div>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">Enable Throttling</label>
-            <div class="toggle-switch">
-              <input type="checkbox" id="throttle-enabled" checked>
-              <div class="switch"></div>
-              <span id="throttle-status">Enabled</span>
-            </div>
-          </div>
-
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label">Request Threshold (per minute)</label>
-              <input type="number" id="wizard-throttle-threshold" value="30" min="10" max="100">
-              <div class="form-hint">Trigger throttling when exceeds this rate</div>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Throttle Rate</label>
-              <select id="wizard-throttle-rate">
-                <option value="128">128 Kbps (Strict)</option>
-                <option value="256" selected>256 Kbps (Balanced)</option>
-                <option value="512">512 Kbps (Moderate)</option>
-              </select>
-              <div class="form-hint">Bandwidth limit for throttled clients</div>
-            </div>
-          </div>
-        </div>
-
-        <div class="btn-group">
-          <button class="btn-success" onclick="saveWizardConfig(event)" style="width: auto;">Save All Configuration</button>
-        </div>
-      </div>
-
-      <!-- Settings Tab -->
+      <!-- Settings & Setup Tab -->
       <div id="tab-settings" class="tab-content">
-        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Advanced Settings</h2>
+        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Settings & Setup</h2>
 
-        <div class="tabs" style="border-bottom: 1px solid var(--border); margin-bottom: 2rem;">
-          <button class="tab active" onclick="switchSettings('network')">Network</button>
-          <button class="tab" onclick="switchSettings('filtering')">Filtering</button>
-          <button class="tab" onclick="switchSettings('throttling')">Throttling</button>
-          <button class="tab" onclick="switchSettings('security')">Security</button>
+        <!-- Advanced Settings Toggle -->
+        <div style="margin-bottom: 2rem; display: flex; align-items: center; gap: 1rem;">
+          <div class="toggle-switch">
+            <input type="checkbox" id="advanced-toggle" onchange="toggleAdvancedSettings()">
+            <div class="switch"></div>
+          </div>
+          <span style="font-weight: 600; color: var(--text);">Advanced Settings</span>
         </div>
 
-        <!-- Network Settings -->
-        <div id="settings-network" class="settings-panel">
-          <div class="card">
+        <form id="unified-config-form" onsubmit="saveUnifiedConfig(event)">
+          <!-- Basic View (Always Visible) -->
+          <div class="card" style="margin-bottom: 2rem;">
             <div class="card-header">
-              <div class="card-title">Network Configuration</div>
+              <div class="card-title">Basic Configuration</div>
+              <div class="card-subtitle">Essential network and filtering settings</div>
             </div>
-            <div class="form-group">
-              <label class="form-label">Upstream Interface (Internet Input)</label>
-              <select id="setting-upstream-interface">
-                <option>enp0s5</option>
-                <option>eth0</option>
-                <option>eno1</option>
-              </select>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Upstream Interface (Internet Input)</label>
+                <select id="upstream-interface">
+                  <option value="">Loading interfaces...</option>
+                </select>
+                <div class="form-hint">External network interface for internet connectivity</div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Distribution Interface (Local Network AP)</label>
+                <select id="distribution-interface">
+                  <option value="">Loading interfaces...</option>
+                </select>
+                <div class="form-hint">Internal network interface for client devices</div>
+              </div>
             </div>
-            <div class="form-group">
-              <label class="form-label">Distribution Interface (Local Network AP)</label>
-              <select id="setting-distribution-interface">
-                <option>enp0s6</option>
-                <option>eth1</option>
-                <option>wlan0</option>
-              </select>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Gateway IP Address</label>
+                <input type="text" id="gateway-ip" placeholder="192.168.10.1" value="192.168.10.1">
+                <div class="form-hint">IP address for the admin interface</div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">DHCP Range Start</label>
+                <input type="text" id="dhcp-start" placeholder="192.168.10.10" value="192.168.10.10">
+                <div class="form-hint">First IP in client range</div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">DHCP Range End</label>
+                <input type="text" id="dhcp-end" placeholder="192.168.10.50" value="192.168.10.50">
+                <div class="form-hint">Last IP in client range</div>
+              </div>
             </div>
-            <div class="form-group">
-              <label class="form-label">Gateway IP</label>
-              <input type="text" id="setting-gateway-ip" value="192.168.10.1">
-            </div>
+
             <div class="form-group">
               <label class="form-label">Upstream DNS Servers</label>
-              <textarea id="setting-dns-servers" rows="3" placeholder="8.8.8.8&#10;8.8.4.4">8.8.8.8
+              <textarea id="dns-servers" rows="2" placeholder="8.8.8.8&#10;8.8.4.4">8.8.8.8
 8.8.4.4</textarea>
+              <div class="form-hint">DNS servers for upstream resolution (one per line)</div>
             </div>
-            <button class="btn-primary" onclick="saveSettings()">Save Network Settings</button>
-          </div>
-        </div>
 
-        <!-- Filtering Settings -->
-        <div id="settings-filtering" class="settings-panel hidden">
-          <div class="card">
-            <div class="card-header">
-              <div class="card-title">Content Filtering</div>
-            </div>
             <div class="form-group">
-              <label class="form-label">NLP Model</label>
-              <select id="setting-nlp-model">
-                <option value="balanced" selected>en_core_web_sm (Balanced)</option>
-                <option value="large">en_core_web_lg (Accurate)</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Block Categories</label>
-              <div style="display: flex; flex-direction: column; gap: 1rem;">
+              <label class="form-label">Categories to Block</label>
+              <div style="display: flex; flex-direction: column; gap: 0.75rem;">
                 <div>
                   <div class="toggle-switch">
-                    <input type="checkbox" id="setting-block-harmful" checked>
+                    <input type="checkbox" id="block-harmful" checked>
                     <div class="switch"></div>
+                    <span style="font-weight: 600; color: var(--danger);">Harmful content</span>
                   </div>
-                  <div style="margin-top: 0.5rem;">
-                    <div style="font-weight: 600; color: var(--danger);">Harmful</div>
-                    <div style="font-size: 0.85rem; color: var(--text-secondary);">Adult content, violence, extremism</div>
-                  </div>
+                  <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem; margin-left: 4.5rem;">Adult content, violence, extremism</div>
                 </div>
                 <div>
                   <div class="toggle-switch">
-                    <input type="checkbox" id="setting-block-distracting">
+                    <input type="checkbox" id="block-distracting">
                     <div class="switch"></div>
+                    <span style="font-weight: 600; color: var(--warning);">Distracting sites</span>
                   </div>
-                  <div style="margin-top: 0.5rem;">
-                    <div style="font-weight: 600; color: var(--warning);">Distracting</div>
-                    <div style="font-size: 0.85rem; color: var(--text-secondary);">Social media, entertainment, memes</div>
-                  </div>
+                  <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem; margin-left: 4.5rem;">Social media, entertainment, memes</div>
                 </div>
               </div>
             </div>
-            <button class="btn-primary" onclick="saveSettings()">Save Filtering Settings</button>
           </div>
-        </div>
 
-        <!-- Throttling Settings -->
-        <div id="settings-throttling" class="settings-panel hidden">
-          <div class="card">
-            <div class="card-header">
-              <div class="card-title">Doomscroll Prevention</div>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Enable Throttling</label>
-              <div class="toggle-switch">
-                <input type="checkbox" id="setting-throttle-enabled" checked>
-                <div class="switch"></div>
+          <!-- Advanced View (Hidden by Default) -->
+          <div id="advanced-settings" class="d-none">
+            <div class="card" style="margin-bottom: 2rem;">
+              <div class="card-header">
+                <div class="card-title">Advanced Network Configuration</div>
+                <div class="card-subtitle">Deep-dive network settings</div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">NLP Model Accuracy</label>
+                <select id="nlp-mode">
+                  <option value="fast">Fast (Lower accuracy, ~70%)</option>
+                  <option value="balanced" selected>Balanced (Good accuracy, ~85%)</option>
+                  <option value="strict">Strict (Higher accuracy, ~95%)</option>
+                </select>
+                <div class="form-hint">Trade-off between speed and accuracy</div>
               </div>
             </div>
-            <div class="form-group">
-              <label class="form-label">Velocity Threshold (requests/min)</label>
-              <input type="number" id="setting-velocity-threshold" value="30" min="10" max="200">
-              <div class="form-hint">Trigger throttling when requests exceed this rate on social media</div>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Throttle Duration (seconds)</label>
-              <input type="number" id="setting-throttle-duration" value="60" min="10" max="600">
-            </div>
-            <div class="form-group">
-              <label class="form-label">Bandwidth Limit (Kbps)</label>
-              <input type="number" id="setting-throttle-rate" value="256" min="64" max="1024">
-            </div>
-            <div class="form-group">
-              <label class="form-label">Target Domains (comma-separated)</label>
-              <textarea id="setting-target-domains" rows="4">facebook.com,twitter.com,x.com,tiktok.com,instagram.com,reddit.com,youtube.com,twitch.tv</textarea>
-            </div>
-            <button class="btn-primary" onclick="saveSettings()">Save Throttling Settings</button>
-          </div>
-        </div>
 
-        <!-- Security Settings -->
-        <div id="settings-security" class="settings-panel hidden">
-          <div class="card">
-            <div class="card-header">
-              <div class="card-title">Security & Privacy</div>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Admin Password</label>
-              <input type="password" id="setting-admin-password" placeholder="••••••••">
-              <div class="form-hint">Leave blank to keep current password</div>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Enable HTTPS</label>
-              <div class="toggle-switch">
-                <input type="checkbox" id="setting-https-enabled" checked>
-                <div class="switch"></div>
+            <div class="card" style="margin-bottom: 2rem;">
+              <div class="card-header">
+                <div class="card-title">Doomscroll Prevention Configuration</div>
+                <div class="card-subtitle">Configure velocity-based throttling for social media</div>
               </div>
-              <div class="form-hint">Use SSL/TLS for dashboard connection</div>
+
+              <div class="form-group">
+                <label class="form-label">Enable Throttling</label>
+                <div class="toggle-switch">
+                  <input type="checkbox" id="throttle-enabled" checked>
+                  <div class="switch"></div>
+                  <span id="throttle-status">Enabled</span>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Request Threshold (per minute)</label>
+                  <input type="number" id="throttle-threshold" value="30" min="10" max="100">
+                  <div class="form-hint">Trigger throttling when exceeds this rate</div>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Throttle Rate</label>
+                  <select id="throttle-rate">
+                    <option value="128">128 Kbps (Strict)</option>
+                    <option value="256" selected>256 Kbps (Balanced)</option>
+                    <option value="512">512 Kbps (Moderate)</option>
+                  </select>
+                  <div class="form-hint">Bandwidth limit for throttled clients</div>
+                </div>
+              </div>
             </div>
-            <div class="form-group">
-              <label class="form-label">Log Retention (days)</label>
-              <input type="number" id="setting-log-retention" value="30" min="7" max="365">
-              <div class="form-hint">Automatically delete logs older than this</div>
+
+            <div class="card" style="margin-bottom: 2rem;">
+              <div class="card-header">
+                <div class="card-title">Security & Privacy</div>
+                <div class="card-subtitle">System security settings</div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Admin Password</label>
+                <input type="password" id="admin-password" placeholder="••••••••">
+                <div class="form-hint">Leave blank to keep current password</div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Enable HTTPS</label>
+                <div class="toggle-switch">
+                  <input type="checkbox" id="https-enabled" checked>
+                  <div class="switch"></div>
+                </div>
+                <div class="form-hint">Use SSL/TLS for dashboard connection</div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Log Retention (days)</label>
+                <input type="number" id="log-retention" value="30" min="7" max="365">
+                <div class="form-hint">Automatically delete logs older than this</div>
+              </div>
             </div>
-            <button class="btn-primary" onclick="saveSettings()">Save Security Settings</button>
           </div>
-        </div>
+
+          <div class="btn-group">
+            <button type="submit" class="btn-success" style="width: auto;">Save All Configuration</button>
+          </div>
+        </form>
       </div>
 
       <!-- Traffic Log Tab -->
@@ -1310,7 +1200,19 @@
     
     if (tabId === 'dashboard') refreshStats();
     if (tabId === 'traffic') loadTrafficLogs();
-    if (tabId === 'settings' || tabId === 'wizard') loadWizardConfig();
+    if (tabId === 'settings') loadUnifiedConfig();
+  }
+
+  // ─── Advanced Settings Toggle ───
+  function toggleAdvancedSettings() {
+    const advancedToggle = document.getElementById('advanced-toggle');
+    const advancedSettings = document.getElementById('advanced-settings');
+    
+    if (advancedToggle.checked) {
+      advancedSettings.classList.remove('d-none');
+    } else {
+      advancedSettings.classList.add('d-none');
+    }
   }
 
   function switchSettings(section) {
@@ -1445,7 +1347,7 @@
     });
   }
 
-  async function loadWizardConfig() {
+  async function loadUnifiedConfig() {
     try {
       const response = await fetch('/api/config');
       if (!response.ok) {
@@ -1458,33 +1360,29 @@
       populateInterfaceDropdowns(config.available_interfaces || []);
       
       // Sync filtering settings
-      syncConfigInputs(['blockHarmful', 'setting-block-harmful', 'block-harmful', 'wizHarmful'], config.block_harmful);
-      syncConfigInputs(['blockDistracting', 'setting-block-distracting', 'block-distracting', 'wizDistracting'], config.block_distracting);
-      syncConfigInputs(['throttleEnabled', 'setting-throttle-enabled', 'throttle-enabled'], config.throttle_enabled);
-      syncConfigInputs(['velocityThreshold', 'setting-velocity-threshold', 'wizard-throttle-threshold'], config.velocity_threshold);
+      syncConfigInputs(['block-harmful'], config.block_harmful);
+      syncConfigInputs(['block-distracting'], config.block_distracting);
+      syncConfigInputs(['throttle-enabled'], config.throttle_enabled);
+      syncConfigInputs(['throttle-threshold'], config.velocity_threshold);
       
-      // Sync network settings for wizard
-      syncConfigInputs(['wizard-upstream-interface'], config.upstream_interface);
-      syncConfigInputs(['wizard-distribution-interface'], config.distribution_interface);
-      syncConfigInputs(['wizard-gateway-ip'], config.gateway_ip);
-      syncConfigInputs(['wizard-dhcp-start'], config.dhcp_start);
-      syncConfigInputs(['wizard-dhcp-end'], config.dhcp_end);
+      // Sync network settings
+      syncConfigInputs(['upstream-interface'], config.upstream_interface);
+      syncConfigInputs(['distribution-interface'], config.distribution_interface);
+      syncConfigInputs(['gateway-ip'], config.gateway_ip);
+      syncConfigInputs(['dhcp-start'], config.dhcp_start);
+      syncConfigInputs(['dhcp-end'], config.dhcp_end);
       
-      // Sync DNS servers for wizard
-      const dnsServersEl = document.getElementById('wizard-dns-servers');
+      // Sync DNS servers
+      const dnsServersEl = document.getElementById('dns-servers');
       if (dnsServersEl && config.dns_servers) {
         dnsServersEl.value = config.dns_servers;
       }
       
-      // Sync settings tab network settings
-      syncConfigInputs(['setting-upstream-interface'], config.upstream_interface);
-      syncConfigInputs(['setting-distribution-interface'], config.distribution_interface);
-      syncConfigInputs(['setting-gateway-ip'], config.gateway_ip);
-      
-      const settingsDnsEl = document.getElementById('setting-dns-servers');
-      if (settingsDnsEl && config.dns_servers) {
-        settingsDnsEl.value = config.dns_servers;
-      }
+      // Sync advanced settings
+      syncConfigInputs(['nlp-mode'], config.nlp_mode);
+      syncConfigInputs(['throttle-rate'], config.throttle_rate);
+      syncConfigInputs(['https-enabled'], config.https_enabled);
+      syncConfigInputs(['log-retention'], config.log_retention);
       
       // Update network interface dropdowns with actual values
       updateInterfaceDropdowns(config.upstream_interface, config.distribution_interface);
@@ -1495,12 +1393,12 @@
   }
 
   async function loadConfigToUI() {
-    return loadWizardConfig();
+    return loadUnifiedConfig();
   }
 
   function populateInterfaceDropdowns(interfaces) {
-    const upstreamSelect = document.getElementById('wizard-upstream-interface');
-    const distributionSelect = document.getElementById('wizard-distribution-interface');
+    const upstreamSelect = document.getElementById('upstream-interface');
+    const distributionSelect = document.getElementById('distribution-interface');
     
     if (!upstreamSelect || !distributionSelect) return;
     
@@ -1530,11 +1428,11 @@
   }
   
   function updateInterfaceDropdowns(upstreamIface, distributionIface) {
-    // Update wizard upstream interface dropdown
-    const wizardUpstreamSelect = document.getElementById('wizard-upstream-interface');
-    if (wizardUpstreamSelect) {
+    // Update upstream interface dropdown
+    const upstreamSelect = document.getElementById('upstream-interface');
+    if (upstreamSelect) {
       let optionExists = false;
-      for (let opt of wizardUpstreamSelect.options) {
+      for (let opt of upstreamSelect.options) {
         if (opt.value === upstreamIface) {
           optionExists = true;
           opt.selected = true;
@@ -1546,15 +1444,15 @@
         newOption.value = upstreamIface;
         newOption.textContent = upstreamIface;
         newOption.selected = true;
-        wizardUpstreamSelect.appendChild(newOption);
+        upstreamSelect.appendChild(newOption);
       }
     }
     
-    // Update wizard distribution interface dropdown
-    const wizardDistributionSelect = document.getElementById('wizard-distribution-interface');
-    if (wizardDistributionSelect) {
+    // Update distribution interface dropdown
+    const distributionSelect = document.getElementById('distribution-interface');
+    if (distributionSelect) {
       let optionExists = false;
-      for (let opt of wizardDistributionSelect.options) {
+      for (let opt of distributionSelect.options) {
         if (opt.value === distributionIface) {
           optionExists = true;
           opt.selected = true;
@@ -1566,66 +1464,32 @@
         newOption.value = distributionIface;
         newOption.textContent = distributionIface;
         newOption.selected = true;
-        wizardDistributionSelect.appendChild(newOption);
-      }
-    }
-
-    // Update settings upstream interface dropdown
-    const settingsUpstreamSelect = document.getElementById('setting-upstream-interface');
-    if (settingsUpstreamSelect) {
-      let optionExists = false;
-      for (let opt of settingsUpstreamSelect.options) {
-        if (opt.value === upstreamIface) {
-          optionExists = true;
-          opt.selected = true;
-          break;
-        }
-      }
-      if (!optionExists && upstreamIface) {
-        const newOption = document.createElement('option');
-        newOption.value = upstreamIface;
-        newOption.textContent = upstreamIface;
-        newOption.selected = true;
-        settingsUpstreamSelect.appendChild(newOption);
-      }
-    }
-    
-    // Update settings distribution interface dropdown
-    const settingsDistributionSelect = document.getElementById('setting-distribution-interface');
-    if (settingsDistributionSelect) {
-      let optionExists = false;
-      for (let opt of settingsDistributionSelect.options) {
-        if (opt.value === distributionIface) {
-          optionExists = true;
-          opt.selected = true;
-          break;
-        }
-      }
-      if (!optionExists && distributionIface) {
-        const newOption = document.createElement('option');
-        newOption.value = distributionIface;
-        newOption.textContent = distributionIface;
-        newOption.selected = true;
-        settingsDistributionSelect.appendChild(newOption);
+        distributionSelect.appendChild(newOption);
       }
     }
   }
 
-  async function saveConfig(e) {
+  async function saveUnifiedConfig(e) {
     e?.preventDefault();
 
-    const blockHarmfulEl = getConfigInput(['blockHarmful', 'setting-block-harmful', 'block-harmful']);
-    const blockDistractingEl = getConfigInput(['blockDistracting', 'setting-block-distracting', 'block-distracting']);
-    const throttleEnabledEl = getConfigInput(['throttleEnabled', 'setting-throttle-enabled', 'throttle-enabled']);
-    const velocityThresholdEl = getConfigInput(['velocityThreshold', 'setting-velocity-threshold', 'wizard-throttle-threshold']);
+    const blockHarmfulEl = document.getElementById('block-harmful');
+    const blockDistractingEl = document.getElementById('block-distracting');
+    const throttleEnabledEl = document.getElementById('throttle-enabled');
+    const velocityThresholdEl = document.getElementById('throttle-threshold');
     
     // Network settings
-    const upstreamInterfaceEl = document.getElementById('wizard-upstream-interface');
-    const distributionInterfaceEl = document.getElementById('wizard-distribution-interface');
-    const gatewayIpEl = getConfigInput(['setting-gateway-ip', 'wizard-gateway-ip']);
-    const dhcpStartEl = document.getElementById('wizard-dhcp-start');
-    const dhcpEndEl = document.getElementById('wizard-dhcp-end');
-    const dnsServersEl = document.getElementById('setting-dns-servers');
+    const upstreamInterfaceEl = document.getElementById('upstream-interface');
+    const distributionInterfaceEl = document.getElementById('distribution-interface');
+    const gatewayIpEl = document.getElementById('gateway-ip');
+    const dhcpStartEl = document.getElementById('dhcp-start');
+    const dhcpEndEl = document.getElementById('dhcp-end');
+    const dnsServersEl = document.getElementById('dns-servers');
+    
+    // Advanced settings
+    const nlpModeEl = document.getElementById('nlp-mode');
+    const throttleRateEl = document.getElementById('throttle-rate');
+    const httpsEnabledEl = document.getElementById('https-enabled');
+    const logRetentionEl = document.getElementById('log-retention');
 
     const payload = {
       block_harmful: Boolean(blockHarmfulEl?.checked),
@@ -1638,7 +1502,12 @@
       gateway_ip: gatewayIpEl?.value || '192.168.10.1',
       dhcp_start: dhcpStartEl?.value || '192.168.10.10',
       dhcp_end: dhcpEndEl?.value || '192.168.10.50',
-      dns_servers: dnsServersEl?.value || '8.8.8.8,8.8.4.4'
+      dns_servers: dnsServersEl?.value || '8.8.8.8,8.8.4.4',
+      // Advanced configuration
+      nlp_mode: nlpModeEl?.value || 'balanced',
+      throttle_rate: Number.parseInt(throttleRateEl?.value || '256', 10) || 256,
+      https_enabled: Boolean(httpsEnabledEl?.checked),
+      log_retention: Number.parseInt(logRetentionEl?.value || '30', 10) || 30
     };
 
     try {
@@ -1658,10 +1527,6 @@
     } catch (e) {
       showToast('Error: ' + e.message, 'danger');
     }
-  }
-
-  async function saveSettings(e) {
-    return saveConfig(e);
   }
 
   async function loadTrafficLogs() {
