@@ -24,8 +24,15 @@ app = Flask(
 CORS(app)
 
 SERVER_IP = "192.168.10.1"
-# Use local path for development, production path via env var
-DB_PATH = Path(os.getenv("VIGILANT_DB_PATH", BASE_DIR / "logs" / "vigilant.db"))
+# Environment-aware DB path: production path via env var, fallback to local development path
+PRODUCTION_DB_PATH = Path("/home/vigilant_admin/vigilant/logs/vigilant.db")
+LOCAL_DB_PATH = BASE_DIR / "logs" / "vigilant.db"
+
+# Use production path if it exists and is writable, otherwise use local development path
+if PRODUCTION_DB_PATH.exists() and os.access(PRODUCTION_DB_PATH.parent, os.W_OK):
+    DB_PATH = PRODUCTION_DB_PATH
+else:
+    DB_PATH = LOCAL_DB_PATH
 
 CONFIG_DEFAULTS = {
     "block_harmful": True,
@@ -566,5 +573,5 @@ def _compile_config_integrity() -> None:
 
 if __name__ == "__main__":
     _compile_config_integrity()
-    # Use port 5001 for local development to avoid conflicts with macOS AirPlay
-    app.run(host="0.0.0.0", port=5001, debug=False)
+    # Use port 5002 for local development to avoid conflicts
+    app.run(host="0.0.0.0", port=5002, debug=False)
