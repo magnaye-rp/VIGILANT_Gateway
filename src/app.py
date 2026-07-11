@@ -213,14 +213,27 @@ def _system_metrics() -> dict:
         return dict(DEFAULT_SYSTEM_METRICS)
 
 
-def _total_request_count() -> int:
+def _total_request_count(category_filter: str = '', search_filter: str = '') -> int:
     if not DB_PATH.exists():
         return 0
     try:
         with _open_db() as connection:
             if not _table_exists(connection, "traffic_log"):
                 return 0
-            row = connection.execute("SELECT COUNT(*) FROM traffic_log").fetchone()
+            
+            query = "SELECT COUNT(*) FROM traffic_log WHERE 1=1"
+            params = []
+            
+            if category_filter and category_filter != 'ALL':
+                query += " AND category = ?"
+                params.append(category_filter)
+            
+            if search_filter:
+                query += " AND (host LIKE ? OR client_ip LIKE ?)"
+                params.append(f"%{search_filter}%")
+                params.append(f"%{search_filter}%")
+            
+            row = connection.execute(query, tuple(params)).fetchone()
             return int(row[0] or 0) if row else 0
     except sqlite3.Error:
         return 0
@@ -239,17 +252,30 @@ def _blocked_request_count() -> int:
         return 0
 
 
-def _get_recent_logs(limit: int = 10, offset: int = 0) -> list:
+def _get_recent_logs(limit: int = 10, offset: int = 0, category_filter: str = '', search_filter: str = '') -> list:
     if not DB_PATH.exists():
         return []
     try:
         with _open_db() as connection:
             if not _table_exists(connection, "traffic_log"):
                 return []
-            rows = connection.execute(
-                "SELECT timestamp, client_ip, host, category, flagged FROM traffic_log ORDER BY timestamp DESC LIMIT ? OFFSET ?",
-                (limit, offset)
-            ).fetchall()
+            
+            query = "SELECT timestamp, client_ip, host, category, flagged FROM traffic_log WHERE 1=1"
+            params = []
+            
+            if category_filter and category_filter != 'ALL':
+                query += " AND category = ?"
+                params.append(category_filter)
+            
+            if search_filter:
+                query += " AND (host LIKE ? OR client_ip LIKE ?)"
+                params.append(f"%{search_filter}%")
+                params.append(f"%{search_filter}%")
+            
+            query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+            
+            rows = connection.execute(query, tuple(params)).fetchall()
             return [dict(row) for row in rows]
     except sqlite3.Error:
         return []
@@ -580,8 +606,7 @@ def load_config() -> dict:
                 return config
 
             rows = connection.execute(
-                "SELECT key, value FROM config_settings WHERE key IN (?, ?, ?, ?)",
-                tuple(CONFIG_DEFAULTS.keys()),
+                "SELECT key, value FROM config_settings",
             ).fetchall()
 
         for row in rows:
@@ -671,13 +696,17 @@ def get_stats():
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('per_page', 10, type=int)
         
+        # Filter parameters
+        category_filter = request.args.get('category', '').strip()
+        search_filter = request.args.get('search', '').strip()
+        
         # Validate pagination parameters
         page = max(1, page)
         per_page = max(1, min(per_page, 100))  # Cap at 100 per page
         
         offset = (page - 1) * per_page
         
-        total_reqs = _total_request_count()
+        total_reqs = _total_request_count(category_filter=category_filter, search_filter=search_filter)
         blocked_reqs = _blocked_request_count()
         active_clients = _connected_device_count()
         raw_categories = _traffic_percentage_metrics()
@@ -687,7 +716,7 @@ def get_stats():
             for category, count in raw_categories.items()
         ]
 
-        raw_logs = _get_recent_logs(limit=per_page, offset=offset)
+        raw_logs = _get_recent_logs(limit=per_page, offset=offset, category_filter=category_filter, search_filter=search_filter)
         formatted_recent = [_format_recent_log_entry(log) for log in raw_logs]
         
         # Calculate pagination metadata

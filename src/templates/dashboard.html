@@ -1043,9 +1043,9 @@
           </div>
 
           <div class="form-row" style="margin-bottom: 1.5rem;">
-            <input type="text" id="traffic-filter-client" placeholder="Filter by client IP">
-            <input type="text" id="traffic-filter-domain" placeholder="Filter by domain">
-            <select id="traffic-filter-category">
+            <input type="text" id="traffic-filter-client" placeholder="Filter by client IP" oninput="applyFilters()">
+            <input type="text" id="traffic-filter-domain" placeholder="Filter by domain" oninput="applyFilters()">
+            <select id="traffic-filter-category" onchange="applyFilters()">
               <option value="">All Categories</option>
               <option value="Educational">Educational</option>
               <option value="Productive">Productive</option>
@@ -1537,7 +1537,24 @@
 
   async function loadTrafficLogs() {
     try {
-      const response = await fetch(`/api/stats?page=${currentPage}&per_page=${perPage}`);
+      // Get filter values
+      const categoryFilter = document.getElementById('traffic-filter-category')?.value || '';
+      const clientFilter = document.getElementById('traffic-filter-client')?.value || '';
+      const domainFilter = document.getElementById('traffic-filter-domain')?.value || '';
+      
+      // Combine search filters (client IP or domain)
+      const searchFilter = clientFilter || domainFilter;
+      
+      // Build URL with filter parameters
+      let url = `/api/stats?page=${currentPage}&per_page=${perPage}`;
+      if (categoryFilter) {
+        url += `&category=${encodeURIComponent(categoryFilter)}`;
+      }
+      if (searchFilter) {
+        url += `&search=${encodeURIComponent(searchFilter)}`;
+      }
+      
+      const response = await fetch(url);
       const data = await response.json();
       const recentRows = Array.isArray(data.recent) ? data.recent : [];
 
@@ -1579,6 +1596,11 @@
       currentPage = newPage;
       loadTrafficLogs();
     }
+  }
+
+  function applyFilters() {
+    currentPage = 1; // Reset to first page when filters change
+    loadTrafficLogs();
   }
 
   async function clearTrafficLogs() {
