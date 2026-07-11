@@ -1389,6 +1389,10 @@
     try {
       const response = await fetch('/api/stats');
       const data = await response.json();
+      const systemMetrics = data.system_metrics || {};
+      const networkConfig = data.network_config || {};
+      const recentRows = Array.isArray(data.recent) ? data.recent : [];
+      const counts = Array.isArray(data.counts) ? data.counts : [];
 
       document.getElementById('stat-total').textContent = data.total;
       document.getElementById('stat-flagged').textContent = data.flagged;
@@ -1396,7 +1400,7 @@
       document.getElementById('stat-throttled').textContent = data.throttles?.length || 0;
 
       let html = '';
-      (data.counts || []).forEach(c => {
+      counts.forEach(c => {
         const percent = data.total > 0 ? Math.round((c.count / data.total) * 100) : 0;
         html += `
           <div style="text-align: center; padding: 1rem; background: var(--surface); border-radius: 8px;">
@@ -1409,7 +1413,7 @@
       document.getElementById('category-breakdown').innerHTML = html;
 
       let recentHtml = '';
-      (data.recent || []).slice(0, 10).forEach(r => {
+      recentRows.slice(0, 10).forEach(r => {
         const categoryClass = `category-badge ${String(r.category || 'unclassified').toLowerCase()}`;
         recentHtml += `
           <tr>
@@ -1430,18 +1434,18 @@
       }
 
       const sysCpu = document.getElementById('sys-cpu');
-      if (sysCpu && data.system_metrics) {
-        sysCpu.textContent = data.system_metrics.cpu_percent + '%';
+      if (sysCpu) {
+        sysCpu.textContent = `${systemMetrics.cpu_percent ?? 0}%`;
       }
 
       const sysMemory = document.getElementById('sys-memory');
-      if (sysMemory && data.system_metrics) {
-        sysMemory.textContent = data.system_metrics.memory_percent + '%';
+      if (sysMemory) {
+        sysMemory.textContent = `${systemMetrics.memory_percent ?? 0}%`;
       }
 
       const sysDisk = document.getElementById('sys-disk');
-      if (sysDisk && data.system_metrics) {
-        sysDisk.textContent = data.system_metrics.disk_percent + '%';
+      if (sysDisk) {
+        sysDisk.textContent = `${systemMetrics.disk_percent ?? 0}%`;
       }
 
       const proxyStatusBadge = document.getElementById('proxyStatusBadge');
@@ -1452,19 +1456,19 @@
       }
       
       // Update network configuration displays if on settings or wizard tab
-      if (data.network_config && (currentTab === 'settings' || currentTab === 'wizard')) {
-        syncConfigInputs(['setting-wan-interface'], data.network_config.wan_interface);
-        syncConfigInputs(['setting-lan-interface'], data.network_config.lan_interface);
-        syncConfigInputs(['setting-gateway-ip', 'wizard-gateway-ip'], data.network_config.gateway_ip);
-        syncConfigInputs(['wizard-dhcp-start'], data.network_config.dhcp_start);
-        syncConfigInputs(['wizard-dhcp-end'], data.network_config.dhcp_end);
+      if (currentTab === 'settings' || currentTab === 'wizard') {
+        syncConfigInputs(['setting-wan-interface'], networkConfig.wan_interface);
+        syncConfigInputs(['setting-lan-interface'], networkConfig.lan_interface);
+        syncConfigInputs(['setting-gateway-ip', 'wizard-gateway-ip'], networkConfig.gateway_ip);
+        syncConfigInputs(['wizard-dhcp-start'], networkConfig.dhcp_start);
+        syncConfigInputs(['wizard-dhcp-end'], networkConfig.dhcp_end);
         
         const dnsServersEl = document.getElementById('setting-dns-servers');
-        if (dnsServersEl && data.network_config.dns_servers) {
-          dnsServersEl.value = data.network_config.dns_servers;
+        if (dnsServersEl && networkConfig.dns_servers) {
+          dnsServersEl.value = networkConfig.dns_servers;
         }
         
-        updateInterfaceDropdowns(data.network_config.wan_interface, data.network_config.lan_interface);
+        updateInterfaceDropdowns(networkConfig.wan_interface, networkConfig.lan_interface);
       }
     } catch (e) {
       showToast('Failed to load statistics', 'error');
@@ -1633,9 +1637,10 @@
     try {
       const response = await fetch(`/api/stats?page=${currentPage}&per_page=${perPage}`);
       const data = await response.json();
+      const recentRows = Array.isArray(data.recent) ? data.recent : [];
 
       let trafficHtml = '';
-      (data.recent || []).forEach(r => {
+      recentRows.forEach(r => {
         const categoryClass = `category-badge ${String(r.category || 'unclassified').toLowerCase()}`;
         trafficHtml += `
           <tr>
@@ -1651,8 +1656,8 @@
 
       // Update pagination controls
       if (data.pagination) {
-        currentPage = data.pagination.page;
-        totalPages = data.pagination.total_pages;
+        currentPage = Math.max(1, Number(data.pagination.page) || 1);
+        totalPages = Math.max(1, Number(data.pagination.total_pages) || 1);
         document.getElementById('current-page').textContent = currentPage;
         document.getElementById('total-pages').textContent = totalPages;
         document.getElementById('total-items').textContent = data.pagination.total_items;

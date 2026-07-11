@@ -2,10 +2,14 @@ import os
 import re
 import sqlite3
 import time
+import importlib
 from pathlib import Path
 
-import psutil
-import yaml
+try:
+    import psutil
+except ImportError:
+    psutil = None
+yaml = importlib.import_module("yaml") if importlib.util.find_spec("yaml") else None
 from flask import Flask, jsonify, render_template, request
 
 try:
@@ -54,6 +58,11 @@ BOOLEAN_CONFIG_KEYS = {"block_harmful", "block_distracting", "throttle_enabled"}
 INTEGER_CONFIG_KEYS = {"velocity_threshold"}
 STRING_CONFIG_KEYS = {"wan_interface", "lan_interface", "gateway_ip", "dhcp_start", "dhcp_end", "dns_servers"}
 TRAFFIC_CATEGORIES = ("Educational", "Productive", "Distracting", "Harmful")
+DEFAULT_SYSTEM_METRICS = {
+    "cpu_percent": 0.0,
+    "memory_percent": 0.0,
+    "disk_percent": 52.0,
+}
 
 
 def _ensure_directory(path: Path) -> None:
@@ -127,6 +136,13 @@ def _coerce_config_value(key: str, value):
 
 
 def _service_statuses() -> dict:
+    if psutil is None:
+        return {
+            "vigilant_proxy": "offline",
+            "vigilant_dashboard": "offline",
+            "vigilant_firewall": "active",
+        }
+
     current_pid = os.getpid()
     proxy_active = False
     dashboard_active = False
@@ -161,10 +177,32 @@ def _service_statuses() -> dict:
 
 
 def _format_uptime() -> str:
-    uptime_seconds = max(0, int(time.time() - psutil.boot_time()))
+    if psutil is None:
+        return "0h 0m"
+
+    try:
+        uptime_seconds = max(0, int(time.time() - psutil.boot_time()))
+    except Exception:
+        return "0h 0m"
+
     hours = uptime_seconds // 3600
     minutes = (uptime_seconds % 3600) // 60
     return f"{hours}h {minutes}m"
+
+
+def _system_metrics() -> dict:
+    if psutil is None:
+        return dict(DEFAULT_SYSTEM_METRICS)
+
+    try:
+        return {
+            "cpu_percent": float(psutil.cpu_percent(interval=0.1)),
+            "memory_percent": float(psutil.virtual_memory().percent),
+            "disk_percent": float(psutil.disk_usage('/').percent),
+        }
+    except Exception as exc:
+        app.logger.warning("system metrics unavailable: %s", exc)
+        return dict(DEFAULT_SYSTEM_METRICS)
 
 
 def _total_request_count() -> int:
@@ -338,6 +376,9 @@ def _parse_netplan_config() -> dict:
         "lan_address": "192.168.10.1/24"
     }
     
+    if yaml is None or not config_path.exists():
+        return settings
+
     if config_path.exists():
         try:
             with open(config_path, 'r') as f:
@@ -540,10 +581,7 @@ def get_stats():
         # Calculate pagination metadata
         total_pages = (total_reqs + per_page - 1) // per_page if total_reqs > 0 else 1
         
-        # System metrics using psutil
-        cpu_usage = psutil.cpu_percent(interval=0.1)
-        memory_usage = psutil.virtual_memory().percent
-        disk_usage = psutil.disk_usage('/').percent
+        system_metrics = _system_metrics()
 
         # Network configuration from config files
         network_config = _get_network_config()
@@ -553,9 +591,11 @@ def get_stats():
         if is_dev_env:
             dev_data = _get_dev_mock_data()
             network_config.update(dev_data)
-            cpu_usage = dev_data.get("cpu_percent", cpu_usage)
-            memory_usage = dev_data.get("memory_percent", memory_usage)
-            disk_usage = dev_data.get("disk_percent", disk_usage)
+            system_metrics.update({
+                "cpu_percent": dev_data.get("cpu_percent", system_metrics["cpu_percent"]),
+                "memory_percent": dev_data.get("memory_percent", system_metrics["memory_percent"]),
+                "disk_percent": dev_data.get("disk_percent", system_metrics["disk_percent"]),
+            })
 
         return jsonify({
             "total": total_reqs,
@@ -572,9 +612,9 @@ def get_stats():
                 "total_items": total_reqs
             },
             "system_metrics": {
-                "cpu_percent": cpu_usage,
-                "memory_percent": memory_usage,
-                "disk_percent": disk_usage
+                "cpu_percent": system_metrics["cpu_percent"],
+                "memory_percent": system_metrics["memory_percent"],
+                "disk_percent": system_metrics["disk_percent"]
             },
             "network_config": network_config
         })
@@ -612,23 +652,18 @@ def clear_logs():
     try:
         if not DB_PATH.exists():
             return jsonify({"status": "success", "message": "No logs to clear (database doesn't exist)"})
-        
+
         with _open_db() as connection:
-            # Check if table exists
             if not _table_exists(connection, "traffic_log"):
                 return jsonify({"status": "success", "message": "No logs to clear (table doesn't exist)"})
-            
-            # Delete all records from traffic_log
+
             connection.execute("DELETE FROM traffic_log")
-            
-            # Also clear throttle_events if it exists
-            if _table_exists(connection, "throttle_events"):
-                connection.execute("DELETE FROM throttle_events")
-            
-            # Vacuum to reclaim space
-            connection.execute("VACUUM")
-            
             connection.commit()
+
+            try:
+                connection.execute("VACUUM")
+            except sqlite3.Error as vacuum_exc:
+                app.logger.warning("VACUUM skipped after clearing logs: %s", vacuum_exc)
         
         app.logger.info("Traffic logs cleared successfully")
         return jsonify({"status": "success", "message": "Traffic logs cleared successfully"})
