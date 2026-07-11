@@ -1,9 +1,11 @@
 import os
+import re
 import sqlite3
 import time
 from pathlib import Path
 
 import psutil
+import yaml
 from flask import Flask, jsonify, render_template, request
 
 try:
@@ -39,11 +41,18 @@ CONFIG_DEFAULTS = {
     "block_distracting": False,
     "throttle_enabled": True,
     "velocity_threshold": 30,
+    "wan_interface": "enp0s31f6",
+    "lan_interface": "wlp1s0",
+    "gateway_ip": "192.168.10.1",
+    "dhcp_start": "192.168.10.10",
+    "dhcp_end": "192.168.10.50",
+    "dns_servers": "8.8.8.8,8.8.4.4",
 }
 
 ALLOWED_CONFIG_KEYS = set(CONFIG_DEFAULTS)
 BOOLEAN_CONFIG_KEYS = {"block_harmful", "block_distracting", "throttle_enabled"}
 INTEGER_CONFIG_KEYS = {"velocity_threshold"}
+STRING_CONFIG_KEYS = {"wan_interface", "lan_interface", "gateway_ip", "dhcp_start", "dhcp_end", "dns_servers"}
 TRAFFIC_CATEGORIES = ("Educational", "Productive", "Distracting", "Harmful")
 
 
@@ -112,6 +121,8 @@ def _coerce_config_value(key: str, value):
         return _coerce_bool(value)
     if key in INTEGER_CONFIG_KEYS:
         return _coerce_int(value)
+    if key in STRING_CONFIG_KEYS:
+        return str(value).strip()
     raise ValueError(f"Unsupported configuration key: {key}")
 
 
@@ -276,6 +287,106 @@ def _connected_device_count() -> int:
         return 0
 
 
+def _parse_dnsmasq_config() -> dict:
+    """Parse dnsmasq.conf to extract network settings"""
+    config_path = BASE_DIR / "config" / "dnsmasq.conf"
+    if not config_path.exists():
+        config_path = Path("/etc/dnsmasq.conf")
+    
+    settings = {
+        "interface": "wlp1s0",
+        "listen_address": "192.168.10.1",
+        "dhcp_start": "192.168.10.10",
+        "dhcp_end": "192.168.10.50",
+        "dns_servers": ["8.8.8.8", "8.8.4.4"]
+    }
+    
+    if config_path.exists():
+        try:
+            with open(config_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("interface="):
+                        settings["interface"] = line.split("=", 1)[1].strip()
+                    elif line.startswith("listen-address="):
+                        settings["listen_address"] = line.split("=", 1)[1].strip()
+                    elif line.startswith("dhcp-range="):
+                        dhcp_range = line.split("=", 1)[1].strip()
+                        parts = dhcp_range.split(",")
+                        if len(parts) >= 2:
+                            settings["dhcp_start"] = parts[0].strip()
+                            settings["dhcp_end"] = parts[1].strip()
+                    elif line.startswith("server="):
+                        dns = line.split("=", 1)[1].strip()
+                        if dns not in settings["dns_servers"]:
+                            settings["dns_servers"].append(dns)
+        except Exception as exc:
+            app.logger.warning("Failed to parse dnsmasq.conf: %s", exc)
+    
+    return settings
+
+
+def _parse_netplan_config() -> dict:
+    """Parse netplan-config.yaml to extract interface settings"""
+    config_path = BASE_DIR / "config" / "netplan-config.yaml"
+    if not config_path.exists():
+        config_path = Path("/etc/netplan/00-installer-config.yaml")
+    
+    settings = {
+        "wan_interface": "enp0s31f6",
+        "lan_interface": "wlp1s0",
+        "lan_address": "192.168.10.1/24"
+    }
+    
+    if config_path.exists():
+        try:
+            with open(config_path, 'r') as f:
+                netplan_config = yaml.safe_load(f)
+                if netplan_config and "network" in netplan_config:
+                    ethernets = netplan_config["network"].get("ethernets", {})
+                    for iface_name, iface_config in ethernets.items():
+                        if iface_config.get("dhcp4") == True:
+                            settings["wan_interface"] = iface_name
+                        elif "addresses" in iface_config:
+                            settings["lan_interface"] = iface_name
+                            settings["lan_address"] = iface_config["addresses"][0] if iface_config["addresses"] else "192.168.10.1/24"
+        except Exception as exc:
+            app.logger.warning("Failed to parse netplan-config.yaml: %s", exc)
+    
+    return settings
+
+
+def _get_network_config() -> dict:
+    """Get network configuration from config files or use dev defaults"""
+    dnsmasq_settings = _parse_dnsmasq_config()
+    netplan_settings = _parse_netplan_config()
+    
+    # Merge settings, preferring netplan for interfaces
+    return {
+        "wan_interface": netplan_settings.get("wan_interface", "enp0s31f6"),
+        "lan_interface": dnsmasq_settings.get("interface", netplan_settings.get("lan_interface", "wlp1s0")),
+        "gateway_ip": dnsmasq_settings.get("listen_address", "192.168.10.1"),
+        "dhcp_start": dnsmasq_settings.get("dhcp_start", "192.168.10.10"),
+        "dhcp_end": dnsmasq_settings.get("dhcp_end", "192.168.10.50"),
+        "dns_servers": ",".join(dnsmasq_settings.get("dns_servers", ["8.8.8.8", "8.8.4.4"]))
+    }
+
+
+def _get_dev_mock_data() -> dict:
+    """Return mock data for local development environment"""
+    return {
+        "wan_interface": "en0",
+        "lan_interface": "en1",
+        "gateway_ip": "192.168.10.1",
+        "dhcp_start": "192.168.10.10",
+        "dhcp_end": "192.168.10.50",
+        "dns_servers": "8.8.8.8,8.8.4.4",
+        "cpu_percent": 12.5,
+        "memory_percent": 45.2,
+        "disk_percent": 62.8
+    }
+
+
 def init_config_db() -> None:
     with _open_db() as connection:
         connection.execute(
@@ -434,6 +545,18 @@ def get_stats():
         memory_usage = psutil.virtual_memory().percent
         disk_usage = psutil.disk_usage('/').percent
 
+        # Network configuration from config files
+        network_config = _get_network_config()
+        
+        # Use dev mock data if in local development environment
+        is_dev_env = DB_PATH == LOCAL_DB_PATH
+        if is_dev_env:
+            dev_data = _get_dev_mock_data()
+            network_config.update(dev_data)
+            cpu_usage = dev_data.get("cpu_percent", cpu_usage)
+            memory_usage = dev_data.get("memory_percent", memory_usage)
+            disk_usage = dev_data.get("disk_percent", disk_usage)
+
         return jsonify({
             "total": total_reqs,
             "flagged": blocked_reqs,
@@ -452,7 +575,8 @@ def get_stats():
                 "cpu_percent": cpu_usage,
                 "memory_percent": memory_usage,
                 "disk_percent": disk_usage
-            }
+            },
+            "network_config": network_config
         })
 
     except Exception as exc:
@@ -482,10 +606,56 @@ def api_reset():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route('/api/logs/clear', methods=['POST'])
+def clear_logs():
+    """Clear all traffic logs and vacuum the database"""
+    try:
+        if not DB_PATH.exists():
+            return jsonify({"status": "success", "message": "No logs to clear (database doesn't exist)"})
+        
+        with _open_db() as connection:
+            # Check if table exists
+            if not _table_exists(connection, "traffic_log"):
+                return jsonify({"status": "success", "message": "No logs to clear (table doesn't exist)"})
+            
+            # Delete all records from traffic_log
+            connection.execute("DELETE FROM traffic_log")
+            
+            # Also clear throttle_events if it exists
+            if _table_exists(connection, "throttle_events"):
+                connection.execute("DELETE FROM throttle_events")
+            
+            # Vacuum to reclaim space
+            connection.execute("VACUUM")
+            
+            connection.commit()
+        
+        app.logger.info("Traffic logs cleared successfully")
+        return jsonify({"status": "success", "message": "Traffic logs cleared successfully"})
+    except sqlite3.Error as exc:
+        app.logger.error("Failed to clear logs: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+    except Exception as exc:
+        app.logger.error("Unexpected error clearing logs: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/api/config", methods=["GET", "POST"])
 def api_config():
     if request.method == "GET":
-        return jsonify(load_config())
+        config = load_config()
+        # Add network configuration from config files
+        network_config = _get_network_config()
+        
+        # Use dev mock data if in local development environment
+        is_dev_env = DB_PATH == LOCAL_DB_PATH
+        if is_dev_env:
+            dev_data = _get_dev_mock_data()
+            network_config.update(dev_data)
+        
+        # Merge network config into response
+        config.update(network_config)
+        return jsonify(config)
 
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
@@ -510,7 +680,14 @@ def api_config():
 
         save_config(coerced_updates)
 
-    return jsonify(load_config())
+    config = load_config()
+    network_config = _get_network_config()
+    is_dev_env = DB_PATH == LOCAL_DB_PATH
+    if is_dev_env:
+        dev_data = _get_dev_mock_data()
+        network_config.update(dev_data)
+    config.update(network_config)
+    return jsonify(config)
 
 
 def _init_traffic_db() -> None:
@@ -548,7 +725,7 @@ def _init_traffic_db() -> None:
 
 
 def _populate_mock_traffic_data() -> None:
-    """Populate traffic_log with 25 rows of mock data for local development"""
+    """Populate traffic_log with 35 rows of mock data for local development"""
     import random
     
     mock_categories = ["Educational", "Productive", "Distracting", "Harmful", "Uncategorized"]
@@ -567,9 +744,9 @@ def _populate_mock_traffic_data() -> None:
         if count > 0:
             return  # Already has data
         
-        # Insert 25 mock rows
+        # Insert 35 mock rows
         now = time.time()
-        for i in range(25):
+        for i in range(35):
             timestamp = now - (i * 300)  # Stagger timestamps by 5 minutes
             client_ip = random.choice(mock_client_ips)
             host = random.choice(mock_hosts)

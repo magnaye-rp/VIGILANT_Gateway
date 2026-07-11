@@ -1450,6 +1450,22 @@
         proxyStatusBadge.textContent = proxyActive ? 'Active' : 'Inactive';
         proxyStatusBadge.className = proxyActive ? 'badge success' : 'badge error';
       }
+      
+      // Update network configuration displays if on settings or wizard tab
+      if (data.network_config && (currentTab === 'settings' || currentTab === 'wizard')) {
+        syncConfigInputs(['setting-wan-interface'], data.network_config.wan_interface);
+        syncConfigInputs(['setting-lan-interface'], data.network_config.lan_interface);
+        syncConfigInputs(['setting-gateway-ip', 'wizard-gateway-ip'], data.network_config.gateway_ip);
+        syncConfigInputs(['wizard-dhcp-start'], data.network_config.dhcp_start);
+        syncConfigInputs(['wizard-dhcp-end'], data.network_config.dhcp_end);
+        
+        const dnsServersEl = document.getElementById('setting-dns-servers');
+        if (dnsServersEl && data.network_config.dns_servers) {
+          dnsServersEl.value = data.network_config.dns_servers;
+        }
+        
+        updateInterfaceDropdowns(data.network_config.wan_interface, data.network_config.lan_interface);
+      }
     } catch (e) {
       showToast('Failed to load statistics', 'error');
     }
@@ -1488,12 +1504,75 @@
       }
 
       const config = await response.json();
+      
+      // Sync filtering settings
       syncConfigInputs(['blockHarmful', 'setting-block-harmful', 'block-harmful', 'wizHarmful'], config.block_harmful);
       syncConfigInputs(['blockDistracting', 'setting-block-distracting', 'block-distracting', 'wizDistracting'], config.block_distracting);
       syncConfigInputs(['throttleEnabled', 'setting-throttle-enabled', 'throttle-enabled'], config.throttle_enabled);
       syncConfigInputs(['velocityThreshold', 'setting-velocity-threshold', 'wizard-throttle-threshold'], config.velocity_threshold);
+      
+      // Sync network settings
+      syncConfigInputs(['setting-wan-interface'], config.wan_interface);
+      syncConfigInputs(['setting-lan-interface'], config.lan_interface);
+      syncConfigInputs(['setting-gateway-ip', 'wizard-gateway-ip'], config.gateway_ip);
+      syncConfigInputs(['wizard-dhcp-start'], config.dhcp_start);
+      syncConfigInputs(['wizard-dhcp-end'], config.dhcp_end);
+      
+      // Sync DNS servers
+      const dnsServersEl = document.getElementById('setting-dns-servers');
+      if (dnsServersEl && config.dns_servers) {
+        dnsServersEl.value = config.dns_servers;
+      }
+      
+      // Update network interface dropdowns with actual values
+      updateInterfaceDropdowns(config.wan_interface, config.lan_interface);
+      
     } catch (error) {
       showToast('Failed to load configuration', 'danger');
+    }
+  }
+  
+  function updateInterfaceDropdowns(wanIface, lanIface) {
+    // Update WAN interface dropdown
+    const wanSelect = document.getElementById('setting-wan-interface');
+    if (wanSelect) {
+      // Check if the interface already exists in options
+      let optionExists = false;
+      for (let opt of wanSelect.options) {
+        if (opt.value === wanIface) {
+          optionExists = true;
+          opt.selected = true;
+          break;
+        }
+      }
+      // If not exists, add it
+      if (!optionExists && wanIface) {
+        const newOption = document.createElement('option');
+        newOption.value = wanIface;
+        newOption.textContent = wanIface;
+        newOption.selected = true;
+        wanSelect.appendChild(newOption);
+      }
+    }
+    
+    // Update LAN interface dropdown
+    const lanSelect = document.getElementById('setting-lan-interface');
+    if (lanSelect) {
+      let optionExists = false;
+      for (let opt of lanSelect.options) {
+        if (opt.value === lanIface) {
+          optionExists = true;
+          opt.selected = true;
+          break;
+        }
+      }
+      if (!optionExists && lanIface) {
+        const newOption = document.createElement('option');
+        newOption.value = lanIface;
+        newOption.textContent = lanIface;
+        newOption.selected = true;
+        lanSelect.appendChild(newOption);
+      }
     }
   }
 
@@ -1504,12 +1583,27 @@
     const blockDistractingEl = getConfigInput(['blockDistracting', 'setting-block-distracting', 'block-distracting']);
     const throttleEnabledEl = getConfigInput(['throttleEnabled', 'setting-throttle-enabled', 'throttle-enabled']);
     const velocityThresholdEl = getConfigInput(['velocityThreshold', 'setting-velocity-threshold', 'wizard-throttle-threshold']);
+    
+    // Network settings
+    const wanInterfaceEl = document.getElementById('setting-wan-interface');
+    const lanInterfaceEl = document.getElementById('setting-lan-interface');
+    const gatewayIpEl = getConfigInput(['setting-gateway-ip', 'wizard-gateway-ip']);
+    const dhcpStartEl = document.getElementById('wizard-dhcp-start');
+    const dhcpEndEl = document.getElementById('wizard-dhcp-end');
+    const dnsServersEl = document.getElementById('setting-dns-servers');
 
     const payload = {
       block_harmful: Boolean(blockHarmfulEl?.checked),
       block_distracting: Boolean(blockDistractingEl?.checked),
       throttle_enabled: Boolean(throttleEnabledEl?.checked),
       velocity_threshold: Number.parseInt(velocityThresholdEl?.value || '0', 10) || 0,
+      // Network configuration
+      wan_interface: wanInterfaceEl?.value || 'enp0s31f6',
+      lan_interface: lanInterfaceEl?.value || 'wlp1s0',
+      gateway_ip: gatewayIpEl?.value || '192.168.10.1',
+      dhcp_start: dhcpStartEl?.value || '192.168.10.10',
+      dhcp_end: dhcpEndEl?.value || '192.168.10.50',
+      dns_servers: dnsServersEl?.value || '8.8.8.8,8.8.4.4'
     };
 
     try {
@@ -1582,11 +1676,14 @@
 
   async function clearTrafficLogs() {
     pendingConfirmAction = async () => {
-      const response = await fetch('/api/clear', { method: 'POST' });
+      const response = await fetch('/api/logs/clear', { method: 'POST' });
       if (response.ok) {
-        showToast('Traffic logs cleared', 'success');
+        showToast('Logs cleared successfully', 'success');
         refreshStats();
         loadTrafficLogs();
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        showToast(errorData.error || 'Failed to clear logs', 'error');
       }
     };
     showConfirmDialog('Clear all traffic logs and throttle events? This cannot be undone.', 'Clear');
