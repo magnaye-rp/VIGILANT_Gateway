@@ -41,28 +41,30 @@ if PRODUCTION_DB_PATH.exists() and os.access(PRODUCTION_DB_PATH.parent, os.W_OK)
 else:
     DB_PATH = LOCAL_DB_PATH
 
-CONFIG_DEFAULTS = {
-    "block_harmful": True,
-    "block_distracting": False,
-    "throttle_enabled": True,
-    "velocity_threshold": 30,
+DEFAULT_CONFIG = {
     "upstream_interface": "enp0s31f6",
     "distribution_interface": "wlp1s0",
     "gateway_ip": "192.168.10.1",
     "dhcp_start": "192.168.10.10",
     "dhcp_end": "192.168.10.50",
-    "dns_servers": "8.8.8.8,8.8.4.4",
-    # Advanced fields
+    "upstream_dns": "8.8.8.8\n8.8.4.4",
+    "block_harmful": True,
+    "block_distracting": False,
     "nlp_accuracy": "balanced",
-    "throttle_rate": 256,
-    "enable_https": True,
-    "log_retention": 30,
+    "throttle_enabled": True,
+    "request_threshold": 30,
+    "throttle_rate": "",
+    "enable_https": False,
+    "log_retention": ""
 }
+
+# Maintain backward compatibility
+CONFIG_DEFAULTS = DEFAULT_CONFIG
 
 ALLOWED_CONFIG_KEYS = set(CONFIG_DEFAULTS)
 BOOLEAN_CONFIG_KEYS = {"block_harmful", "block_distracting", "throttle_enabled", "enable_https"}
-INTEGER_CONFIG_KEYS = {"velocity_threshold", "throttle_rate", "log_retention"}
-STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "dns_servers", "nlp_accuracy"}
+INTEGER_CONFIG_KEYS = {"request_threshold", "throttle_rate", "log_retention"}
+STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "upstream_dns", "nlp_accuracy"}
 TRAFFIC_CATEGORIES = ("Educational", "Productive", "Distracting", "Harmful")
 DEFAULT_SYSTEM_METRICS = {
     "cpu_percent": 0.0,
@@ -415,7 +417,7 @@ def _get_network_config() -> dict:
         "gateway_ip": dnsmasq_settings.get("listen_address", "192.168.10.1"),
         "dhcp_start": dnsmasq_settings.get("dhcp_start", "192.168.10.10"),
         "dhcp_end": dnsmasq_settings.get("dhcp_end", "192.168.10.50"),
-        "dns_servers": ",".join(dnsmasq_settings.get("dns_servers", ["8.8.8.8", "8.8.4.4"]))
+        "upstream_dns": "\n".join(dnsmasq_settings.get("dns_servers", ["8.8.8.8", "8.8.4.4"]))
     }
 
 
@@ -437,7 +439,7 @@ def _write_dnsmasq_config(config: dict) -> bool:
         
         # Build new config content
         new_config = []
-        dns_servers = config.get("dns_servers", "8.8.8.8,8.8.4.4").split(",")
+        dns_servers = config.get("upstream_dns", "8.8.8.8\n8.8.4.4").split("\n")
         
         new_config.append(f"# VIGILANT Gateway dnsmasq configuration\n")
         new_config.append(f"# Auto-generated on {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
@@ -842,7 +844,7 @@ def api_config():
         save_config(coerced_updates)
         
         # Write network configuration files if network settings changed
-        network_keys = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "dns_servers"}
+        network_keys = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "upstream_dns"}
         if any(key in coerced_updates for key in network_keys):
             # Get full config for file writing
             full_config = load_config()

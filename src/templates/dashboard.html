@@ -1364,7 +1364,7 @@
       syncConfigInputs(['block-harmful'], config.block_harmful);
       syncConfigInputs(['block-distracting'], config.block_distracting);
       syncConfigInputs(['throttle-enabled'], config.throttle_enabled);
-      syncConfigInputs(['throttle-threshold'], config.velocity_threshold);
+      syncConfigInputs(['throttle-threshold'], config.request_threshold);
       
       // Sync network settings
       syncConfigInputs(['upstream-interface'], config.upstream_interface);
@@ -1375,14 +1375,14 @@
       
       // Sync DNS servers
       const dnsServersEl = document.getElementById('dns-servers');
-      if (dnsServersEl && config.dns_servers) {
-        dnsServersEl.value = config.dns_servers;
+      if (dnsServersEl && config.upstream_dns) {
+        dnsServersEl.value = config.upstream_dns;
       }
       
       // Sync advanced settings
-      syncConfigInputs(['nlp-mode'], config.nlp_mode);
+      syncConfigInputs(['nlp-mode'], config.nlp_accuracy);
       syncConfigInputs(['throttle-rate'], config.throttle_rate);
-      syncConfigInputs(['https-enabled'], config.https_enabled);
+      syncConfigInputs(['https-enabled'], config.enable_https);
       syncConfigInputs(['log-retention'], config.log_retention);
       
       // Update network interface dropdowns with actual values
@@ -1471,7 +1471,7 @@
   }
 
   async function saveUnifiedConfig(e) {
-    e?.preventDefault();
+    e.preventDefault();
 
     const blockHarmfulEl = document.getElementById('block-harmful');
     const blockDistractingEl = document.getElementById('block-distracting');
@@ -1496,18 +1496,18 @@
       block_harmful: Boolean(blockHarmfulEl?.checked),
       block_distracting: Boolean(blockDistractingEl?.checked),
       throttle_enabled: Boolean(throttleEnabledEl?.checked),
-      velocity_threshold: Number.parseInt(velocityThresholdEl?.value || '0', 10) || 0,
+      request_threshold: Number.parseInt(velocityThresholdEl?.value || '0', 10) || 0,
       // Network configuration
       upstream_interface: upstreamInterfaceEl?.value || 'enp0s31f6',
       distribution_interface: distributionInterfaceEl?.value || 'wlp1s0',
       gateway_ip: gatewayIpEl?.value || '192.168.10.1',
       dhcp_start: dhcpStartEl?.value || '192.168.10.10',
       dhcp_end: dhcpEndEl?.value || '192.168.10.50',
-      dns_servers: dnsServersEl?.value || '8.8.8.8,8.8.4.4',
+      upstream_dns: dnsServersEl?.value || '8.8.8.8\n8.8.4.4',
       // Advanced configuration
-      nlp_mode: nlpModeEl?.value || 'balanced',
+      nlp_accuracy: nlpModeEl?.value || 'balanced',
       throttle_rate: Number.parseInt(throttleRateEl?.value || '256', 10) || 256,
-      https_enabled: Boolean(httpsEnabledEl?.checked),
+      enable_https: Boolean(httpsEnabledEl?.checked),
       log_retention: Number.parseInt(logRetentionEl?.value || '30', 10) || 30
     };
 
