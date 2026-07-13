@@ -12,32 +12,19 @@ DB_PATH            = "/home/vigilant_admin/vigilant/logs/vigilant.db"
 VELOCITY_WINDOW    = 60
 MIN_REQUESTS_BASELINE = 10
 
-SOCIAL_DOMAINS = {
+# Default values (will be overridden by database config)
+DEFAULT_VELOCITY_THRESHOLD = 1.5
+DEFAULT_THROTTLE_RATE = "512kbit"
+DEFAULT_PINNED_DOMAINS = "instagram.com,facebook.com,tiktok.com,x.com,twitter.com"
+
+# Default social domains for doomscroll detection
+DEFAULT_SOCIAL_DOMAINS = {
     "facebook.com", "www.facebook.com",
     "twitter.com", "x.com", "www.x.com",
     "tiktok.com", "www.tiktok.com",
     "instagram.com", "www.instagram.com",
     "reddit.com", "www.reddit.com",
     "youtube.com", "www.youtube.com",
-}
-
-# Default values (will be overridden by database config)
-DEFAULT_VELOCITY_THRESHOLD = 1.5
-DEFAULT_THROTTLE_RATE = "512kbit"
-DEFAULT_PINNED_DOMAINS = "instagram.com,facebook.com,tiktok.com,x.com,twitter.com"
-
-DOMAIN_HINTS = {
-    "Educational":  {"wikipedia.org", "khanacademy.org", "coursera.org",
-                     "edx.org", "scholar.google.com", "researchgate.net",
-                     "academia.edu", "jstor.org", "pubmed.ncbi.nlm.nih.gov",
-                     "stackoverflow.com", "docs.python.org", "arxiv.org"},
-    "Productive":   {"github.com", "gitlab.com", "notion.so", "trello.com",
-                     "slack.com", "linear.app", "jira.atlassian.com",
-                     "drive.google.com", "docs.google.com", "sheets.google.com"},
-    "Distracting":  {"reddit.com", "twitter.com", "x.com", "tiktok.com",
-                     "instagram.com", "facebook.com", "youtube.com",
-                     "twitch.tv", "9gag.com", "buzzfeed.com"},
-    "Harmful":      set(),
 }
 
 CATEGORY_KEYWORDS = {
@@ -146,6 +133,70 @@ def load_proxy_config():
             'pinned_domains': set(DEFAULT_PINNED_DOMAINS.split(','))
         }
 
+
+def load_category_hints():
+    """Load category hints from database"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Check if table exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='category_hints'")
+        if not cursor.fetchone():
+            conn.close()
+            # Return empty dict if table doesn't exist
+            return {}
+        
+        cursor.execute("SELECT category, domain FROM category_hints")
+        rows = cursor.fetchall()
+        
+        category_hints = {}
+        for category, domain in rows:
+            if category not in category_hints:
+                category_hints[category] = set()
+            category_hints[category].add(domain)
+        
+        conn.close()
+        return category_hints
+    except Exception as e:
+        print(f"[VIGILANT] Error loading category hints from database: {e}, using empty set")
+        return {}
+
+
+def load_social_domains():
+    """Load social domains from category_hints (Distracting category)"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Check if table exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='category_hints'")
+        if not cursor.fetchone():
+            conn.close()
+            return DEFAULT_SOCIAL_DOMAINS
+        
+        # Load domains from Distracting category
+        cursor.execute("SELECT domain FROM category_hints WHERE category = 'Distracting'")
+        rows = cursor.fetchall()
+        
+        social_domains = set()
+        for (domain,) in rows:
+            social_domains.add(domain)
+            # Also add www. variant
+            if not domain.startswith('www.'):
+                social_domains.add(f'www.{domain}')
+        
+        conn.close()
+        
+        # If no domains found, use defaults
+        if not social_domains:
+            return DEFAULT_SOCIAL_DOMAINS
+        
+        return social_domains
+    except Exception as e:
+        print(f"[VIGILANT] Error loading social domains from database: {e}, using defaults")
+        return DEFAULT_SOCIAL_DOMAINS
+
 def log_request(client_ip, host, path, method, category, flagged, entities):
     with db_lock:
         conn = sqlite3.connect(DB_PATH)
@@ -192,9 +243,10 @@ def compute_velocity(client_ip):
 def should_throttle(client_ip, host):
     config = load_proxy_config()
     velocity_threshold = config['velocity_threshold']
+    social_domains = load_social_domains()
     
     base = ".".join(host.lstrip("www.").split(".")[-2:])
-    if not any(base in d for d in SOCIAL_DOMAINS):
+    if not any(base in d for d in social_domains):
         return False, 0, 0
     rpm_now, rpm_base = compute_velocity(client_ip)
     if session_totals[client_ip] < MIN_REQUESTS_BASELINE:
@@ -204,8 +256,9 @@ def should_throttle(client_ip, host):
 
 # ─── NLP Categorizer ──────────────────────────────────────────────
 def get_domain_hint(host):
+    category_hints = load_category_hints()
     clean = host.lstrip("www.")
-    for category, domains in DOMAIN_HINTS.items():
+    for category, domains in category_hints.items():
         if any(clean == d or clean.endswith("." + d) for d in domains):
             return category, 3
     return None, 0
@@ -377,7 +430,8 @@ class VIGILANTAddon:
                           f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
                 
                 # If SNI belongs to bypassed domains, log fallback request
-                if any(base in d for d in SOCIAL_DOMAINS):
+                social_domains = load_social_domains()
+                if any(base in d for d in social_domains):
                     log_request(client_ip, sni, "(TLS_SNI)", "TLS", "Mobile_Bypass", False, [])
                     print(f"[VIGILANT] TLS SNI bypass logged: {client_ip} -> {sni}")
         except AttributeError as e:

@@ -595,6 +595,77 @@ def init_config_db() -> None:
         )
 
 
+def init_category_hints_db() -> None:
+    """Initialize category_hints table with default domain mappings"""
+    try:
+        with _open_db() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS category_hints (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category TEXT NOT NULL,
+                    domain TEXT NOT NULL UNIQUE
+                )
+                """
+            )
+
+            # Check if table is empty
+            count = connection.execute("SELECT COUNT(*) FROM category_hints").fetchone()[0]
+            if count > 0:
+                return  # Already has data
+
+            # Default category hints from vigilant_addon.py
+            default_hints = [
+                ("Educational", "wikipedia.org"),
+                ("Educational", "khanacademy.org"),
+                ("Educational", "coursera.org"),
+                ("Educational", "edx.org"),
+                ("Educational", "scholar.google.com"),
+                ("Educational", "researchgate.net"),
+                ("Educational", "academia.edu"),
+                ("Educational", "jstor.org"),
+                ("Educational", "pubmed.ncbi.nlm.nih.gov"),
+                ("Educational", "stackoverflow.com"),
+                ("Educational", "docs.python.org"),
+                ("Educational", "arxiv.org"),
+                ("Productive", "github.com"),
+                ("Productive", "gitlab.com"),
+                ("Productive", "notion.so"),
+                ("Productive", "trello.com"),
+                ("Productive", "slack.com"),
+                ("Productive", "linear.app"),
+                ("Productive", "jira.atlassian.com"),
+                ("Productive", "drive.google.com"),
+                ("Productive", "docs.google.com"),
+                ("Productive", "sheets.google.com"),
+                ("Distracting", "reddit.com"),
+                ("Distracting", "twitter.com"),
+                ("Distracting", "x.com"),
+                ("Distracting", "tiktok.com"),
+                ("Distracting", "instagram.com"),
+                ("Distracting", "facebook.com"),
+                ("Distracting", "youtube.com"),
+                ("Distracting", "twitch.tv"),
+                ("Distracting", "9gag.com"),
+                ("Distracting", "buzzfeed.com"),
+            ]
+
+            for category, domain in default_hints:
+                connection.execute(
+                    "INSERT OR IGNORE INTO category_hints (category, domain) VALUES (?, ?)",
+                    (category, domain)
+                )
+
+            connection.commit()
+            app.logger.info("Initialized category_hints table with default mappings")
+    except sqlite3.Error as exc:
+        app.logger.debug(
+            "init_category_hints_db: could not create or seed category_hints table "
+            "(access violation or locked database) — %s",
+            exc,
+        )
+
+
 def load_config() -> dict:
     config = dict(CONFIG_DEFAULTS)
 
@@ -1074,6 +1145,98 @@ def save_proxy_config():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route("/api/categories/hints", methods=["GET"])
+def get_category_hints():
+    """Get all category hints mappings"""
+    try:
+        if not DB_PATH.exists():
+            return jsonify([])
+
+        with _open_db() as connection:
+            if not _table_exists(connection, "category_hints"):
+                return jsonify([])
+
+            rows = connection.execute(
+                "SELECT id, category, domain FROM category_hints ORDER BY category, domain"
+            ).fetchall()
+
+            hints = [{"id": row[0], "category": row[1], "domain": row[2]} for row in rows]
+            return jsonify(hints)
+    except sqlite3.Error as exc:
+        app.logger.error("Failed to get category hints: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/categories/hints", methods=["POST"])
+def add_category_hint():
+    """Add a category hint mapping"""
+    try:
+        payload = request.get_json(silent=True) or {}
+        if not isinstance(payload, dict):
+            return jsonify({"error": "JSON object payload is required"}), 400
+
+        category = payload.get("category", "").strip()
+        domain = payload.get("domain", "").strip().lower()
+
+        if not category:
+            return jsonify({"error": "Category is required"}), 400
+        if not domain:
+            return jsonify({"error": "Domain is required"}), 400
+
+        valid_categories = ["Educational", "Productive", "Distracting", "Harmful"]
+        if category not in valid_categories:
+            return jsonify({"error": f"Invalid category. Must be one of: {', '.join(valid_categories)}"}), 400
+
+        with _open_db() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS category_hints (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category TEXT NOT NULL,
+                    domain TEXT NOT NULL UNIQUE
+                )
+                """
+            )
+
+            try:
+                cursor = connection.execute(
+                    "INSERT INTO category_hints (category, domain) VALUES (?, ?)",
+                    (category, domain)
+                )
+                connection.commit()
+                return jsonify({"id": cursor.lastrowid, "category": category, "domain": domain}), 201
+            except sqlite3.IntegrityError:
+                return jsonify({"error": "Domain already exists in category hints"}), 409
+
+    except sqlite3.Error as exc:
+        app.logger.error("Failed to add category hint: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/categories/hints/<int:hint_id>", methods=["DELETE"])
+def delete_category_hint(hint_id):
+    """Delete a category hint mapping"""
+    try:
+        with _open_db() as connection:
+            if not _table_exists(connection, "category_hints"):
+                return jsonify({"error": "Category hints table does not exist"}), 404
+
+            cursor = connection.execute(
+                "DELETE FROM category_hints WHERE id = ?",
+                (hint_id,)
+            )
+            connection.commit()
+
+            if cursor.rowcount == 0:
+                return jsonify({"error": "Category hint not found"}), 404
+
+            return jsonify({"status": "success", "message": "Category hint deleted"}), 200
+
+    except sqlite3.Error as exc:
+        app.logger.error("Failed to delete category hint: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/api/system/control", methods=["POST"])
 def api_system_control():
     """Execute system control commands for service management"""
@@ -1296,6 +1459,11 @@ def _compile_config_integrity() -> None:
         init_config_db()
     except Exception as exc:
         app.logger.debug("_compile_config_integrity: init_config_db skipped — %s", exc)
+
+    try:
+        init_category_hints_db()
+    except Exception as exc:
+        app.logger.debug("_compile_config_integrity: init_category_hints_db skipped — %s", exc)
 
     try:
         current_config = load_config()
