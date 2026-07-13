@@ -920,6 +920,92 @@ def api_config():
     return jsonify({"status": "success", "message": "Configuration applied successfully", "config": config})
 
 
+@app.route("/api/keywords", methods=["GET"])
+def get_keywords():
+    """Get all keywords from blacklist"""
+    try:
+        if not DB_PATH.exists():
+            return jsonify([])
+
+        with _open_db() as connection:
+            if not _table_exists(connection, "keyword_blacklist"):
+                return jsonify([])
+
+            rows = connection.execute(
+                "SELECT id, keyword FROM keyword_blacklist ORDER BY keyword"
+            ).fetchall()
+
+            keywords = [{"id": row[0], "keyword": row[1]} for row in rows]
+            return jsonify(keywords)
+    except sqlite3.Error as exc:
+        app.logger.error("Failed to get keywords: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/keywords", methods=["POST"])
+def add_keyword():
+    """Add a keyword to blacklist"""
+    try:
+        payload = request.get_json(silent=True) or {}
+        if not isinstance(payload, dict):
+            return jsonify({"error": "JSON object payload is required"}), 400
+
+        keyword = payload.get("keyword", "").strip()
+        if not keyword:
+            return jsonify({"error": "Keyword is required"}), 400
+
+        keyword = keyword.lower()
+
+        with _open_db() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS keyword_blacklist (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    keyword TEXT NOT NULL UNIQUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+
+            try:
+                cursor = connection.execute(
+                    "INSERT INTO keyword_blacklist (keyword) VALUES (?)",
+                    (keyword,)
+                )
+                connection.commit()
+                return jsonify({"id": cursor.lastrowid, "keyword": keyword}), 201
+            except sqlite3.IntegrityError:
+                return jsonify({"error": "Keyword already exists"}), 409
+
+    except sqlite3.Error as exc:
+        app.logger.error("Failed to add keyword: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/keywords/<int:keyword_id>", methods=["DELETE"])
+def delete_keyword(keyword_id):
+    """Delete a keyword from blacklist"""
+    try:
+        with _open_db() as connection:
+            if not _table_exists(connection, "keyword_blacklist"):
+                return jsonify({"error": "Keyword blacklist table does not exist"}), 404
+
+            cursor = connection.execute(
+                "DELETE FROM keyword_blacklist WHERE id = ?",
+                (keyword_id,)
+            )
+            connection.commit()
+
+            if cursor.rowcount == 0:
+                return jsonify({"error": "Keyword not found"}), 404
+
+            return jsonify({"status": "success", "message": "Keyword deleted"}), 200
+
+    except sqlite3.Error as exc:
+        app.logger.error("Failed to delete keyword: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/api/system/control", methods=["POST"])
 def api_system_control():
     """Execute system control commands for service management"""
@@ -1064,6 +1150,15 @@ def _init_traffic_db() -> None:
                     rpm_current REAL,
                     rpm_baseline REAL,
                     action      TEXT
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS keyword_blacklist (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    keyword TEXT NOT NULL UNIQUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 """
             )
