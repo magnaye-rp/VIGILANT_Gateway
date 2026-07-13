@@ -594,6 +594,9 @@ def init_config_db() -> None:
             exc,
         )
 
+    # Initialize category hints table with default domain mappings
+    init_category_hints_db()
+
 
 def init_category_hints_db() -> None:
     """Initialize category_hints table with default domain mappings"""

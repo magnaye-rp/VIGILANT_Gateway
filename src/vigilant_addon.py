@@ -458,37 +458,50 @@ class VIGILANTAddon:
             print(f"[VIGILANT] TLS PASSTHROUGH: {host} from {client_ip} (pinned domain)")
             return
 
-        # Keyword blacklist inspection - request-level payload evaluation
-        try:
-            with db_lock:
-                conn = sqlite3.connect(DB_PATH)
-                cursor = conn.execute("SELECT keyword FROM keyword_blacklist")
-                keywords = [row[0].lower() for row in cursor.fetchall()]
-                conn.close()
+        # STEP 1: Exact Domain Evaluation - Check category hints for strict override
+        # This takes precedence over all heuristic/keyword rules
+        category_hints = load_category_hints()
+        domain_category = None
+        
+        for category, domains in category_hints.items():
+            if any(clean_host == d or clean_host.endswith("." + d) for d in domains):
+                domain_category = category
+                print(f"[VIGILANT] DOMAIN OVERRIDE: {host} -> {category} (category hint match)")
+                break
+        
+        # STEP 2: Strict Keyword Scan - Only if domain is unmapped
+        # Fully decode URL parameters and enforce clear context boundary checks
+        if domain_category is None:
+            try:
+                with db_lock:
+                    conn = sqlite3.connect(DB_PATH)
+                    cursor = conn.execute("SELECT keyword FROM keyword_blacklist")
+                    keywords = [row[0].lower() for row in cursor.fetchall()]
+                    conn.close()
 
-            if keywords:
-                # Decode URL to handle percent-encoding (e.g., %20 for spaces)
-                decoded_url = urllib.parse.unquote(flow.request.pretty_url).lower()
-                
-                # Extract raw request body text, stripping JSON structural characters if necessary
-                request_body = flow.request.get_text(strict=False).lower() if flow.request.content else ""
-
-                for keyword in keywords:
-                    # Normalize keyword: replace literal spaces with single spaces
-                    normalized_keyword = keyword.replace("  ", " ")
+                if keywords:
+                    # Decode URL to handle percent-encoding (e.g., %20 for spaces)
+                    decoded_url = urllib.parse.unquote(flow.request.pretty_url).lower()
                     
-                    # Short-circuit: if keyword found in decoded URL or request body, block immediately
-                    if normalized_keyword in decoded_url or normalized_keyword in request_body:
-                        print(f"[VIGILANT] KEYWORD BLOCKED: {normalized_keyword} in {decoded_url[:60]} from {client_ip}")
-                        log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [])
-                        flow.response = http.Response.make(
-                            403,
-                            b"Blocked by Vigilant Engine",
-                            {"Content-Type": "text/plain"}
-                        )
-                        return
-        except sqlite3.Error as e:
-            print(f"[VIGILANT] Keyword blacklist check failed: {e}")
+                    # Extract raw request body text, stripping JSON structural characters if necessary
+                    request_body = flow.request.get_text(strict=False).lower() if flow.request.content else ""
+
+                    for keyword in keywords:
+                        # Normalize keyword: replace literal spaces with single spaces
+                        normalized_keyword = keyword.replace("  ", " ")
+                        
+                        # Short-circuit: if keyword found in decoded URL or request body, block immediately
+                        if normalized_keyword in decoded_url or normalized_keyword in request_body:
+                            print(f"[VIGILANT] KEYWORD BLOCKED: {normalized_keyword} in {decoded_url[:60]} from {client_ip}")
+                            log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [])
+                            flow.response = http.Response.make(
+                                403,
+                                b"Blocked by Vigilant Engine",
+                                {"Content-Type": "text/plain"}
+                            )
+                            return
+            except sqlite3.Error as e:
+                print(f"[VIGILANT] Keyword blacklist check failed: {e}")
 
         flagged, rpm_now, rpm_base = should_throttle(client_ip, host)
         if flagged and client_ip not in throttled_clients:
@@ -517,9 +530,21 @@ class VIGILANTAddon:
             # Allow pinned domains to pass through without response analysis
             return
 
+        # STEP 1: Exact Domain Evaluation - Check category hints for strict override
+        # This takes precedence over all heuristic/keyword rules
+        category_hints = load_category_hints()
+        domain_category = None
+        
+        for category, domains in category_hints.items():
+            if any(clean_host == d or clean_host.endswith("." + d) for d in domains):
+                domain_category = category
+                break
+
         # Handle both HTML and JSON responses for keyword filtering
         if "text/html" not in content_type and "application/json" not in content_type:
-            log_request(client_ip, host, path, method, "Non-HTML", False, [])
+            # Use domain category if available, otherwise categorize as Non-HTML
+            final_category = domain_category if domain_category else "Non-HTML"
+            log_request(client_ip, host, path, method, final_category, False, [])
             return
 
         try:
@@ -538,11 +563,18 @@ class VIGILANTAddon:
         except Exception:
             clean = ""
 
-        category, entities = categorize_content(clean, host)
+        # STEP 2: Use domain category if available, otherwise use NLP categorization
+        if domain_category:
+            category = domain_category
+            entities = []
+        else:
+            category, entities = categorize_content(clean, host)
+        
         flagged = category == "Harmful"
 
-        # Additional keyword blacklist check on response content for JSON responses
-        if "application/json" in content_type:
+        # STEP 3: Additional keyword blacklist check on response content for JSON responses
+        # Only if domain is unmapped (no category hint)
+        if domain_category is None and "application/json" in content_type:
             try:
                 with db_lock:
                     conn = sqlite3.connect(DB_PATH)
