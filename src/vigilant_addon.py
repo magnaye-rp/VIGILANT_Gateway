@@ -85,6 +85,13 @@ def init_db():
             action      TEXT
         )
     """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS keyword_blacklist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            keyword TEXT NOT NULL UNIQUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -326,6 +333,32 @@ class VIGILANTAddon:
     def request(self, flow: http.HTTPFlow):
         client_ip = flow.client_conn.peername[0]
         host      = flow.request.pretty_host
+
+        # Keyword blacklist inspection
+        try:
+            with db_lock:
+                conn = sqlite3.connect(DB_PATH)
+                cursor = conn.execute("SELECT keyword FROM keyword_blacklist")
+                keywords = [row[0].lower() for row in cursor.fetchall()]
+                conn.close()
+
+            if keywords:
+                url_lower = flow.request.pretty_url.lower()
+                payload_lower = flow.request.get_text(strict=False).lower() if flow.request.content else ""
+
+                for keyword in keywords:
+                    if keyword in url_lower or keyword in payload_lower:
+                        print(f"[VIGILANT] KEYWORD BLOCKED: {keyword} in {url_lower[:60]} from {client_ip}")
+                        log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [])
+                        flow.response = http.Response.make(
+                            403,
+                            "<html><body><h2>Blocked by Vigilant Keyword Engine</h2></body></html>",
+                            {"Content-Type": "text/html"}
+                        )
+                        return
+        except sqlite3.Error as e:
+            print(f"[VIGILANT] Keyword blacklist check failed: {e}")
+
         flagged, rpm_now, rpm_base = should_throttle(client_ip, host)
         if flagged and client_ip not in throttled_clients:
             throttled_clients.add(client_ip)
