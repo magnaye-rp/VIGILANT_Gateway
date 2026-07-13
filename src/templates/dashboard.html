@@ -832,25 +832,58 @@
       <div id="tab-filtering" class="tab-content">
         <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Keyword Filtering</h2>
 
-        <div class="card" style="margin-bottom: 2rem;">
-          <div class="card-header">
-            <div class="card-title">Add Keyword Rule</div>
-            <div class="card-subtitle">Block traffic containing specific keywords in URLs or payloads</div>
-          </div>
+        <div class="form-row" style="margin-bottom: 2rem;">
+          <!-- Keyword Rules Card -->
+          <div class="card" style="flex: 1;">
+            <div class="card-header">
+              <div class="card-title">Add Keyword Rule</div>
+              <div class="card-subtitle">Block traffic containing specific keywords in URLs or payloads</div>
+            </div>
 
-          <form id="keyword-form">
-            <div class="form-row">
-              <div class="form-group" style="flex: 1;">
+            <form id="keyword-form">
+              <div class="form-group">
                 <label class="form-label">Keyword</label>
                 <input type="text" id="keyword-input" class="form-input" placeholder="Enter keyword to block" required>
                 <div class="form-hint">Keywords will be converted to lowercase for matching</div>
               </div>
+
+              <div style="margin-top: 1.5rem;">
+                <button type="submit" class="btn btn-primary">Add Rule</button>
+              </div>
+            </form>
+          </div>
+
+          <!-- Proxy Engine Configuration Card -->
+          <div class="card" style="flex: 1;">
+            <div class="card-header">
+              <div class="card-title">Proxy Engine Settings</div>
+              <div class="card-subtitle">Configure deep-packet inspection parameters</div>
             </div>
 
-            <div style="margin-top: 1.5rem;">
-              <button type="submit" class="btn btn-primary">Add Rule</button>
-            </div>
-          </form>
+            <form id="proxy-config-form">
+              <div class="form-group">
+                <label class="form-label">Velocity Threshold</label>
+                <input type="number" id="proxy-velocity-threshold" step="0.1" min="0.1" placeholder="1.5" required>
+                <div class="form-hint">Multiplier for baseline request rate to trigger throttling</div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Throttle Rate</label>
+                <input type="text" id="proxy-throttle-rate" placeholder="512kbit" required>
+                <div class="form-hint">Bandwidth limit for throttled clients (e.g., 512kbit, 1mbit)</div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Pinned Domains</label>
+                <textarea id="proxy-pinned-domains" rows="3" placeholder="instagram.com,facebook.com,tiktok.com,x.com,twitter.com" required></textarea>
+                <div class="form-hint">Comma-separated domains with SSL certificate pinning (pass through without decryption)</div>
+              </div>
+
+              <div style="margin-top: 1.5rem;">
+                <button type="submit" class="btn btn-success">Apply Engine Settings</button>
+              </div>
+            </form>
+          </div>
         </div>
 
         <div class="card">
@@ -1215,7 +1248,10 @@
     if (tabId === 'dashboard') refreshStats();
     if (tabId === 'traffic') loadTrafficLogs();
     if (tabId === 'settings') loadUnifiedConfig();
-    if (tabId === 'filtering') loadKeywords();
+    if (tabId === 'filtering') {
+      loadKeywords();
+      loadProxyConfig();
+    }
   }
 
   // ─── Advanced Settings Toggle ───
@@ -1607,6 +1643,58 @@
       }
     } catch (error) {
       showToast('Error adding keyword', 'danger');
+    }
+  });
+
+  // ─── Proxy Engine Configuration ───
+  async function loadProxyConfig() {
+    try {
+      const response = await fetch('/api/config/proxy');
+      const config = await response.json();
+
+      document.getElementById('proxy-velocity-threshold').value = config.proxy_velocity_threshold || '1.5';
+      document.getElementById('proxy-throttle-rate').value = config.proxy_throttle_rate || '512kbit';
+      document.getElementById('proxy-pinned-domains').value = config.proxy_pinned_domains || 'instagram.com,facebook.com,tiktok.com,x.com,twitter.com';
+    } catch (error) {
+      console.error('Error loading proxy config:', error);
+    }
+  }
+
+  document.getElementById('proxy-config-form').addEventListener('submit', async function(e) {
+    e.preventDefault();
+
+    const velocityThreshold = document.getElementById('proxy-velocity-threshold').value;
+    const throttleRate = document.getElementById('proxy-throttle-rate').value;
+    const pinnedDomains = document.getElementById('proxy-pinned-domains').value;
+
+    if (!velocityThreshold || !throttleRate || !pinnedDomains) {
+      showToast('Please fill in all proxy configuration fields', 'danger');
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/config/proxy', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          proxy_velocity_threshold: velocityThreshold,
+          proxy_throttle_rate: throttleRate,
+          proxy_pinned_domains: pinnedDomains
+        })
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        showToast('Proxy engine settings applied successfully', 'success');
+      } else {
+        showToast(data.error || 'Failed to apply proxy settings', 'danger');
+      }
+    } catch (error) {
+      console.error('Error saving proxy config:', error);
+      showToast('Error applying proxy settings', 'danger');
     }
   });
 

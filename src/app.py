@@ -57,7 +57,10 @@ DEFAULT_CONFIG = {
     "request_threshold": 30,
     "throttle_rate": "",
     "enable_https": False,
-    "log_retention": ""
+    "log_retention": "",
+    "proxy_velocity_threshold": "1.5",
+    "proxy_throttle_rate": "512kbit",
+    "proxy_pinned_domains": "instagram.com,facebook.com,tiktok.com,x.com,twitter.com"
 }
 
 # Maintain backward compatibility
@@ -66,7 +69,7 @@ CONFIG_DEFAULTS = DEFAULT_CONFIG
 ALLOWED_CONFIG_KEYS = set(CONFIG_DEFAULTS)
 BOOLEAN_CONFIG_KEYS = {"block_harmful", "block_distracting", "throttle_enabled", "enable_https"}
 INTEGER_CONFIG_KEYS = {"request_threshold", "throttle_rate", "log_retention"}
-STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "upstream_dns", "nlp_accuracy"}
+STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "upstream_dns", "nlp_accuracy", "proxy_velocity_threshold", "proxy_throttle_rate", "proxy_pinned_domains"}
 TRAFFIC_CATEGORIES = ("Educational", "Productive", "Distracting", "Harmful")
 DEFAULT_SYSTEM_METRICS = {
     "cpu_percent": 0.0,
@@ -1003,6 +1006,71 @@ def delete_keyword(keyword_id):
 
     except sqlite3.Error as exc:
         app.logger.error("Failed to delete keyword: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/config/proxy", methods=["GET"])
+def get_proxy_config():
+    """Get proxy engine configuration parameters"""
+    try:
+        config = load_config()
+        proxy_config = {
+            "proxy_velocity_threshold": config.get("proxy_velocity_threshold", "1.5"),
+            "proxy_throttle_rate": config.get("proxy_throttle_rate", "512kbit"),
+            "proxy_pinned_domains": config.get("proxy_pinned_domains", "instagram.com,facebook.com,tiktok.com,x.com,twitter.com")
+        }
+        return jsonify(proxy_config)
+    except Exception as exc:
+        app.logger.error("Failed to get proxy config: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/config/proxy", methods=["POST"])
+def save_proxy_config():
+    """Save proxy engine configuration parameters"""
+    try:
+        payload = request.get_json(silent=True) or {}
+        if not isinstance(payload, dict):
+            return jsonify({"error": "JSON object payload is required"}), 400
+
+        proxy_updates = {}
+        validation_errors = []
+
+        # Validate and extract proxy_velocity_threshold
+        if "proxy_velocity_threshold" in payload:
+            try:
+                threshold = float(payload["proxy_velocity_threshold"])
+                if threshold <= 0:
+                    validation_errors.append("proxy_velocity_threshold must be greater than 0")
+                else:
+                    proxy_updates["proxy_velocity_threshold"] = str(threshold)
+            except (ValueError, TypeError):
+                validation_errors.append("proxy_velocity_threshold must be a valid number")
+
+        # Validate and extract proxy_throttle_rate
+        if "proxy_throttle_rate" in payload:
+            throttle_rate = str(payload["proxy_throttle_rate"]).strip()
+            if not throttle_rate:
+                validation_errors.append("proxy_throttle_rate cannot be empty")
+            else:
+                proxy_updates["proxy_throttle_rate"] = throttle_rate
+
+        # Validate and extract proxy_pinned_domains
+        if "proxy_pinned_domains" in payload:
+            domains = str(payload["proxy_pinned_domains"]).strip()
+            proxy_updates["proxy_pinned_domains"] = domains
+
+        if validation_errors:
+            return jsonify({"error": "Invalid configuration values", "details": validation_errors}), 400
+
+        if not proxy_updates:
+            return jsonify({"error": "No valid proxy configuration parameters provided"}), 400
+
+        save_config(proxy_updates)
+        return jsonify({"status": "success", "message": "Proxy configuration updated successfully"})
+
+    except Exception as exc:
+        app.logger.error("Failed to save proxy config: %s", exc)
         return jsonify({"error": str(exc)}), 500
 
 

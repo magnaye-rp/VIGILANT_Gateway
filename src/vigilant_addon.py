@@ -10,9 +10,7 @@ import spacy
 # ─── Configuration ────────────────────────────────────────────────
 DB_PATH            = "/home/vigilant_admin/vigilant/logs/vigilant.db"
 VELOCITY_WINDOW    = 60
-VELOCITY_THRESHOLD = 1.5
 MIN_REQUESTS_BASELINE = 10
-THROTTLE_RATE      = "512kbit"
 
 SOCIAL_DOMAINS = {
     "facebook.com", "www.facebook.com",
@@ -22,6 +20,11 @@ SOCIAL_DOMAINS = {
     "reddit.com", "www.reddit.com",
     "youtube.com", "www.youtube.com",
 }
+
+# Default values (will be overridden by database config)
+DEFAULT_VELOCITY_THRESHOLD = 1.5
+DEFAULT_THROTTLE_RATE = "512kbit"
+DEFAULT_PINNED_DOMAINS = "instagram.com,facebook.com,tiktok.com,x.com,twitter.com"
 
 DOMAIN_HINTS = {
     "Educational":  {"wikipedia.org", "khanacademy.org", "coursera.org",
@@ -97,6 +100,52 @@ def init_db():
 
 db_lock = threading.Lock()
 
+def load_proxy_config():
+    """Load proxy configuration from database"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Load velocity threshold
+        cursor.execute("SELECT value FROM config_settings WHERE key = 'proxy_velocity_threshold'")
+        row = cursor.fetchone()
+        velocity_threshold = float(row[0]) if row else DEFAULT_VELOCITY_THRESHOLD
+        
+        # Load throttle rate
+        cursor.execute("SELECT value FROM config_settings WHERE key = 'proxy_throttle_rate'")
+        row = cursor.fetchone()
+        throttle_rate = row[0] if row else DEFAULT_THROTTLE_RATE
+        
+        # Load pinned domains
+        cursor.execute("SELECT value FROM config_settings WHERE key = 'proxy_pinned_domains'")
+        row = cursor.fetchone()
+        pinned_domains_str = row[0] if row else DEFAULT_PINNED_DOMAINS
+        
+        # Parse pinned domains into a set
+        pinned_domains = set()
+        for domain in pinned_domains_str.split(','):
+            domain = domain.strip()
+            if domain:
+                pinned_domains.add(domain)
+                # Also add www. variant
+                if not domain.startswith('www.'):
+                    pinned_domains.add(f'www.{domain}')
+        
+        conn.close()
+        
+        return {
+            'velocity_threshold': velocity_threshold,
+            'throttle_rate': throttle_rate,
+            'pinned_domains': pinned_domains
+        }
+    except Exception as e:
+        print(f"[VIGILANT] Error loading proxy config from database: {e}, using defaults")
+        return {
+            'velocity_threshold': DEFAULT_VELOCITY_THRESHOLD,
+            'throttle_rate': DEFAULT_THROTTLE_RATE,
+            'pinned_domains': set(DEFAULT_PINNED_DOMAINS.split(','))
+        }
+
 def log_request(client_ip, host, path, method, category, flagged, entities):
     with db_lock:
         conn = sqlite3.connect(DB_PATH)
@@ -141,13 +190,16 @@ def compute_velocity(client_ip):
         return current_rpm, session_avg
 
 def should_throttle(client_ip, host):
+    config = load_proxy_config()
+    velocity_threshold = config['velocity_threshold']
+    
     base = ".".join(host.lstrip("www.").split(".")[-2:])
     if not any(base in d for d in SOCIAL_DOMAINS):
         return False, 0, 0
     rpm_now, rpm_base = compute_velocity(client_ip)
     if session_totals[client_ip] < MIN_REQUESTS_BASELINE:
         return False, rpm_now, rpm_base
-    flagged = rpm_now > (rpm_base * VELOCITY_THRESHOLD)
+    flagged = rpm_now > (rpm_base * velocity_threshold)
     return flagged, rpm_now, rpm_base
 
 # ─── NLP Categorizer ──────────────────────────────────────────────
@@ -198,6 +250,9 @@ def categorize_content(text, host=""):
 # ─── Traffic Control Throttling ───────────────────────────────────────
 def apply_throttle(client_ip):
     """Apply Linux tc traffic control to throttle client bandwidth"""
+    config = load_proxy_config()
+    throttle_rate = config['throttle_rate']
+    
     try:
         # Create root qdisc if not exists
         subprocess.run(
@@ -208,7 +263,7 @@ def apply_throttle(client_ip):
         # Create class for throttled traffic
         subprocess.run(
             ["tc", "class", "add", "dev", "eth0", "parent", "1:", "classid", "1:10",
-             "htb", "rate", "512kbit", "ceil", "512kbit"],
+             "htb", "rate", throttle_rate, "ceil", throttle_rate],
             check=False, capture_output=True
         )
         
@@ -218,7 +273,7 @@ def apply_throttle(client_ip):
              "prio", "1", "u32", "match", "ip", "src", client_ip, "flowid", "1:10"],
             check=False, capture_output=True
         )
-        print(f"[VIGILANT] Throttling applied to {client_ip} at 512kbit")
+        print(f"[VIGILANT] Throttling applied to {client_ip} at {throttle_rate}")
         return True
     except Exception as e:
         print(f"[VIGILANT] Throttling failed for {client_ip}: {e}")
@@ -334,7 +389,21 @@ class VIGILANTAddon:
         client_ip = flow.client_conn.peername[0]
         host      = flow.request.pretty_host
 
-        # Keyword blacklist inspection
+        # TLS Passthrough: Check if host belongs to pinned SSL certificate domains
+        # These apps have hardcoded SSL pinning and must pass through without decryption
+        config = load_proxy_config()
+        pinned_domains = config['pinned_domains']
+        
+        clean_host = host.lstrip("www.")
+        base_domain = ".".join(clean_host.split(".")[-2:])
+        is_pinned = any(base_domain in d or clean_host == d or clean_host.endswith("." + d) for d in pinned_domains)
+        
+        if is_pinned:
+            # Allow pinned domains to pass through cleanly without any filtering
+            print(f"[VIGILANT] TLS PASSTHROUGH: {host} from {client_ip} (pinned domain)")
+            return
+
+        # Keyword blacklist inspection - request-level payload evaluation
         try:
             with db_lock:
                 conn = sqlite3.connect(DB_PATH)
@@ -343,16 +412,18 @@ class VIGILANTAddon:
                 conn.close()
 
             if keywords:
+                # Construct normalized inspection string: URL + decoded request body
                 url_lower = flow.request.pretty_url.lower()
                 payload_lower = flow.request.get_text(strict=False).lower() if flow.request.content else ""
 
                 for keyword in keywords:
+                    # Short-circuit: if keyword found in URL or request body, block immediately
                     if keyword in url_lower or keyword in payload_lower:
                         print(f"[VIGILANT] KEYWORD BLOCKED: {keyword} in {url_lower[:60]} from {client_ip}")
                         log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [])
                         flow.response = http.Response.make(
                             403,
-                            "<html><body><h2>Blocked by Vigilant Keyword Engine</h2></body></html>",
+                            b"<html><body><h1>Content Blocked by Vigilant Gateway Rule</h1></body></html>",
                             {"Content-Type": "text/html"}
                         )
                         return
@@ -373,6 +444,18 @@ class VIGILANTAddon:
         path         = flow.request.path[:120]
         method       = flow.request.method
         content_type = flow.response.headers.get("content-type", "")
+
+        # TLS Passthrough: Skip response filtering for pinned domains
+        config = load_proxy_config()
+        pinned_domains = config['pinned_domains']
+        
+        clean_host = host.lstrip("www.")
+        base_domain = ".".join(clean_host.split(".")[-2:])
+        is_pinned = any(base_domain in d or clean_host == d or clean_host.endswith("." + d) for d in pinned_domains)
+        
+        if is_pinned:
+            # Allow pinned domains to pass through without response analysis
+            return
 
         if "text/html" not in content_type:
             log_request(client_ip, host, path, method, "Non-HTML", False, [])
