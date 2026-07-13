@@ -3,6 +3,7 @@ import time
 import sqlite3
 import threading
 import subprocess
+import urllib.parse
 from collections import defaultdict, deque
 from mitmproxy import http, tls
 import spacy
@@ -466,19 +467,24 @@ class VIGILANTAddon:
                 conn.close()
 
             if keywords:
-                # Construct normalized inspection string: URL + decoded request body
-                url_lower = flow.request.pretty_url.lower()
-                payload_lower = flow.request.get_text(strict=False).lower() if flow.request.content else ""
+                # Decode URL to handle percent-encoding (e.g., %20 for spaces)
+                decoded_url = urllib.parse.unquote(flow.request.pretty_url).lower()
+                
+                # Extract raw request body text, stripping JSON structural characters if necessary
+                request_body = flow.request.get_text(strict=False).lower() if flow.request.content else ""
 
                 for keyword in keywords:
-                    # Short-circuit: if keyword found in URL or request body, block immediately
-                    if keyword in url_lower or keyword in payload_lower:
-                        print(f"[VIGILANT] KEYWORD BLOCKED: {keyword} in {url_lower[:60]} from {client_ip}")
+                    # Normalize keyword: replace literal spaces with single spaces
+                    normalized_keyword = keyword.replace("  ", " ")
+                    
+                    # Short-circuit: if keyword found in decoded URL or request body, block immediately
+                    if normalized_keyword in decoded_url or normalized_keyword in request_body:
+                        print(f"[VIGILANT] KEYWORD BLOCKED: {normalized_keyword} in {decoded_url[:60]} from {client_ip}")
                         log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [])
                         flow.response = http.Response.make(
                             403,
-                            b"<html><body><h1>Content Blocked by Vigilant Gateway Rule</h1></body></html>",
-                            {"Content-Type": "text/html"}
+                            b"Blocked by Vigilant Engine",
+                            {"Content-Type": "text/plain"}
                         )
                         return
         except sqlite3.Error as e:
@@ -511,19 +517,53 @@ class VIGILANTAddon:
             # Allow pinned domains to pass through without response analysis
             return
 
-        if "text/html" not in content_type:
+        # Handle both HTML and JSON responses for keyword filtering
+        if "text/html" not in content_type and "application/json" not in content_type:
             log_request(client_ip, host, path, method, "Non-HTML", False, [])
             return
 
         try:
-            body  = flow.response.get_text(strict=False) or ""
-            clean = re.sub(r"<[^>]+>", " ", body)
-            clean = re.sub(r"\s+", " ", clean).strip()
+            body = flow.response.get_text(strict=False) or ""
+            
+            if "text/html" in content_type:
+                # Strip HTML tags for HTML responses
+                clean = re.sub(r"<[^>]+>", " ", body)
+                clean = re.sub(r"\s+", " ", clean).strip()
+            elif "application/json" in content_type:
+                # For JSON responses, extract text content by removing structural characters
+                clean = re.sub(r'[{}\[\]",:]', ' ', body)
+                clean = re.sub(r"\s+", " ", clean).strip()
+            else:
+                clean = ""
         except Exception:
             clean = ""
 
         category, entities = categorize_content(clean, host)
         flagged = category == "Harmful"
+
+        # Additional keyword blacklist check on response content for JSON responses
+        if "application/json" in content_type:
+            try:
+                with db_lock:
+                    conn = sqlite3.connect(DB_PATH)
+                    cursor = conn.execute("SELECT keyword FROM keyword_blacklist")
+                    keywords = [row[0].lower() for row in cursor.fetchall()]
+                    conn.close()
+
+                if keywords:
+                    for keyword in keywords:
+                        normalized_keyword = keyword.replace("  ", " ")
+                        if normalized_keyword in clean:
+                            print(f"[VIGILANT] RESPONSE KEYWORD BLOCKED: {normalized_keyword} in JSON response from {host}")
+                            log_request(client_ip, host, path, method, "Harmful", True, [])
+                            flow.response = http.Response.make(
+                                403,
+                                b"Blocked by Vigilant Engine",
+                                {"Content-Type": "text/plain"}
+                            )
+                            return
+            except sqlite3.Error as e:
+                print(f"[VIGILANT] Response keyword blacklist check failed: {e}")
 
         log_request(client_ip, host, path, method, category, flagged, entities[:10])
         print(f"[VIGILANT] {method} {host}{path[:40]} "

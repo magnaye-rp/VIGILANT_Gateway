@@ -186,6 +186,37 @@
       box-shadow: 0 0 20px rgba(0, 217, 255, 0.1);
     }
 
+    /* ─── Settings Cards Grid Layout ─── */
+    .settings-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1.5rem;
+      margin-bottom: 2rem;
+    }
+
+    .settings-card {
+      background: var(--surface-light);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      transition: var(--transition);
+    }
+
+    .settings-card:hover {
+      border-color: var(--primary);
+      box-shadow: 0 0 20px rgba(0, 217, 255, 0.1);
+    }
+
+    .settings-card.full-width {
+      grid-column: 1 / -1;
+    }
+
+    @media (max-width: 1024px) {
+      .settings-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
     .card-header {
       display: flex;
       align-items: center;
@@ -832,45 +863,75 @@
       <div id="tab-filtering" class="tab-content">
         <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Keyword Filtering</h2>
 
-        <div class="form-row" style="margin-bottom: 2rem;">
-          <!-- Keyword Rules Card -->
-          <div class="card" style="flex: 1;">
+        <div class="settings-grid">
+          <!-- CARD 1: Keyword Enforcement Engine -->
+          <div class="settings-card">
             <div class="card-header">
-              <div class="card-title">Add Keyword Rule</div>
-              <div class="card-subtitle">Block traffic containing specific keywords in URLs or payloads</div>
+              <div>
+                <div class="card-title">Keyword Enforcement Engine</div>
+                <div class="card-subtitle">Register phrases for URL and payload blocking</div>
+              </div>
             </div>
 
             <form id="keyword-form">
               <div class="form-group">
                 <label class="form-label">Keyword</label>
-                <input type="text" id="keyword-input" class="form-input" placeholder="Enter keyword to block" required>
-                <div class="form-hint">Keywords will be converted to lowercase for matching</div>
+                <input type="text" id="keyword-input" class="form-input" placeholder="e.g., tung tung tung sahur" required>
+                <div class="form-hint">Keywords are converted to lowercase for matching</div>
               </div>
 
               <div style="margin-top: 1.5rem;">
-                <button type="submit" class="btn btn-primary">Add Rule</button>
+                <button type="submit" class="btn btn-primary">Add Keyword</button>
               </div>
             </form>
           </div>
 
-          <!-- Proxy Engine Configuration Card -->
-          <div class="card" style="flex: 1;">
+          <!-- CARD 2: Active Restraints Registry -->
+          <div class="settings-card">
             <div class="card-header">
-              <div class="card-title">Proxy Engine Settings</div>
-              <div class="card-subtitle">Configure deep-packet inspection parameters</div>
+              <div>
+                <div class="card-title">Active Restraints Registry</div>
+                <div class="card-subtitle">Currently blocked keywords in SQLite</div>
+              </div>
+            </div>
+
+            <table class="traffic-table">
+              <thead>
+                <tr>
+                  <th>Keyword</th>
+                  <th style="text-align: right;">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="keywords-table-body">
+                <tr>
+                  <td colspan="2" style="text-align: center; color: var(--text-secondary);">Loading...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- CARD 3: Advanced Tuning Configuration -->
+          <div class="settings-card full-width">
+            <div class="card-header">
+              <div>
+                <div class="card-title">Advanced Tuning Configuration</div>
+                <div class="card-subtitle">Global network parameters and proxy engine settings</div>
+              </div>
             </div>
 
             <form id="proxy-config-form">
-              <div class="form-group">
-                <label class="form-label">Velocity Threshold</label>
-                <input type="number" id="proxy-velocity-threshold" step="0.1" min="0.1" placeholder="1.5" required>
-                <div class="form-hint">Multiplier for baseline request rate to trigger throttling</div>
-              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Velocity Threshold</label>
+                  <input type="number" id="proxy-velocity-threshold" step="0.1" min="0.1" placeholder="1.5" required>
+                  <div class="form-hint">Multiplier for baseline request rate to trigger throttling</div>
+                </div>
 
-              <div class="form-group">
-                <label class="form-label">Throttle Rate</label>
-                <input type="text" id="proxy-throttle-rate" placeholder="512kbit" required>
-                <div class="form-hint">Bandwidth limit for throttled clients (e.g., 512kbit, 1mbit)</div>
+                <div class="form-group">
+                  <label class="form-label">Throttle Rate</label>
+                  <input type="text" id="proxy-throttle-rate" placeholder="512kbit" required>
+                  <div class="form-hint">Bandwidth limit for throttled clients (e.g., 512kbit, 1mbit)</div>
+                </div>
               </div>
 
               <div class="form-group">
@@ -880,80 +941,62 @@
               </div>
 
               <div style="margin-top: 1.5rem;">
-                <button type="submit" class="btn btn-success">Apply Engine Settings</button>
+                <button type="submit" class="btn btn-success">Save Tuning Profile</button>
               </div>
             </form>
           </div>
-        </div>
 
-        <div class="card">
-          <div class="card-header">
-            <div class="card-title">Active Keyword Rules</div>
-            <div class="card-subtitle">Currently blocked keywords</div>
-          </div>
-
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Keyword</th>
-                <th style="text-align: right;">Actions</th>
-              </tr>
-            </thead>
-            <tbody id="keywords-table-body">
-              <tr>
-                <td colspan="2" style="text-align: center; color: var(--text-secondary);">Loading...</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div class="card" style="margin-top: 2rem;">
-          <div class="card-header">
-            <div class="card-title">Traffic Categorization Routing Engine</div>
-            <div class="card-subtitle">Manage domain-to-category mappings for automatic classification</div>
-          </div>
-
-          <form id="category-hint-form">
-            <div class="form-row">
-              <div class="form-group">
-                <label class="form-label">Category</label>
-                <select id="category-hint-category" required>
-                  <option value="">Select category...</option>
-                  <option value="Educational">Educational</option>
-                  <option value="Productive">Productive</option>
-                  <option value="Distracting">Distracting</option>
-                  <option value="Harmful">Harmful</option>
-                </select>
-                <div class="form-hint">Traffic category for this domain</div>
-              </div>
-              <div class="form-group">
-                <label class="form-label">Domain</label>
-                <input type="text" id="category-hint-domain" placeholder="example.com" required>
-                <div class="form-hint">Domain to classify (will be converted to lowercase)</div>
+          <!-- CARD 4: Traffic Categorization Rules -->
+          <div class="settings-card full-width">
+            <div class="card-header">
+              <div>
+                <div class="card-title">Traffic Categorization Rules</div>
+                <div class="card-subtitle">Domain destination category router context</div>
               </div>
             </div>
 
-            <div style="margin-top: 1.5rem;">
-              <button type="submit" class="btn btn-primary">Add Category Mapping</button>
-            </div>
-          </form>
+            <form id="category-hint-form">
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Category</label>
+                  <select id="category-hint-category" required>
+                    <option value="">Select category...</option>
+                    <option value="Educational">Educational</option>
+                    <option value="Productive">Productive</option>
+                    <option value="Distracting">Distracting</option>
+                    <option value="Harmful">Harmful</option>
+                  </select>
+                  <div class="form-hint">Structural designation for domain classification</div>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Target Domain</label>
+                  <input type="text" id="category-hint-domain" placeholder="example.com" required>
+                  <div class="form-hint">Domain to classify (converted to lowercase)</div>
+                </div>
+              </div>
 
-          <div style="margin-top: 2rem;">
-            <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Active Category Mappings</h3>
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>Category</th>
-                  <th>Domain</th>
-                  <th style="text-align: right;">Actions</th>
-                </tr>
-              </thead>
-              <tbody id="category-hints-table-body">
-                <tr>
-                  <td colspan="3" style="text-align: center; color: var(--text-secondary);">Loading...</td>
-                </tr>
-              </tbody>
-            </table>
+              <div style="margin-top: 1.5rem;">
+                <button type="submit" class="btn btn-primary">Add Routing Rule</button>
+              </div>
+            </form>
+
+            <div style="margin-top: 2rem;">
+              <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Active Routing Rules</h3>
+              <table class="traffic-table">
+                <thead>
+                  <tr>
+                    <th>Category</th>
+                    <th>Domain</th>
+                    <th style="text-align: right;">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="category-hints-table-body">
+                  <tr>
+                    <td colspan="3" style="text-align: center; color: var(--text-secondary);">Loading...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>
