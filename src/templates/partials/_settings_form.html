@@ -1,0 +1,308 @@
+      <!-- Filtering Tab -->
+      <div id="tab-filtering" class="tab-content">
+        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Keyword Filtering</h2>
+
+        <div class="settings-grid">
+          <!-- CARD 1: Keyword Enforcement Engine -->
+          <div class="settings-card">
+            <div class="card-header">
+              <div>
+                <div class="card-title">Keyword Enforcement Engine</div>
+                <div class="card-subtitle">Register phrases for URL and payload blocking</div>
+              </div>
+            </div>
+
+            <form id="keyword-form">
+              <div class="form-group">
+                <label class="form-label">Keyword</label>
+                <input type="text" id="keyword-input" class="form-input" placeholder="e.g., tung tung tung sahur" required>
+                <div class="form-hint">Keywords are converted to lowercase for matching</div>
+              </div>
+
+              <div style="margin-top: 1.5rem;">
+                <button type="submit" class="btn btn-primary">Add Keyword</button>
+              </div>
+            </form>
+          </div>
+
+          <!-- CARD 2: Active Restraints Registry -->
+          <div class="settings-card">
+            <div class="card-header">
+              <div>
+                <div class="card-title">Active Restraints Registry</div>
+                <div class="card-subtitle">Currently blocked keywords in SQLite</div>
+              </div>
+            </div>
+
+            <table class="traffic-table">
+              <thead>
+                <tr>
+                  <th>Keyword</th>
+                  <th style="text-align: right;">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="keywords-table-body">
+                <tr>
+                  <td colspan="2" style="text-align: center; color: var(--text-secondary);">Loading...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- CARD 3: Advanced Tuning Configuration -->
+          <div class="settings-card full-width">
+            <div class="card-header">
+              <div>
+                <div class="card-title">Advanced Tuning Configuration</div>
+                <div class="card-subtitle">Global network parameters and proxy engine settings</div>
+              </div>
+            </div>
+
+            <form id="proxy-config-form">
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Velocity Threshold</label>
+                  <input type="number" id="proxy-velocity-threshold" step="0.1" min="0.1" placeholder="1.5" required>
+                  <div class="form-hint">Multiplier for baseline request rate to trigger throttling</div>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label">Throttle Rate</label>
+                  <input type="text" id="proxy-throttle-rate" placeholder="512kbit" required>
+                  <div class="form-hint">Bandwidth limit for throttled clients (e.g., 512kbit, 1mbit)</div>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Pinned Domains</label>
+                <textarea id="proxy-pinned-domains" rows="3" placeholder="instagram.com,facebook.com,tiktok.com,x.com,twitter.com" required></textarea>
+                <div class="form-hint">Comma-separated domains with SSL certificate pinning (pass through without decryption)</div>
+              </div>
+
+              <div style="margin-top: 1.5rem;">
+                <button type="submit" class="btn btn-success">Save Tuning Profile</button>
+              </div>
+            </form>
+          </div>
+
+          <!-- CARD 4: Traffic Categorization Rules -->
+          <div class="settings-card full-width">
+            <div class="card-header">
+              <div>
+                <div class="card-title">Traffic Categorization Rules</div>
+                <div class="card-subtitle">Domain destination category router context</div>
+              </div>
+            </div>
+
+            <form id="category-hint-form">
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Category</label>
+                  <select id="category-hint-category" required>
+                    <option value="">Select category...</option>
+                    <option value="Educational">Educational</option>
+                    <option value="Productive">Productive</option>
+                    <option value="Distracting">Distracting</option>
+                    <option value="Harmful">Harmful</option>
+                  </select>
+                  <div class="form-hint">Structural designation for domain classification</div>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Target Domain</label>
+                  <input type="text" id="category-hint-domain" placeholder="example.com" required>
+                  <div class="form-hint">Domain to classify (converted to lowercase)</div>
+                </div>
+              </div>
+
+              <div style="margin-top: 1.5rem;">
+                <button type="submit" class="btn btn-primary">Add Routing Rule</button>
+              </div>
+            </form>
+
+            <div style="margin-top: 2rem;">
+              <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Active Routing Rules</h3>
+              <table class="traffic-table">
+                <thead>
+                  <tr>
+                    <th>Category</th>
+                    <th>Domain</th>
+                    <th style="text-align: right;">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="category-hints-table-body">
+                  <tr>
+                    <td colspan="3" style="text-align: center; color: var(--text-secondary);">Loading...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Settings & Setup Tab -->
+      <div id="tab-settings" class="tab-content">
+        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Settings & Setup</h2>
+
+        <!-- Advanced Settings Toggle -->
+        <div style="margin-bottom: 2rem; display: flex; align-items: center; gap: 1rem;">
+          <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer;">
+            <input type="checkbox" id="advanced-toggle" onchange="toggleAdvancedSettings()">
+            <span style="font-weight: 600; color: var(--text);">Advanced Settings</span>
+          </label>
+        </div>
+
+        <form id="unified-config-form" onsubmit="saveUnifiedConfig(event)">
+          <!-- Basic View (Always Visible) -->
+          <div class="card" style="margin-bottom: 2rem;">
+            <div class="card-header">
+              <div class="card-title">Basic Configuration</div>
+              <div class="card-subtitle">Essential network and filtering settings</div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Upstream Interface (Internet Input)</label>
+                <select id="upstream-interface">
+                  <option value="">Loading interfaces...</option>
+                </select>
+                <div class="form-hint">External network interface for internet connectivity</div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Distribution Interface (Local Network AP)</label>
+                <select id="distribution-interface">
+                  <option value="">Loading interfaces...</option>
+                </select>
+                <div class="form-hint">Internal network interface for client devices</div>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Gateway IP Address</label>
+                <input type="text" id="gateway-ip" placeholder="192.168.10.1" value="192.168.10.1">
+                <div class="form-hint">IP address for the admin interface</div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">DHCP Range Start</label>
+                <input type="text" id="dhcp-start" placeholder="192.168.10.10" value="192.168.10.10">
+                <div class="form-hint">First IP in client range</div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">DHCP Range End</label>
+                <input type="text" id="dhcp-end" placeholder="192.168.10.50" value="192.168.10.50">
+                <div class="form-hint">Last IP in client range</div>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Upstream DNS Servers</label>
+              <textarea id="dns-servers" rows="2" placeholder="8.8.8.8&#10;8.8.4.4">8.8.8.8
+8.8.4.4</textarea>
+              <div class="form-hint">DNS servers for upstream resolution (one per line)</div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Categories to Block</label>
+              <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+                <div>
+                  <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer;">
+                    <input type="checkbox" id="block-harmful" checked>
+                    <span style="font-weight: 600; color: var(--danger);">Harmful content</span>
+                  </label>
+                  <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem; margin-left: 1.75rem;">Adult content, violence, extremism</div>
+                </div>
+                <div>
+                  <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer;">
+                    <input type="checkbox" id="block-distracting">
+                    <span style="font-weight: 600; color: var(--warning);">Distracting sites</span>
+                  </label>
+                  <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem; margin-left: 1.75rem;">Social media, entertainment, memes</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Advanced View (Hidden by Default) -->
+          <div id="advanced-settings" class="d-none">
+            <div class="card" style="margin-bottom: 2rem;">
+              <div class="card-header">
+                <div class="card-title">Advanced Network Configuration</div>
+                <div class="card-subtitle">Deep-dive network settings</div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">NLP Model Accuracy</label>
+                <select id="nlp-mode">
+                  <option value="fast">Fast (Lower accuracy, ~70%)</option>
+                  <option value="balanced" selected>Balanced (Good accuracy, ~85%)</option>
+                  <option value="strict">Strict (Higher accuracy, ~95%)</option>
+                </select>
+                <div class="form-hint">Trade-off between speed and accuracy</div>
+              </div>
+            </div>
+
+            <div class="card" style="margin-bottom: 2rem;">
+              <div class="card-header">
+                <div class="card-title">Doomscroll Prevention Configuration</div>
+                <div class="card-subtitle">Configure velocity-based throttling for social media</div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Enable Throttling</label>
+                <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer;">
+                  <input type="checkbox" id="throttle-enabled" checked>
+                  <span id="throttle-status">Enabled</span>
+                </label>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Request Threshold (per minute)</label>
+                  <input type="number" id="throttle-threshold" value="30" min="10" max="100">
+                  <div class="form-hint">Trigger throttling when exceeds this rate</div>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Throttle Rate</label>
+                  <select id="throttle-rate">
+                    <option value="128">128 Kbps (Strict)</option>
+                    <option value="256" selected>256 Kbps (Balanced)</option>
+                    <option value="512">512 Kbps (Moderate)</option>
+                  </select>
+                  <div class="form-hint">Bandwidth limit for throttled clients</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card" style="margin-bottom: 2rem;">
+              <div class="card-header">
+                <div class="card-title">Security & Privacy</div>
+                <div class="card-subtitle">System security settings</div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Admin Password</label>
+                <input type="password" id="admin-password" placeholder="••••••••">
+                <div class="form-hint">Leave blank to keep current password</div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Enable HTTPS</label>
+                <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer;">
+                  <input type="checkbox" id="https-enabled" checked>
+                </label>
+                <div class="form-hint">Use SSL/TLS for dashboard connection</div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Log Retention (days)</label>
+                <input type="number" id="log-retention" value="30" min="7" max="365">
+                <div class="form-hint">Automatically delete logs older than this</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="btn-group">
+            <button type="submit" class="btn-success" style="width: auto;">Save All Configuration</button>
+            <button type="button" class="btn-danger" onclick="resetConfiguration()" style="width: auto;">Reset Configuration</button>
+          </div>
+        </form>
+      </div>

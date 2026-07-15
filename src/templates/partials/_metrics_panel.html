@@ -1,0 +1,57 @@
+      <!-- Dashboard Tab -->
+      <div id="tab-dashboard" class="tab-content active">
+        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Dashboard Overview</h2>
+
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-value" id="stat-total">—</div>
+            <div class="stat-label">Total Requests</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="stat-flagged">—</div>
+            <div class="stat-label">Blocked</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="stat-clients">—</div>
+            <div class="stat-label">Active Clients</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="stat-throttled">—</div>
+            <div class="stat-label">Throttled</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">Category Breakdown</div>
+              <div class="card-subtitle">Traffic classification distribution</div>
+            </div>
+            <button class="btn-secondary" onclick="refreshStats()" style="padding: 0.5rem 1rem;">Refresh</button>
+          </div>
+          <div id="category-breakdown" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem;"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">Recent Activity</div>
+              <div class="card-subtitle">Last 10 traffic events</div>
+            </div>
+          </div>
+          <div id="recent-activity" style="overflow-x: auto;">
+            <table class="traffic-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Client</th>
+                  <th>Domain</th>
+                  <th>Category</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="recent-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>

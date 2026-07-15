@@ -1,0 +1,91 @@
+      <!-- Traffic Log Tab -->
+      <div id="tab-traffic" class="tab-content">
+        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Traffic Log</h2>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">All Traffic Events</div>
+              <div class="card-subtitle">Complete activity history with filters</div>
+            </div>
+            <div style="display: flex; gap: 0.5rem;">
+              <a href="/api/logs/export" class="btn btn-secondary" style="padding: 0.5rem 1rem; text-decoration: none;">Export to CSV</a>
+              <button class="btn-secondary" onclick="clearTrafficLogs()" style="padding: 0.5rem 1rem;">Clear Logs</button>
+            </div>
+          </div>
+
+          <div class="form-row" style="margin-bottom: 1.5rem;">
+            <input type="text" id="traffic-filter-client" placeholder="Filter by client IP" oninput="applyFilters()">
+            <input type="text" id="traffic-filter-domain" placeholder="Filter by domain" oninput="applyFilters()">
+            <select id="traffic-filter-category" onchange="applyFilters()">
+              <option value="">All Categories</option>
+              <option value="Educational">Educational</option>
+              <option value="Productive">Productive</option>
+              <option value="Distracting">Distracting</option>
+              <option value="Harmful">Harmful</option>
+            </select>
+          </div>
+
+          <div style="overflow-x: auto;">
+            <table class="traffic-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Client IP</th>
+                  <th>Domain</th>
+                  <th>Category</th>
+                  <th>Blocked</th>
+                </tr>
+              </thead>
+              <tbody id="traffic-tbody"></tbody>
+            </table>
+          </div>
+          
+          <!-- Pagination Controls -->
+          <div id="pagination-controls" style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border);">
+            <div style="color: var(--text-secondary); font-size: 0.9rem;">
+              Page <span id="current-page">1</span> of <span id="total-pages">1</span>
+              (<span id="total-items">0</span> total items)
+            </div>
+            <div style="display: flex; gap: 0.5rem;">
+              <button class="btn-secondary" id="prev-page" onclick="changePage(-1)" style="padding: 0.5rem 1rem;">Previous</button>
+              <button class="btn-secondary" id="next-page" onclick="changePage(1)" style="padding: 0.5rem 1rem;">Next</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Devices Tab -->
+      <div id="tab-devices" class="tab-content">
+        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Device Management</h2>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">Network Devices</div>
+              <div class="card-subtitle">Connected clients and access control policies</div>
+            </div>
+            <button class="btn-secondary" onclick="loadDevices()" style="padding: 0.5rem 1rem;">Refresh</button>
+          </div>
+
+          <div style="overflow-x: auto;">
+            <table class="traffic-table">
+              <thead>
+                <tr>
+                  <th>IP Address</th>
+                  <th>MAC Address</th>
+                  <th>Hostname</th>
+                  <th>Custom Name</th>
+                  <th>Policy</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="devices-tbody">
+                <tr>
+                  <td colspan="6" style="text-align: center; color: var(--text-secondary);">Loading devices...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
