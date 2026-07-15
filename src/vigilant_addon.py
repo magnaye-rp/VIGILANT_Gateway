@@ -219,6 +219,11 @@ def log_request(client_ip, host, path, method, category, flagged, entities):
             # Fallback if import fails
             category = "UNCATEGORIZED"
     
+    # Skip database INSERT if category is still UNCATEGORIZED after auto-categorization
+    # This prevents log bloat from uncategorized noise
+    if category == "UNCATEGORIZED" or not category:
+        return  # Silent pass: client gets internet, but we don't log uncategorized traffic
+    
     with db_lock:
         conn = sqlite3.connect(DB_PATH)
         conn.execute(
@@ -274,6 +279,19 @@ def should_throttle(client_ip, host):
         return False, rpm_now, rpm_base
     flagged = rpm_now > (rpm_base * velocity_threshold)
     return flagged, rpm_now, rpm_base
+
+# ─── Text Normalization Helper ──────────────────────────────────────
+def normalize_text(text):
+    """
+    Normalize text by converting to lowercase and stripping common bypass characters.
+    This helps catch obfuscated keywords like "b.r.a.i.n.r.o.t" or "brain-rot" 
+    when blocking "brainrot".
+    """
+    if not text:
+        return ""
+    # Convert to lowercase and remove common separator characters: _, -, ., +, spaces, and non-alphanumeric noise
+    return re.sub(r'[\s_\-\.\+\*\/\\~,;:!@#\$%\^&\(\)\[\]\{\}<>|]+', '', text.lower())
+
 
 # ─── NLP Categorizer ──────────────────────────────────────────────
 def get_domain_hint(host):
@@ -491,28 +509,43 @@ class VIGILANTAddon:
         
         # STEP 2: Strict Keyword Scan - Only if domain is unmapped
         # Fully decode URL parameters and enforce clear context boundary checks
+        # Using advanced text normalization to catch obfuscated keywords
         if domain_category is None:
             try:
                 with db_lock:
                     conn = sqlite3.connect(DB_PATH)
                     cursor = conn.execute("SELECT keyword FROM keyword_blacklist")
-                    keywords = [row[0].lower() for row in cursor.fetchall()]
+                    keywords = [row[0] for row in cursor.fetchall()]
                     conn.close()
 
                 if keywords:
                     # Decode URL to handle percent-encoding (e.g., %20 for spaces)
-                    decoded_url = urllib.parse.unquote(flow.request.pretty_url).lower()
+                    try:
+                        decoded_url = urllib.parse.unquote(flow.request.pretty_url)
+                    except Exception:
+                        decoded_url = flow.request.pretty_url
                     
-                    # Extract raw request body text, stripping JSON structural characters if necessary
-                    request_body = flow.request.get_text(strict=False).lower() if flow.request.content else ""
+                    # Extract raw request body text if available
+                    try:
+                        request_body = flow.request.get_text(strict=False) if flow.request.content else ""
+                    except Exception:
+                        request_body = ""
+
+                    # Normalize URL and body for comparison
+                    normalized_url = normalize_text(decoded_url)
+                    normalized_body = normalize_text(request_body)
 
                     for keyword in keywords:
-                        # Normalize keyword: replace literal spaces with single spaces
-                        normalized_keyword = keyword.replace("  ", " ")
+                        # Normalize keyword using the same function
+                        normalized_keyword = normalize_text(keyword)
                         
-                        # Short-circuit: if keyword found in decoded URL or request body, block immediately
-                        if normalized_keyword in decoded_url or normalized_keyword in request_body:
-                            print(f"[VIGILANT] KEYWORD BLOCKED: {normalized_keyword} in {decoded_url[:60]} from {client_ip}")
+                        # Skip empty normalized keywords
+                        if not normalized_keyword:
+                            continue
+                        
+                        # Check if normalized keyword found in normalized URL or body
+                        if normalized_keyword in normalized_url or normalized_keyword in normalized_body:
+                            print(f"[VIGILANT] KEYWORD BLOCKED: {keyword} (normalized: {normalized_keyword}) in {decoded_url[:60]} from {client_ip}")
                             log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [])
                             flow.response = http.Response.make(
                                 403,
@@ -561,7 +594,10 @@ class VIGILANTAddon:
                 break
 
         # Handle both HTML and JSON responses for keyword filtering
-        if "text/html" not in content_type and "application/json" not in content_type:
+        # Skip binary content types to avoid wasting CPU cycles on image/video/audio data
+        TEXT_CONTENT_TYPES = {"text/html", "application/json", "text/plain", "text/javascript", "application/javascript", "text/css", "application/xml", "text/xml"}
+        
+        if not any(ct in content_type for ct in TEXT_CONTENT_TYPES):
             # Use domain category if available, otherwise categorize as Non-HTML
             final_category = domain_category if domain_category else "Non-HTML"
             log_request(client_ip, host, path, method, final_category, False, [])
@@ -579,7 +615,8 @@ class VIGILANTAddon:
                 clean = re.sub(r'[{}\[\]",:]', ' ', body)
                 clean = re.sub(r"\s+", " ", clean).strip()
             else:
-                clean = ""
+                # For other text types, just normalize whitespace
+                clean = re.sub(r"\s+", " ", body).strip()
         except Exception:
             clean = ""
 
@@ -592,21 +629,32 @@ class VIGILANTAddon:
         
         flagged = category == "Harmful"
 
-        # STEP 3: Additional keyword blacklist check on response content for JSON responses
-        # Only if domain is unmapped (no category hint)
-        if domain_category is None and "application/json" in content_type:
+        # STEP 3: Additional keyword blacklist check on response content for text-based responses
+        # Only if domain is unmapped (no category hint) and content is text-based
+        # Using advanced text normalization to catch obfuscated keywords
+        if domain_category is None and any(ct in content_type for ct in TEXT_CONTENT_TYPES):
             try:
                 with db_lock:
                     conn = sqlite3.connect(DB_PATH)
                     cursor = conn.execute("SELECT keyword FROM keyword_blacklist")
-                    keywords = [row[0].lower() for row in cursor.fetchall()]
+                    keywords = [row[0] for row in cursor.fetchall()]
                     conn.close()
 
                 if keywords:
+                    # Normalize the cleaned response content
+                    normalized_content = normalize_text(clean)
+                    
                     for keyword in keywords:
-                        normalized_keyword = keyword.replace("  ", " ")
-                        if normalized_keyword in clean:
-                            print(f"[VIGILANT] RESPONSE KEYWORD BLOCKED: {normalized_keyword} in JSON response from {host}")
+                        # Normalize keyword using the same function
+                        normalized_keyword = normalize_text(keyword)
+                        
+                        # Skip empty normalized keywords
+                        if not normalized_keyword:
+                            continue
+                        
+                        # Check if normalized keyword found in normalized content
+                        if normalized_keyword in normalized_content:
+                            print(f"[VIGILANT] RESPONSE KEYWORD BLOCKED: {keyword} (normalized: {normalized_keyword}) in {content_type} response from {host}")
                             log_request(client_ip, host, path, method, "Harmful", True, [])
                             flow.response = http.Response.make(
                                 403,

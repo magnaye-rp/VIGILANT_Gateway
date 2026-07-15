@@ -320,7 +320,7 @@ def _traffic_percentage_metrics() -> dict:
                 """
                 SELECT LOWER(TRIM(category)) AS normalized_category, COUNT(*) AS category_count
                 FROM traffic_log
-                WHERE category IS NOT NULL AND TRIM(category) != ''
+                WHERE category IS NOT NULL AND TRIM(category) != '' AND LOWER(TRIM(category)) != 'uncategorized'
                 GROUP BY LOWER(TRIM(category))
                 """
             ).fetchall()
@@ -335,6 +335,24 @@ def _traffic_percentage_metrics() -> dict:
         app.logger.warning("traffic count metrics unavailable: %s", exc)
 
     return distribution
+
+
+def _calculate_category_percentages(category_counts: dict) -> dict:
+    """Calculate percentages excluding UNCATEGORIZED from total"""
+    # Calculate total containing ONLY our target categories
+    categorized_total = sum(count for cat, count in category_counts.items() if cat != "UNCATEGORIZED")
+    
+    # Calculate percentages safely
+    percentages = {}
+    for cat, count in category_counts.items():
+        if cat == "UNCATEGORIZED":
+            percentages[cat] = 0  # Hide or set to 0
+        elif categorized_total > 0:
+            percentages[cat] = round((count / categorized_total) * 100, 1)
+        else:
+            percentages[cat] = 0
+    
+    return percentages
 
 
 def _connected_device_count() -> int:
@@ -788,6 +806,9 @@ def get_stats():
         active_clients = _connected_device_count()
         raw_categories = _traffic_percentage_metrics()
 
+        # Calculate percentages excluding UNCATEGORIZED from total
+        category_percentages = _calculate_category_percentages(raw_categories)
+
         formatted_counts = [
             {"category": category, "count": int(count)}
             for category, count in raw_categories.items()
@@ -812,6 +833,7 @@ def get_stats():
             "flagged": blocked_reqs,
             "clients": active_clients,
             "counts": formatted_counts,
+            "percentage_metrics": category_percentages,
             "recent": formatted_recent,
             "uptime": _format_uptime(),
             "statuses": _service_statuses(),
@@ -843,6 +865,12 @@ def get_stats():
                 {"category": "Distracting", "count": 0},
                 {"category": "Harmful", "count": 0}
             ],
+            "percentage_metrics": {
+                "Educational": 0.0,
+                "Productive": 0.0,
+                "Distracting": 0.0,
+                "Harmful": 0.0
+            },
             "recent": [],
             "uptime": "0h 0m",
             "statuses": _service_statuses(),
@@ -1825,6 +1853,29 @@ def _cleanup_unwanted_categories() -> None:
         )
 
 
+def _cleanup_uncategorized_logs() -> None:
+    """Remove UNCATEGORIZED logs from traffic_log on startup to clean up dashboard"""
+    try:
+        with _open_db() as connection:
+            if not _table_exists(connection, "traffic_log"):
+                return
+            
+            # Delete UNCATEGORIZED logs (case-insensitive)
+            cursor = connection.execute(
+                "DELETE FROM traffic_log WHERE LOWER(TRIM(category)) = 'uncategorized'"
+            )
+            deleted_count = cursor.rowcount
+            connection.commit()
+            
+            if deleted_count > 0:
+                app.logger.info(f"Cleaned up {deleted_count} UNCATEGORIZED log entries from database")
+    except sqlite3.Error as exc:
+        app.logger.debug(
+            "_cleanup_uncategorized_logs: could not clean up uncategorized logs — %s",
+            exc,
+        )
+
+
 def auto_categorize(domain: str) -> str:
     """Auto-categorize domains based on keyword matching rules"""
     domain_lower = domain.lower()
@@ -1905,6 +1956,11 @@ def _compile_config_integrity() -> None:
         _cleanup_unwanted_categories()
     except Exception as exc:
         app.logger.debug("_compile_config_integrity: _cleanup_unwanted_categories skipped — %s", exc)
+
+    try:
+        _cleanup_uncategorized_logs()
+    except Exception as exc:
+        app.logger.debug("_compile_config_integrity: _cleanup_uncategorized_logs skipped — %s", exc)
 
     try:
         _populate_mock_traffic_data()
