@@ -6,6 +6,8 @@ import threading
 import time
 import importlib
 import importlib.util
+import csv
+from io import StringIO
 from pathlib import Path
 
 try:
@@ -13,7 +15,7 @@ try:
 except ImportError:
     psutil = None
 yaml = importlib.import_module("yaml") if importlib.util.find_spec("yaml") else None
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, make_response
 
 try:
     from flask_cors import CORS
@@ -937,6 +939,60 @@ def clear_logs():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route('/api/logs/export')
+def export_logs():
+    """Export traffic logs as CSV file"""
+    try:
+        if not DB_PATH.exists():
+            return jsonify({"error": "Database doesn't exist"}), 404
+
+        with _open_db() as connection:
+            if not _table_exists(connection, "traffic_log"):
+                return jsonify({"error": "Traffic log table doesn't exist"}), 404
+
+            # Query all logs respecting protocol filters
+            VALID_LOG_CATEGORIES = {"HTTP", "HTTPS", "WEBHOOK", "PRODUCTIVE", "EDUCATIONAL", "DISTRACTING", "HARMFUL"}
+            placeholders = ",".join(["?" for _ in VALID_LOG_CATEGORIES])
+            
+            rows = connection.execute(
+                f"SELECT timestamp, client_ip, host, category, flagged FROM traffic_log WHERE category IN ({placeholders}) ORDER BY timestamp DESC",
+                list(VALID_LOG_CATEGORIES)
+            ).fetchall()
+
+        # Create CSV in memory
+        si = StringIO()
+        cw = csv.writer(si)
+        cw.writerow(['Time', 'Client IP', 'Domain', 'Category', 'Status'])  # Headers
+        
+        for row in rows:
+            timestamp = row[0]
+            client_ip = row[1]
+            host = row[2]
+            category = row[3]
+            flagged = row[4]
+            
+            # Format timestamp
+            formatted_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(timestamp))
+            status = 'Blocked' if flagged else 'Allowed'
+            
+            cw.writerow([formatted_time, client_ip, host, category, status])
+        
+        # Create response
+        output = make_response(si.getvalue())
+        output.headers["Content-Disposition"] = "attachment; filename=traffic_logs.csv"
+        output.headers["Content-type"] = "text/csv"
+        
+        app.logger.info(f"Exported {len(rows)} traffic log entries to CSV")
+        return output
+        
+    except sqlite3.Error as exc:
+        app.logger.error("Failed to export logs: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+    except Exception as exc:
+        app.logger.error("Unexpected error exporting logs: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/api/config", methods=["GET", "POST"])
 def api_config():
     if request.method == "GET":
@@ -1355,6 +1411,343 @@ def api_system_control():
         return jsonify({"error": f"System control error: {str(exc)}"}), 500
 
 
+@app.route("/api/devices", methods=["GET"])
+def get_devices():
+    """Get all network devices with live discovery"""
+    try:
+        devices = _discover_network_devices()
+        return jsonify({"devices": devices})
+    except Exception as exc:
+        app.logger.error("Failed to get devices: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/devices/policy", methods=["POST"])
+def update_device_policy():
+    """Update device policy (custom name, whitelist/blacklist)"""
+    try:
+        payload = request.get_json(silent=True) or {}
+        if not isinstance(payload, dict):
+            return jsonify({"error": "JSON object payload is required"}), 400
+
+        ip_address = payload.get("ip_address", "").strip()
+        custom_name = payload.get("custom_name", "").strip()
+        policy = payload.get("policy", "none").strip()
+
+        if not ip_address:
+            return jsonify({"error": "IP address is required"}), 400
+
+        if policy not in ["none", "whitelist", "blacklist"]:
+            return jsonify({"error": "Policy must be one of: none, whitelist, blacklist"}), 400
+
+        with _open_db() as connection:
+            if not _table_exists(connection, "network_devices"):
+                return jsonify({"error": "Network devices table does not exist"}), 404
+
+            now = time.time()
+            connection.execute(
+                """
+                INSERT INTO network_devices (ip_address, custom_name, policy, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(ip_address) DO UPDATE SET
+                    custom_name = excluded.custom_name,
+                    policy = excluded.policy,
+                    updated_at = excluded.updated_at
+                """,
+                (ip_address, custom_name, policy, now)
+            )
+            connection.commit()
+
+        # Apply firewall rules if policy changed to blacklist
+        if policy == "blacklist":
+            _apply_firewall_block(ip_address)
+        elif policy == "whitelist":
+            _remove_firewall_block(ip_address)
+
+        app.logger.info(f"Updated device policy for {ip_address}: {policy}")
+        return jsonify({"status": "success", "message": "Device policy updated successfully"})
+
+    except sqlite3.Error as exc:
+        app.logger.error("Failed to update device policy: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+    except Exception as exc:
+        app.logger.error("Unexpected error updating device policy: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+def _init_network_devices_db() -> None:
+    """Initialize network_devices table for device management"""
+    try:
+        with _open_db() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS network_devices (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ip_address TEXT NOT NULL UNIQUE,
+                    mac_address TEXT,
+                    hostname TEXT,
+                    custom_name TEXT,
+                    policy TEXT DEFAULT 'none',
+                    first_seen REAL,
+                    last_seen REAL,
+                    updated_at REAL
+                )
+                """
+            )
+            connection.commit()
+    except sqlite3.Error as exc:
+        app.logger.debug(
+            "_init_network_devices_db: could not create network_devices table "
+            "(access violation or locked database) — %s",
+            exc,
+        )
+
+
+def _parse_dnsmasq_leases() -> dict:
+    """Parse dnsmasq.leases file to get DHCP client information"""
+    leases = {}
+    lease_paths = [
+        Path("/var/lib/misc/dnsmasq.leases"),
+        Path("/var/lib/dnsmasq/dnsmasq.leases"),
+        Path("/home/vigilant_admin/vigilant/logs/dnsmasq.leases"),
+    ]
+    
+    for lease_path in lease_paths:
+        if lease_path.exists():
+            try:
+                with open(lease_path, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith('#'):
+                            continue
+                        # Format: timestamp mac_address ip_address hostname
+                        parts = line.split()
+                        if len(parts) >= 4:
+                            timestamp = float(parts[0]) if parts[0].isdigit() else 0
+                            mac_address = parts[1]
+                            ip_address = parts[2]
+                            hostname = parts[3] if len(parts) > 3 else ""
+                            leases[ip_address] = {
+                                'mac_address': mac_address,
+                                'hostname': hostname,
+                                'timestamp': timestamp
+                            }
+                app.logger.info(f"Parsed dnsmasq leases from {lease_path}")
+                break
+            except Exception as exc:
+                app.logger.warning(f"Failed to parse {lease_path}: {exc}")
+    
+    return leases
+
+
+def _parse_arp_table() -> dict:
+    """Parse /proc/net/arp to get active ARP entries"""
+    arp_entries = {}
+    arp_path = Path("/proc/net/arp")
+    
+    if not arp_path.exists():
+        return arp_entries
+    
+    try:
+        with open(arp_path, 'r') as f:
+            lines = f.readlines()
+            # Skip header line
+            for line in lines[1:]:
+                line = line.strip()
+                if not line:
+                    continue
+                # Format: IP address HW type Flags HW address Mask Device
+                parts = line.split()
+                if len(parts) >= 6:
+                    ip_address = parts[0]
+                    mac_address = parts[3]
+                    device = parts[5]
+                    # Skip incomplete entries
+                    if mac_address != "00:00:00:00:00:00":
+                        arp_entries[ip_address] = {
+                            'mac_address': mac_address,
+                            'device': device
+                        }
+    except Exception as exc:
+        app.logger.warning(f"Failed to parse ARP table: {exc}")
+    
+    return arp_entries
+
+
+def _apply_firewall_block(ip_address: str) -> bool:
+    """Apply iptables rule to block traffic from IP address"""
+    is_production = os.path.exists("/home/vigilant_admin")
+    
+    if not is_production:
+        # Mock mode for local macOS development
+        print(f"[MOCK] Would execute: sudo iptables -A INPUT -s {ip_address} -j DROP")
+        print(f"[MOCK] Would execute: sudo iptables -A FORWARD -s {ip_address} -j DROP")
+        app.logger.info(f"[MOCK] Firewall block applied for {ip_address}")
+        return True
+    
+    try:
+        # Remove existing rules for this IP to avoid duplicates
+        _remove_firewall_block(ip_address)
+        
+        # Add new DROP rules for INPUT and FORWARD chains
+        subprocess.run(
+            ["sudo", "iptables", "-A", "INPUT", "-s", ip_address, "-j", "DROP"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        subprocess.run(
+            ["sudo", "iptables", "-A", "FORWARD", "-s", ip_address, "-j", "DROP"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        app.logger.info(f"Firewall block applied for {ip_address}")
+        return True
+    except subprocess.TimeoutExpired:
+        app.logger.error(f"Firewall block timeout for {ip_address}")
+        return False
+    except subprocess.CalledProcessError as e:
+        app.logger.error(f"Firewall block failed for {ip_address}: {e.stderr}")
+        return False
+    except Exception as e:
+        app.logger.error(f"Unexpected error applying firewall block for {ip_address}: {str(e)}")
+        return False
+
+
+def _remove_firewall_block(ip_address: str) -> bool:
+    """Remove iptables rules blocking traffic from IP address"""
+    is_production = os.path.exists("/home/vigilant_admin")
+    
+    if not is_production:
+        # Mock mode for local macOS development
+        print(f"[MOCK] Would execute: sudo iptables -D INPUT -s {ip_address} -j DROP")
+        print(f"[MOCK] Would execute: sudo iptables -D FORWARD -s {ip_address} -j DROP")
+        app.logger.info(f"[MOCK] Firewall block removed for {ip_address}")
+        return True
+    
+    try:
+        # Remove DROP rules from INPUT and FORWARD chains
+        # Use -D to delete, ignore errors if rule doesn't exist
+        subprocess.run(
+            ["sudo", "iptables", "-D", "INPUT", "-s", ip_address, "-j", "DROP"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        subprocess.run(
+            ["sudo", "iptables", "-D", "FORWARD", "-s", ip_address, "-j", "DROP"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        app.logger.info(f"Firewall block removed for {ip_address}")
+        return True
+    except subprocess.TimeoutExpired:
+        app.logger.error(f"Firewall removal timeout for {ip_address}")
+        return False
+    except Exception as e:
+        app.logger.error(f"Unexpected error removing firewall block for {ip_address}: {str(e)}")
+        return False
+
+
+def _discover_network_devices() -> list:
+    """Discover network devices by merging dnsmasq leases and ARP table with database records"""
+    now = time.time()
+    discovered_devices = {}
+    
+    # Get data from system files
+    dnsmasq_leases = _parse_dnsmasq_leases()
+    arp_entries = _parse_arp_table()
+    
+    # Merge data from both sources
+    all_ips = set(dnsmasq_leases.keys()) | set(arp_entries.keys())
+    
+    for ip_address in all_ips:
+        device_info = {
+            'ip_address': ip_address,
+            'mac_address': None,
+            'hostname': None,
+            'last_seen': now
+        }
+        
+        # Prefer dnsmasq data for hostname and MAC
+        if ip_address in dnsmasq_leases:
+            device_info['mac_address'] = dnsmasq_leases[ip_address]['mac_address']
+            device_info['hostname'] = dnsmasq_leases[ip_address]['hostname']
+        
+        # Fallback to ARP for MAC address
+        if not device_info['mac_address'] and ip_address in arp_entries:
+            device_info['mac_address'] = arp_entries[ip_address]['mac_address']
+        
+        discovered_devices[ip_address] = device_info
+    
+    # Merge with existing database records
+    try:
+        with _open_db() as connection:
+            if not _table_exists(connection, "network_devices"):
+                return list(discovered_devices.values())
+            
+            existing_devices = connection.execute(
+                "SELECT ip_address, mac_address, hostname, custom_name, policy, first_seen, last_seen FROM network_devices"
+            ).fetchall()
+            
+            for row in existing_devices:
+                ip_address = row[0]
+                if ip_address in discovered_devices:
+                    # Update existing device with live data
+                    discovered_devices[ip_address]['custom_name'] = row[3]
+                    discovered_devices[ip_address]['policy'] = row[4]
+                    discovered_devices[ip_address]['first_seen'] = row[5]
+                    discovered_devices[ip_address]['last_seen'] = now
+                else:
+                    # Keep device in database even if not currently active
+                    discovered_devices[ip_address] = {
+                        'ip_address': ip_address,
+                        'mac_address': row[1],
+                        'hostname': row[2],
+                        'custom_name': row[3],
+                        'policy': row[4],
+                        'first_seen': row[5],
+                        'last_seen': row[6],
+                        'active': False
+                    }
+            
+            # Update database with discovered devices
+            for ip_address, device_info in discovered_devices.items():
+                if device_info.get('active', True):
+                    connection.execute(
+                        """
+                        INSERT INTO network_devices (ip_address, mac_address, hostname, custom_name, policy, first_seen, last_seen, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(ip_address) DO UPDATE SET
+                            mac_address = excluded.mac_address,
+                            hostname = excluded.hostname,
+                            last_seen = excluded.last_seen,
+                            updated_at = excluded.updated_at
+                        """,
+                        (
+                            ip_address,
+                            device_info.get('mac_address'),
+                            device_info.get('hostname'),
+                            device_info.get('custom_name'),
+                            device_info.get('policy', 'none'),
+                            device_info.get('first_seen', now),
+                            device_info.get('last_seen', now),
+                            now
+                        )
+                    )
+            
+            connection.commit()
+            
+    except sqlite3.Error as exc:
+        app.logger.warning(f"Failed to merge devices with database: {exc}")
+    
+    return list(discovered_devices.values())
+
+
 def _init_traffic_db() -> None:
     """Initialize traffic_log table with schema matching vigilant_addon.py"""
     try:
@@ -1405,6 +1798,56 @@ def _init_traffic_db() -> None:
         )
 
 
+def _cleanup_unwanted_categories() -> None:
+    """Remove unwanted categories from traffic_log on startup"""
+    try:
+        with _open_db() as connection:
+            if not _table_exists(connection, "traffic_log"):
+                return
+            
+            # Delete unwanted background tracking categories
+            unwanted_categories = ["DNS_TRACKED", "NON-HTML", "DNS", "SYSTEM", "TELEMETRY"]
+            placeholders = ",".join(["?" for _ in unwanted_categories])
+            
+            cursor = connection.execute(
+                f"DELETE FROM traffic_log WHERE category IN ({placeholders})",
+                unwanted_categories
+            )
+            deleted_count = cursor.rowcount
+            connection.commit()
+            
+            if deleted_count > 0:
+                app.logger.info(f"Cleaned up {deleted_count} unwanted log entries from database")
+    except sqlite3.Error as exc:
+        app.logger.debug(
+            "_cleanup_unwanted_categories: could not clean up unwanted categories — %s",
+            exc,
+        )
+
+
+def auto_categorize(domain: str) -> str:
+    """Auto-categorize domains based on keyword matching rules"""
+    domain_lower = domain.lower()
+    
+    # Educational keywords
+    if any(kwd in domain_lower for kwd in ["github", "stackoverflow", "docs", "edu", "wikipedia", "classroom", "khan", "coursera", "edx", "scholar", "researchgate", "academia", "jstor", "pubmed"]):
+        return "EDUCATIONAL"
+    
+    # Productive keywords
+    if any(kwd in domain_lower for kwd in ["jira", "slack", "trello", "zoom", "meet", "notion", "linear", "drive", "docs", "sheets", "asana", "monday", "basecamp"]):
+        return "PRODUCTIVE"
+    
+    # Distracting keywords
+    if any(kwd in domain_lower for kwd in ["youtube", "facebook", "instagram", "tiktok", "netflix", "reddit", "twitter", "x.com", "twitch", "9gag", "buzzfeed", "pinterest", "snapchat"]):
+        return "DISTRACTING"
+    
+    # Harmful keywords
+    if any(kwd in domain_lower for kwd in ["gamble", "casino", "torrent", "bet", "porn", "xxx", "adult", "drugs", "illegal"]):
+        return "HARMFUL"
+    
+    return "UNCATEGORIZED"  # Fallback if nothing matches
+
+
 def _populate_mock_traffic_data() -> None:
     """Populate traffic_log with 35 rows of mock data for local development"""
     import random
@@ -1449,9 +1892,19 @@ def _populate_mock_traffic_data() -> None:
 
 def _compile_config_integrity() -> None:
     try:
+        _init_network_devices_db()
+    except Exception as exc:
+        app.logger.debug("_compile_config_integrity: _init_network_devices_db skipped — %s", exc)
+
+    try:
         _init_traffic_db()
     except Exception as exc:
         app.logger.debug("_compile_config_integrity: _init_traffic_db skipped — %s", exc)
+
+    try:
+        _cleanup_unwanted_categories()
+    except Exception as exc:
+        app.logger.debug("_compile_config_integrity: _cleanup_unwanted_categories skipped — %s", exc)
 
     try:
         _populate_mock_traffic_data()

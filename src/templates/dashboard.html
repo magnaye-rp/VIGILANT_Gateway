@@ -777,6 +777,10 @@
         <div class="nav-icon">📡</div>
         <span>Traffic Log</span>
       </div>
+      <div class="nav-item" onclick="switchTab('devices')">
+        <div class="nav-icon">📱</div>
+        <span>Devices</span>
+      </div>
       <div class="nav-item" onclick="switchTab('system')">
         <div class="nav-icon">🖥️</div>
         <span>System</span>
@@ -1178,7 +1182,10 @@
               <div class="card-title">All Traffic Events</div>
               <div class="card-subtitle">Complete activity history with filters</div>
             </div>
-            <button class="btn-secondary" onclick="clearTrafficLogs()" style="padding: 0.5rem 1rem;">Clear Logs</button>
+            <div style="display: flex; gap: 0.5rem;">
+              <a href="/api/logs/export" class="btn btn-secondary" style="padding: 0.5rem 1rem; text-decoration: none;">Export to CSV</a>
+              <button class="btn-secondary" onclick="clearTrafficLogs()" style="padding: 0.5rem 1rem;">Clear Logs</button>
+            </div>
           </div>
 
           <div class="form-row" style="margin-bottom: 1.5rem;">
@@ -1218,6 +1225,41 @@
               <button class="btn-secondary" id="prev-page" onclick="changePage(-1)" style="padding: 0.5rem 1rem;">Previous</button>
               <button class="btn-secondary" id="next-page" onclick="changePage(1)" style="padding: 0.5rem 1rem;">Next</button>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Devices Tab -->
+      <div id="tab-devices" class="tab-content">
+        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Device Management</h2>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">Network Devices</div>
+              <div class="card-subtitle">Connected clients and access control policies</div>
+            </div>
+            <button class="btn-secondary" onclick="loadDevices()" style="padding: 0.5rem 1rem;">Refresh</button>
+          </div>
+
+          <div style="overflow-x: auto;">
+            <table class="traffic-table">
+              <thead>
+                <tr>
+                  <th>IP Address</th>
+                  <th>MAC Address</th>
+                  <th>Hostname</th>
+                  <th>Custom Name</th>
+                  <th>Policy</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="devices-tbody">
+                <tr>
+                  <td colspan="6" style="text-align: center; color: var(--text-secondary);">Loading devices...</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
@@ -1345,6 +1387,107 @@
       loadKeywords();
       loadProxyConfig();
       loadCategoryHints();
+    }
+    if (tabId === 'devices') loadDevices();
+  }
+
+  // ─── Device Management ───
+  async function loadDevices() {
+    const tableBody = document.getElementById('devices-tbody');
+
+    try {
+      const response = await fetch('/api/devices');
+      const data = await response.json();
+      const devices = data.devices || [];
+
+      if (devices.length === 0) {
+        tableBody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No devices detected</td></tr>';
+        return;
+      }
+
+      tableBody.innerHTML = devices.map(device => {
+        const policy = device.policy || 'none';
+        const policyClass = policy === 'whitelist' ? 'success' : policy === 'blacklist' ? 'danger' : '';
+        const policyBadge = policy !== 'none' ? `<span class="category-badge ${policyClass}">${policy}</span>` : '<span style="color: var(--text-secondary);">none</span>';
+        
+        return `
+          <tr>
+            <td style="font-family: monospace; font-size: 0.9rem;">${device.ip_address || '—'}</td>
+            <td style="font-family: monospace; font-size: 0.9rem;">${device.mac_address || '—'}</td>
+            <td>${device.hostname || '—'}</td>
+            <td>
+              <input type="text" 
+                     value="${device.custom_name || ''}" 
+                     placeholder="Enter custom name"
+                     onchange="updateDeviceName('${device.ip_address}', this.value)"
+                     style="width: 120px; padding: 0.5rem; font-size: 0.85rem;">
+            </td>
+            <td>${policyBadge}</td>
+            <td>
+              <select onchange="updateDevicePolicy('${device.ip_address}', this.value)" 
+                      style="padding: 0.5rem; font-size: 0.85rem; width: 100px;">
+                <option value="none" ${policy === 'none' ? 'selected' : ''}>None</option>
+                <option value="whitelist" ${policy === 'whitelist' ? 'selected' : ''}>Whitelist</option>
+                <option value="blacklist" ${policy === 'blacklist' ? 'selected' : ''}>Blacklist</option>
+              </select>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    } catch (error) {
+      tableBody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading devices</td></tr>';
+    }
+  }
+
+  async function updateDeviceName(ipAddress, customName) {
+    try {
+      // First get current device data to preserve policy
+      const devicesResponse = await fetch('/api/devices');
+      const devicesData = await devicesResponse.json();
+      const device = devicesData.devices?.find(d => d.ip_address === ipAddress);
+      const currentPolicy = device?.policy || 'none';
+
+      const response = await fetch('/api/devices/policy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          ip_address: ipAddress, 
+          custom_name: customName,
+          policy: currentPolicy // Preserve existing policy
+        })
+      });
+
+      const data = await response.json();
+      if (response.ok) {
+        showToast('Device name updated', 'success');
+      } else {
+        showToast(data.error || 'Failed to update device name', 'danger');
+      }
+    } catch (error) {
+      showToast('Error updating device name', 'danger');
+    }
+  }
+
+  async function updateDevicePolicy(ipAddress, policy) {
+    try {
+      const response = await fetch('/api/devices/policy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          ip_address: ipAddress, 
+          policy: policy 
+        })
+      });
+
+      const data = await response.json();
+      if (response.ok) {
+        showToast(`Device policy set to ${policy}`, 'success');
+        loadDevices(); // Refresh to show updated policy
+      } else {
+        showToast(data.error || 'Failed to update device policy', 'danger');
+      }
+    } catch (error) {
+      showToast('Error updating device policy', 'danger');
     }
   }
 

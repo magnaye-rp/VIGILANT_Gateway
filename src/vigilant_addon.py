@@ -199,6 +199,26 @@ def load_social_domains():
         return DEFAULT_SOCIAL_DOMAINS
 
 def log_request(client_ip, host, path, method, category, flagged, entities):
+    # Keep our objective narrow: only save HTTP, HTTPS, or Webhook transactions
+    VALID_LOG_CATEGORIES = {"HTTP", "HTTPS", "WEBHOOK", "PRODUCTIVE", "EDUCATIONAL", "DISTRACTING", "HARMFUL"}
+    
+    # Guard clause to ignore all other background tracking categories
+    if category not in VALID_LOG_CATEGORIES:
+        return  # Silent pass: client gets internet, but we don't log the noise
+    
+    # Auto-categorize if category is UNCATEGORIZED
+    if category == "UNCATEGORIZED" or not category:
+        try:
+            # Import auto_categorize from app module
+            import sys
+            import os
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            from app import auto_categorize
+            category = auto_categorize(host)
+        except ImportError:
+            # Fallback if import fails
+            category = "UNCATEGORIZED"
+    
     with db_lock:
         conn = sqlite3.connect(DB_PATH)
         conn.execute(
