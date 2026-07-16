@@ -9,19 +9,26 @@ import importlib.util
 import csv
 import io
 from pathlib import Path
+import platform
+from collections import deque
 
 try:
     import psutil
 except ImportError:
     psutil = None
 yaml = importlib.import_module("yaml") if importlib.util.find_spec("yaml") else None
-from flask import Flask, jsonify, render_template, request, make_response, send_file, abort
+from flask import Flask, jsonify, render_template, request, make_response, send_file, abort, redirect, flash, url_for
+import json
 
 try:
     from flask_cors import CORS
 except ImportError:
     def CORS(app):
         return app
+
+scroll_velocity_tracker = {}
+
+
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -33,6 +40,7 @@ app = Flask(
     template_folder=str(TEMPLATE_DIR),
 )
 CORS(app)
+app.secret_key = "super_secret_vigilant_key"
 
 SERVER_IP = "192.168.10.1"
 # Environment-aware DB path: production path via env var, fallback to local development path
@@ -1030,6 +1038,88 @@ def export_logs():
         return abort(500, description="Failed to generate CSV export")
 
 
+@app.route('/api/config/export')
+def export_config():
+    try:
+        keywords = [row['keyword'] for row in query_db("SELECT keyword FROM keyword_blacklist")]
+    except sqlite3.Error:
+        keywords = []
+        
+    try:
+        whitelist = [row['mac_address'] for row in query_db("SELECT mac_address FROM network_devices WHERE policy = 'whitelist'")]
+    except sqlite3.Error:
+        whitelist = []
+        
+    try:
+        system_settings = query_db("SELECT key, value FROM config_settings", one=False)
+        settings_dict = {row['key']: row['value'] for row in system_settings}
+    except sqlite3.Error:
+        settings_dict = {}
+        
+    config_data = {
+        "version": "1.0",
+        "blocked_keywords": keywords,
+        "mac_whitelist": whitelist,
+        "settings": settings_dict
+    }
+    
+    json_str = json.dumps(config_data, indent=4)
+    response = make_response(json_str)
+    response.headers["Content-Disposition"] = "attachment; filename=vigilant_config.json"
+    response.headers["Content-Type"] = "application/json"
+    return response
+
+
+@app.route('/api/config/import', methods=['POST'])
+def import_config():
+    if 'config_file' not in request.files:
+        flash("No file uploaded", "error")
+        return redirect(url_for('dashboard'))
+        
+    file = request.files['config_file']
+    if file.filename == '':
+        flash("No selected file", "error")
+        return redirect(url_for('dashboard'))
+        
+    try:
+        config_data = json.loads(file.read().decode('utf-8'))
+        
+        # Validation Check
+        if "blocked_keywords" not in config_data or "mac_whitelist" not in config_data:
+            raise ValueError("Invalid configuration file format.")
+            
+        with _open_db() as connection:
+            connection.execute("DELETE FROM keyword_blacklist")
+            for kw in config_data["blocked_keywords"]:
+                connection.execute("INSERT OR IGNORE INTO keyword_blacklist (keyword) VALUES (?)", (kw,))
+                
+            connection.execute("UPDATE network_devices SET policy = 'none' WHERE policy = 'whitelist'")
+            for mac in config_data["mac_whitelist"]:
+                if mac:
+                    connection.execute(
+                        "UPDATE network_devices SET policy = 'whitelist' WHERE mac_address = ?", 
+                        (mac,)
+                    )
+            
+            if "settings" in config_data:
+                connection.execute("DELETE FROM config_settings")
+                now_ts = time.time()
+                for k, v in config_data["settings"].items():
+                    connection.execute(
+                        "INSERT INTO config_settings (key, value, updated_at) VALUES (?, ?, ?)",
+                        (k, str(v), now_ts)
+                    )
+            
+            connection.commit()
+            
+        flash("Configuration imported successfully!", "success")
+    except Exception as e:
+        app.logger.error("Failed to import config: %s", e)
+        flash(f"Failed to import config: {str(e)}", "error")
+        
+    return redirect(url_for('dashboard'))
+
+
 @app.route("/api/config", methods=["GET", "POST"])
 def api_config():
     if request.method == "GET":
@@ -1944,11 +2034,97 @@ def _populate_mock_traffic_data() -> None:
         connection.commit()
 
 
+def init_traffic_shaping(interface=None):
+    if platform.system() == "Darwin":
+        app.logger.info("[MOCK] Init traffic shaping on %s (macOS detected)", interface)
+        return
+        
+    if not interface:
+        config = load_config()
+        interface = config.get("distribution_interface", "wlan0")
+
+    app.logger.info("Initializing traffic shaping on %s", interface)
+    subprocess.run(f"sudo tc qdisc del dev {interface} root", shell=True, stderr=subprocess.DEVNULL)
+    subprocess.run(f"sudo tc qdisc add dev {interface} root handle 1: htb default 1", shell=True)
+    subprocess.run(f"sudo tc class add dev {interface} parent 1: classid 1:1 htb rate 1000mbit", shell=True)
+    subprocess.run(f"sudo tc class add dev {interface} parent 1: classid 1:10 htb rate 128kbit ceil 128kbit", shell=True)
+    subprocess.run(f"sudo tc filter add dev {interface} protocol ip parent 1:0 prio 1 handle 10 fw flowid 1:10", shell=True)
+
+
+def trigger_ip_throttle(ip, interface=None):
+    if platform.system() == "Darwin":
+        app.logger.info("[MOCK] Throttling IP %s on %s (macOS detected)", ip, interface)
+        return
+        
+    check_rule = f"sudo iptables -t mangle -C POSTROUTING -d {ip} -j MARK --set-mark 10"
+    result = subprocess.run(check_rule, shell=True, stderr=subprocess.DEVNULL)
+    
+    if result.returncode != 0:
+        subprocess.run(f"sudo iptables -t mangle -A POSTROUTING -d {ip} -j MARK --set-mark 10", shell=True)
+        app.logger.info("[SHAPER] IP %s has been successfully throttled.", ip)
+
+
+def clear_ip_throttle(ip, interface=None):
+    if platform.system() == "Darwin":
+        app.logger.info("[MOCK] Lifting throttle for IP %s on %s (macOS detected)", ip, interface)
+        return
+        
+    subprocess.run(f"sudo iptables -t mangle -D POSTROUTING -d {ip} -j MARK --set-mark 10", shell=True, stderr=subprocess.DEVNULL)
+    app.logger.info("[SHAPER] IP %s throttle lifted.", ip)
+
+
+@app.route('/api/report-scroll', methods=['POST'])
+def report_scroll():
+    client_ip = request.remote_addr
+    now = time.time()
+    
+    if client_ip not in scroll_velocity_tracker:
+        scroll_velocity_tracker[client_ip] = deque(maxlen=5)
+        
+    scroll_velocity_tracker[client_ip].append(now)
+    history = scroll_velocity_tracker[client_ip]
+    
+    config = load_config()
+    limit = int(config.get("request_threshold", 90))
+    enabled = config.get("throttle_enabled", True)
+    
+    # Calculate max allowed time gap (e.g., 60 / 90 = 0.67 seconds)
+    max_allowed_gap = 60.0 / limit if limit > 0 else 0.1
+    
+    throttled = False
+    
+    # We need at least 4 intervals (5 scroll events) to reliably calculate velocity
+    if len(history) == 5 and enabled:
+        # Calculate gaps between consecutive scrolls
+        gaps = [history[i] - history[i-1] for i in range(1, len(history))]
+        avg_gap = sum(gaps) / len(gaps)
+        
+        # If average time gap is smaller than the threshold, they are scrolling too fast!
+        if avg_gap < max_allowed_gap:
+            throttled = True
+            trigger_ip_throttle(client_ip)
+            
+    if not throttled:
+        clear_ip_throttle(client_ip)
+        
+    return jsonify({
+        "status": "ok",
+        "throttled": throttled,
+        "scroll_count_sampled": len(history)
+    })
+
+
+
 def _compile_config_integrity() -> None:
     try:
         _init_network_devices_db()
     except Exception as exc:
         app.logger.debug("_compile_config_integrity: _init_network_devices_db skipped — %s", exc)
+
+    try:
+        init_traffic_shaping()
+    except Exception as exc:
+        app.logger.debug("_compile_config_integrity: init_traffic_shaping skipped — %s", exc)
 
     try:
         _init_traffic_db()
@@ -1986,6 +2162,21 @@ def _compile_config_integrity() -> None:
         app.logger.debug("_compile_config_integrity: default config backfill skipped — %s", exc)
 
 
+def auto_cooldown_task():
+    while True:
+        try:
+            now = time.time()
+            for ip, history in list(scroll_velocity_tracker.items()):
+                if history:
+                    last_scroll = history[-1]
+                    if now - last_scroll > 10:
+                        clear_ip_throttle(ip)
+                        history.clear()
+        except Exception as e:
+            app.logger.error("Cooldown task error: %s", e)
+        time.sleep(10)
+
 if __name__ == "__main__":
     _compile_config_integrity()
+    threading.Thread(target=auto_cooldown_task, daemon=True).start()
     app.run(host="0.0.0.0", port=5000, debug=False)

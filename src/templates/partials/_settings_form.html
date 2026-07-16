@@ -305,4 +305,20 @@
             <button type="button" class="btn-danger" onclick="resetConfiguration()" style="width: auto;">Reset Configuration</button>
           </div>
         </form>
+
+        <div class="card mt-4" style="margin-bottom: 2rem;">
+            <div class="card-header">System Backup & Recovery</div>
+            <div class="card-body text-center" style="padding: 1.5rem;">
+                <a href="/api/config/export" class="btn btn-primary mb-3">Download Configuration Backup</a>
+                
+                <hr style="margin: 1.5rem 0;">
+                
+                <form action="/api/config/import" method="POST" enctype="multipart/form-data" class="form-inline justify-content-center" style="display: flex; gap: 1rem; align-items: center; justify-content: center;">
+                    <div class="form-group mb-2" style="margin-bottom: 0;">
+                        <input type="file" name="config_file" accept=".json" class="form-control-file" required>
+                    </div>
+                    <button type="submit" class="btn btn-warning mb-2 ml-2" style="margin-bottom: 0;">Upload & Restore Config</button>
+                </form>
+            </div>
+        </div>
       </div>

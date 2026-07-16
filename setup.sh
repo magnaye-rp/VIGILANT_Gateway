@@ -457,7 +457,7 @@ EOF
     systemctl daemon-reload
     
     log_info "Configuring passwordless systemctl permissions for dashboard management..."
-    echo "$VIGILANT_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart vigilant-proxy.service, /usr/bin/systemctl restart vigilant-dashboard.service, /usr/sbin/netplan apply" | tee /etc/sudoers.d/vigilant-dashboard > /dev/null
+    echo "$VIGILANT_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart vigilant-proxy.service, /usr/bin/systemctl restart vigilant-dashboard.service, /usr/sbin/netplan apply, /sbin/tc, /sbin/iptables" | tee /etc/sudoers.d/vigilant-dashboard > /dev/null
     chmod 0440 /etc/sudoers.d/vigilant-dashboard
     log_success "Passwordless sudo permissions configured"
     
