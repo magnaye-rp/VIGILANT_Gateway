@@ -2073,6 +2073,212 @@ def clear_ip_throttle(ip, interface=None):
     app.logger.info("[SHAPER] IP %s throttle lifted.", ip)
 
 
+@app.route('/api/dashboard/stats', methods=['GET'])
+def mobile_dashboard_stats():
+    """Mobile-optimized endpoint for dashboard metrics with balanced 100% data structures"""
+    try:
+        total_reqs = _total_request_count()
+        blocked_reqs = _blocked_request_count()
+        active_clients = _connected_device_count()
+        raw_categories = _traffic_percentage_metrics()
+        category_percentages = _calculate_category_percentages(raw_categories)
+
+        # Format category data for mobile consumption
+        mobile_categories = [
+            {
+                "name": category,
+                "count": int(raw_categories.get(category, 0)),
+                "percentage": float(category_percentages.get(category, 0.0))
+            }
+            for category in TRAFFIC_CATEGORIES
+        ]
+
+        system_metrics = _system_metrics()
+        service_statuses = _service_statuses()
+
+        return jsonify({
+            "success": True,
+            "data": {
+                "total_requests": int(total_reqs),
+                "blocked_requests": int(blocked_reqs),
+                "active_devices": int(active_clients),
+                "categories": mobile_categories,
+                "system_metrics": {
+                    "cpu_percent": float(system_metrics["cpu_percent"]),
+                    "memory_percent": float(system_metrics["memory_percent"]),
+                    "disk_percent": float(system_metrics["disk_percent"])
+                },
+                "service_status": service_statuses,
+                "uptime": _format_uptime()
+            }
+        })
+
+    except Exception as exc:
+        app.logger.error("Failed to compile mobile dashboard stats: %s", exc)
+        return jsonify({
+            "success": False,
+            "error": str(exc),
+            "data": {
+                "total_requests": 0,
+                "blocked_requests": 0,
+                "active_devices": 0,
+                "categories": [
+                    {"name": cat, "count": 0, "percentage": 0.0}
+                    for cat in TRAFFIC_CATEGORIES
+                ],
+                "system_metrics": {
+                    "cpu_percent": 0.0,
+                    "memory_percent": 0.0,
+                    "disk_percent": 0.0
+                },
+                "service_status": _service_statuses(),
+                "uptime": "0h 0m"
+            }
+        }), 500
+
+
+@app.route('/api/devices/active', methods=['GET'])
+def mobile_active_devices():
+    """Mobile endpoint for active devices with scroll velocity telemetry per IP"""
+    try:
+        devices = _discover_network_devices()
+        
+        # Enhance device data with scroll velocity telemetry
+        mobile_devices = []
+        for device in devices:
+            ip_address = device.get('ip_address')
+            device_data = {
+                "ip_address": ip_address,
+                "mac_address": device.get('mac_address'),
+                "hostname": device.get('hostname'),
+                "custom_name": device.get('custom_name'),
+                "policy": device.get('policy', 'none'),
+                "active": device.get('active', True),
+                "scroll_velocity": {
+                    "is_tracking": ip_address in scroll_velocity_tracker,
+                    "scroll_count": len(scroll_velocity_tracker.get(ip_address, [])),
+                    "is_throttled": False
+                }
+            }
+            
+            # Check if device is currently being throttled based on scroll velocity
+            if ip_address in scroll_velocity_tracker:
+                history = scroll_velocity_tracker[ip_address]
+                if len(history) >= 5:
+                    config = load_config()
+                    limit = int(config.get("request_threshold", 90))
+                    max_allowed_gap = 60.0 / limit if limit > 0 else 0.1
+                    gaps = [history[i] - history[i-1] for i in range(1, len(history))]
+                    avg_gap = sum(gaps) / len(gaps)
+                    device_data["scroll_velocity"]["is_throttled"] = avg_gap < max_allowed_gap
+                    device_data["scroll_velocity"]["current_velocity"] = 60.0 / avg_gap if avg_gap > 0 else 0
+            
+            mobile_devices.append(device_data)
+
+        return jsonify({
+            "success": True,
+            "data": {
+                "total_devices": len(mobile_devices),
+                "devices": mobile_devices
+            }
+        })
+
+    except Exception as exc:
+        app.logger.error("Failed to get active devices for mobile: %s", exc)
+        return jsonify({
+            "success": False,
+            "error": str(exc),
+            "data": {
+                "total_devices": 0,
+                "devices": []
+            }
+        }), 500
+
+
+@app.route('/api/devices/throttle', methods=['POST', 'DELETE'])
+def mobile_device_throttle():
+    """Mobile endpoint for manual IP throttling control"""
+    try:
+        if request.method == 'POST':
+            # Add throttle rule for IP
+            payload = request.get_json(silent=True) or {}
+            if not isinstance(payload, dict):
+                return jsonify({"success": False, "error": "JSON object payload is required"}), 400
+
+            ip_address = payload.get("ip_address", "").strip()
+            if not ip_address:
+                return jsonify({"success": False, "error": "IP address is required"}), 400
+
+            # Apply throttle
+            trigger_ip_throttle(ip_address)
+            
+            # Log throttle event to database
+            with _open_db() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO throttle_events (timestamp, client_ip, host, rpm_current, rpm_baseline, action)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (time.time(), ip_address, "manual_mobile", 0, 0, "manual_throttle")
+                )
+                connection.commit()
+
+            app.logger.info(f"Manual throttle applied for {ip_address} via mobile API")
+            return jsonify({
+                "success": True,
+                "message": f"Throttle applied to {ip_address}",
+                "data": {
+                    "ip_address": ip_address,
+                    "action": "throttle_applied"
+                }
+            })
+
+        elif request.method == 'DELETE':
+            # Remove throttle rule for IP
+            payload = request.get_json(silent=True) or {}
+            if not isinstance(payload, dict):
+                return jsonify({"success": False, "error": "JSON object payload is required"}), 400
+
+            ip_address = payload.get("ip_address", "").strip()
+            if not ip_address:
+                return jsonify({"success": False, "error": "IP address is required"}), 400
+
+            # Clear throttle
+            clear_ip_throttle(ip_address)
+            
+            # Clear scroll tracking for this IP
+            if ip_address in scroll_velocity_tracker:
+                scroll_velocity_tracker[ip_address].clear()
+            
+            # Log throttle removal event to database
+            with _open_db() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO throttle_events (timestamp, client_ip, host, rpm_current, rpm_baseline, action)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (time.time(), ip_address, "manual_mobile", 0, 0, "manual_throttle_cleared")
+                )
+                connection.commit()
+
+            app.logger.info(f"Manual throttle cleared for {ip_address} via mobile API")
+            return jsonify({
+                "success": True,
+                "message": f"Throttle cleared for {ip_address}",
+                "data": {
+                    "ip_address": ip_address,
+                    "action": "throttle_cleared"
+                }
+            })
+
+    except Exception as exc:
+        app.logger.error("Failed to process mobile throttle request: %s", exc)
+        return jsonify({
+            "success": False,
+            "error": str(exc)
+        }), 500
+
+
 @app.route('/api/report-scroll', methods=['POST'])
 def report_scroll():
     client_ip = request.remote_addr
