@@ -1057,7 +1057,7 @@ def export_config():
         settings_dict = {}
         
     config_data = {
-        "version": "1.0",
+        "backup_version": "1.0",
         "blocked_keywords": keywords,
         "mac_whitelist": whitelist,
         "settings": settings_dict
