@@ -39,7 +39,7 @@ app = Flask(
     static_folder=str(STATIC_DIR),
     template_folder=str(TEMPLATE_DIR),
 )
-CORS(app)
+CORS(app, resources={r"/api/*": {"origins": "*"}})
 app.secret_key = "super_secret_vigilant_key"
 
 SERVER_IP = "192.168.10.1"
