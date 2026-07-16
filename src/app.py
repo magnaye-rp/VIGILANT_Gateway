@@ -305,7 +305,7 @@ def _format_recent_log_entry(log: dict) -> dict:
 
 
 def _traffic_percentage_metrics() -> dict:
-    """Return actual counts per category (not percentages)"""
+    """Return actual counts per category (not percentages). Only classified categories are counted."""
     distribution = {category: 0 for category in TRAFFIC_CATEGORIES}
 
     if not DB_PATH.exists():
@@ -316,11 +316,16 @@ def _traffic_percentage_metrics() -> dict:
             if not _table_exists(connection, "traffic_log"):
                 return distribution
 
+            # Strictly count only our four classified categories.
+            # Noise rows (Non-HTML, DNS_Tracked, Uncategorized, etc.) are excluded
+            # by the LOWER(TRIM(...)) IN (...) guard to prevent them from inflating counts.
             category_rows = connection.execute(
                 """
                 SELECT LOWER(TRIM(category)) AS normalized_category, COUNT(*) AS category_count
                 FROM traffic_log
-                WHERE category IS NOT NULL AND TRIM(category) != '' AND LOWER(TRIM(category)) != 'uncategorized'
+                WHERE category IS NOT NULL
+                  AND TRIM(category) != ''
+                  AND LOWER(TRIM(category)) IN ('educational', 'productive', 'distracting', 'harmful')
                 GROUP BY LOWER(TRIM(category))
                 """
             ).fetchall()
@@ -338,20 +343,29 @@ def _traffic_percentage_metrics() -> dict:
 
 
 def _calculate_category_percentages(category_counts: dict) -> dict:
-    """Calculate percentages excluding UNCATEGORIZED from total"""
-    # Calculate total containing ONLY our target categories
-    categorized_total = sum(count for cat, count in category_counts.items() if cat != "UNCATEGORIZED")
-    
-    # Calculate percentages safely
+    """Calculate percentages using ONLY the four classified categories as the denominator.
+    Non-HTML, DNS_Tracked, Uncategorized and any other noise keys are excluded so the
+    four real categories always sum to exactly 100%%.
+    """
+    # The canonical set of categories that should ever appear in the denominator.
+    classified = {c.lower() for c in TRAFFIC_CATEGORIES}  # {'educational','productive','distracting','harmful'}
+
+    # Denominator: sum of classified category counts only.
+    categorized_total = sum(
+        count for cat, count in category_counts.items()
+        if cat.lower() in classified
+    )
+
     percentages = {}
     for cat, count in category_counts.items():
-        if cat == "UNCATEGORIZED":
-            percentages[cat] = 0  # Hide or set to 0
+        if cat.lower() not in classified:
+            # Any residual noise key is zeroed out and hidden from the chart.
+            percentages[cat] = 0
         elif categorized_total > 0:
             percentages[cat] = round((count / categorized_total) * 100, 1)
         else:
             percentages[cat] = 0
-    
+
     return percentages
 
 
@@ -1822,51 +1836,45 @@ def _init_traffic_db() -> None:
 
 
 def _cleanup_unwanted_categories() -> None:
-    """Remove unwanted categories from traffic_log on startup"""
+    """Remove noise/telemetry category rows from traffic_log on startup.
+
+    Catches ALL case variants of the three noise category families:
+      - Non-HTML  / NON-HTML  / non-html
+      - DNS_Tracked / DNS_TRACKED / dns_tracked / DNS / DNS_QUERY
+      - Uncategorized / UNCATEGORIZED / uncategorized
+      - Mobile_Bypass / MOBILE_BYPASS
+    """
+    NOISE_CATEGORY_KEYS = (
+        "non-html",
+        "dns_tracked",
+        "dns",
+        "dns_query",
+        "uncategorized",
+        "mobile_bypass",
+        "system",
+        "telemetry",
+    )
     try:
         with _open_db() as connection:
             if not _table_exists(connection, "traffic_log"):
                 return
-            
-            # Delete unwanted background tracking categories
-            unwanted_categories = ["DNS_TRACKED", "NON-HTML", "DNS", "SYSTEM", "TELEMETRY"]
-            placeholders = ",".join(["?" for _ in unwanted_categories])
-            
+
+            placeholders = ",".join(["?" for _ in NOISE_CATEGORY_KEYS])
             cursor = connection.execute(
-                f"DELETE FROM traffic_log WHERE category IN ({placeholders})",
-                unwanted_categories
+                f"DELETE FROM traffic_log WHERE LOWER(TRIM(category)) IN ({placeholders})",
+                NOISE_CATEGORY_KEYS,
             )
             deleted_count = cursor.rowcount
             connection.commit()
-            
+
             if deleted_count > 0:
-                app.logger.info(f"Cleaned up {deleted_count} unwanted log entries from database")
+                app.logger.info(
+                    "Startup cleanup: removed %d noise/telemetry log entries from database",
+                    deleted_count,
+                )
     except sqlite3.Error as exc:
         app.logger.debug(
-            "_cleanup_unwanted_categories: could not clean up unwanted categories — %s",
-            exc,
-        )
-
-
-def _cleanup_uncategorized_logs() -> None:
-    """Remove UNCATEGORIZED logs from traffic_log on startup to clean up dashboard"""
-    try:
-        with _open_db() as connection:
-            if not _table_exists(connection, "traffic_log"):
-                return
-            
-            # Delete UNCATEGORIZED logs (case-insensitive)
-            cursor = connection.execute(
-                "DELETE FROM traffic_log WHERE LOWER(TRIM(category)) = 'uncategorized'"
-            )
-            deleted_count = cursor.rowcount
-            connection.commit()
-            
-            if deleted_count > 0:
-                app.logger.info(f"Cleaned up {deleted_count} UNCATEGORIZED log entries from database")
-    except sqlite3.Error as exc:
-        app.logger.debug(
-            "_cleanup_uncategorized_logs: could not clean up uncategorized logs — %s",
+            "_cleanup_unwanted_categories: could not clean up noise categories — %s",
             exc,
         )
 
@@ -1951,11 +1959,6 @@ def _compile_config_integrity() -> None:
         _cleanup_unwanted_categories()
     except Exception as exc:
         app.logger.debug("_compile_config_integrity: _cleanup_unwanted_categories skipped — %s", exc)
-
-    try:
-        _cleanup_uncategorized_logs()
-    except Exception as exc:
-        app.logger.debug("_compile_config_integrity: _cleanup_uncategorized_logs skipped — %s", exc)
 
     try:
         _populate_mock_traffic_data()

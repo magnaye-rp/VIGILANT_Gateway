@@ -198,31 +198,28 @@ def load_social_domains():
         print(f"[VIGILANT] Error loading social domains from database: {e}, using defaults")
         return DEFAULT_SOCIAL_DOMAINS
 
+# Categories that represent real, classified user web activity.
+# All other category strings (DNS noise, non-HTML assets, uncategorized) are silently dropped.
+_LOGGABLE_CATEGORIES = {"educational", "productive", "distracting", "harmful"}
+
+# Category strings that are explicitly considered noise / telemetry and must never
+# reach the database — checked case-insensitively to catch all variants.
+_NOISE_CATEGORIES = {"non-html", "dns_tracked", "dns", "dns_query", "mobile_bypass", "uncategorized"}
+
+
 def log_request(client_ip, host, path, method, category, flagged, entities):
-    # Keep our objective narrow: only save HTTP, HTTPS, or Webhook transactions
-    VALID_LOG_CATEGORIES = {"HTTP", "HTTPS", "WEBHOOK", "PRODUCTIVE", "EDUCATIONAL", "DISTRACTING", "HARMFUL"}
-    
-    # Guard clause to ignore all other background tracking categories
-    if category not in VALID_LOG_CATEGORIES:
+    # Normalise the category for comparison – catches mixed-case variants like
+    # 'Non-HTML', 'DNS_Tracked', 'Uncategorized', 'UNCATEGORIZED', etc.
+    category_key = (category or "").strip().lower()
+
+    # 1. Immediately drop any known noise / telemetry category.
+    if category_key in _NOISE_CATEGORIES:
         return  # Silent pass: client gets internet, but we don't log the noise
-    
-    # Auto-categorize if category is UNCATEGORIZED
-    if category == "UNCATEGORIZED" or not category:
-        try:
-            # Import auto_categorize from app module
-            import sys
-            import os
-            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-            from app import auto_categorize
-            category = auto_categorize(host)
-        except ImportError:
-            # Fallback if import fails
-            category = "UNCATEGORIZED"
-    
-    # Skip database INSERT if category is still UNCATEGORIZED after auto-categorization
-    # This prevents log bloat from uncategorized noise
-    if category == "UNCATEGORIZED" or not category:
-        return  # Silent pass: client gets internet, but we don't log uncategorized traffic
+
+    # 2. Only write loggable (classified) categories to the database.
+    #    Anything not in the allow-set is treated as uncategorized noise.
+    if category_key not in _LOGGABLE_CATEGORIES:
+        return  # Silent pass: client gets internet, but we don't log the noise
     
     with db_lock:
         conn = sqlite3.connect(DB_PATH)
@@ -549,7 +546,7 @@ class VIGILANTAddon:
                             log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [])
                             flow.response = http.Response.make(
                                 403,
-                                b"Blocked by Vigilant Engine",
+                                b"Blocked by Vigilant Gateway",
                                 {"Content-Type": "text/plain"}
                             )
                             return
@@ -658,7 +655,7 @@ class VIGILANTAddon:
                             log_request(client_ip, host, path, method, "Harmful", True, [])
                             flow.response = http.Response.make(
                                 403,
-                                b"Blocked by Vigilant Engine",
+                                b"Blocked by Vigilant Gateway",
                                 {"Content-Type": "text/plain"}
                             )
                             return
