@@ -1698,11 +1698,56 @@
   }
 
   function exportConfig() {
-    showToast('Exporting configuration...', 'warning');
+      showToast('Exporting configuration...', 'info');
+      // Direct browser redirect to download the JSON payload attachment cleanly
+      window.location.href = '/api/config/export';
   }
 
   function importConfig() {
-    showToast('Import feature coming soon', 'warning');
+      // 1. Create a dynamic, hidden file input element
+      const fileInput = document.createElement('input');
+      fileInput.type = 'file';
+      fileInput.accept = '.json';
+      
+      // 2. Listen for when the user selects a file
+      fileInput.onchange = function(e) {
+          const file = e.target.files[0];
+          if (!file) return;
+          
+          showToast('Uploading configuration...', 'info');
+          
+          // 3. Package the file inside FormData
+          const formData = new FormData();
+          formData.append('config_file', file);
+          
+          // 4. Send the multi-part request to our backend API
+          fetch('/api/config/import', {
+              method: 'POST',
+              body: formData
+          })
+          .then(response => {
+              if (response.redirected) {
+                  // If Flask redirects with flash messages, follow it
+                  window.location.href = response.url;
+              } else {
+                  return response.json().then(data => {
+                      if (response.ok) {
+                          showToast('Configuration imported successfully!', 'success');
+                          setTimeout(() => window.location.reload(), 1500);
+                      } else {
+                          showToast(data.error || 'Import failed.', 'danger');
+                      }
+                  });
+              }
+          })
+          .catch(err => {
+              console.error(err);
+              showToast('Network error during configuration import.', 'danger');
+          });
+      };
+      
+      // 5. Programmatically click it to trigger the OS file selector window
+      fileInput.click();
   }
 
   async function executeSystemControl(action, buttonElement) {
