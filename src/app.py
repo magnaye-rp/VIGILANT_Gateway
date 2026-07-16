@@ -7,7 +7,7 @@ import time
 import importlib
 import importlib.util
 import csv
-from io import StringIO
+import io
 from pathlib import Path
 
 try:
@@ -15,7 +15,7 @@ try:
 except ImportError:
     psutil = None
 yaml = importlib.import_module("yaml") if importlib.util.find_spec("yaml") else None
-from flask import Flask, jsonify, render_template, request, make_response
+from flask import Flask, jsonify, render_template, request, make_response, send_file, abort
 
 try:
     from flask_cors import CORS
@@ -969,56 +969,51 @@ def clear_logs():
 
 @app.route('/api/logs/export')
 def export_logs():
-    """Export traffic logs as CSV file"""
+    """Export traffic logs as CSV file using BytesIO for Flask 2.x/3.x compatibility"""
     try:
-        if not DB_PATH.exists():
-            return jsonify({"error": "Database doesn't exist"}), 404
+        # Fetch logs from SQLite database via query_db helper.
+        # Exclude non-web noise categories 'DNS_TRACKED' and 'NON-HTML' for clean export.
+        logs = query_db(
+            "SELECT timestamp, client_ip, host, category, flagged "
+            "FROM traffic_log "
+            "WHERE category NOT IN ('DNS_TRACKED', 'NON-HTML') "
+            "ORDER BY timestamp DESC"
+        )
 
-        with _open_db() as connection:
-            if not _table_exists(connection, "traffic_log"):
-                return jsonify({"error": "Traffic log table doesn't exist"}), 404
+        # Create in-memory text stream
+        text_stream = io.StringIO()
+        cw = csv.writer(text_stream)
 
-            # Query all logs respecting protocol filters
-            VALID_LOG_CATEGORIES = {"HTTP", "HTTPS", "WEBHOOK", "PRODUCTIVE", "EDUCATIONAL", "DISTRACTING", "HARMFUL"}
-            placeholders = ",".join(["?" for _ in VALID_LOG_CATEGORIES])
-            
-            rows = connection.execute(
-                f"SELECT timestamp, client_ip, host, category, flagged FROM traffic_log WHERE category IN ({placeholders}) ORDER BY timestamp DESC",
-                list(VALID_LOG_CATEGORIES)
-            ).fetchall()
+        # Write CSV Headers
+        cw.writerow(['Time', 'Client IP', 'Domain', 'Category', 'Status'])
 
-        # Create CSV in memory
-        si = StringIO()
-        cw = csv.writer(si)
-        cw.writerow(['Time', 'Client IP', 'Domain', 'Category', 'Status'])  # Headers
-        
-        for row in rows:
-            timestamp = row[0]
-            client_ip = row[1]
-            host = row[2]
-            category = row[3]
-            flagged = row[4]
-            
-            # Format timestamp
-            formatted_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(timestamp))
-            status = 'Blocked' if flagged else 'Allowed'
-            
-            cw.writerow([formatted_time, client_ip, host, category, status])
-        
-        # Create response
-        output = make_response(si.getvalue())
-        output.headers["Content-Disposition"] = "attachment; filename=traffic_logs.csv"
-        output.headers["Content-type"] = "text/csv"
-        
-        app.logger.info(f"Exported {len(rows)} traffic log entries to CSV")
-        return output
-        
-    except sqlite3.Error as exc:
-        app.logger.error("Failed to export logs: %s", exc)
-        return jsonify({"error": str(exc)}), 500
-    except Exception as exc:
-        app.logger.error("Unexpected error exporting logs: %s", exc)
-        return jsonify({"error": str(exc)}), 500
+        # Write rows
+        for log in logs:
+            formatted_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log['timestamp']))
+            status = 'Blocked' if log['flagged'] else 'Allowed'
+            cw.writerow([formatted_time, log['client_ip'], log['host'], log['category'], status])
+
+        # Convert the text stream to binary BytesIO encoded in UTF-8
+        byte_stream = io.BytesIO()
+        byte_stream.write(text_stream.getvalue().encode('utf-8'))
+        byte_stream.seek(0)  # Rewind the stream pointer to the beginning
+
+        text_stream.close()
+
+        app.logger.info(f"Exported {len(logs)} traffic log entries to CSV")
+
+        return send_file(
+            byte_stream,
+            as_attachment=True,
+            download_name='traffic_logs.csv',
+            mimetype='text/csv'
+        )
+
+    except Exception as e:
+        # Log the internal error safely
+        print(f"Export Error: {e}")
+        app.logger.error("Unexpected error exporting logs: %s", e)
+        return abort(500, description="Failed to generate CSV export")
 
 
 @app.route("/api/config", methods=["GET", "POST"])
