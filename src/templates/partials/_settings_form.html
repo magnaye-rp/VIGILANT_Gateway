@@ -154,14 +154,25 @@
             </div>
 
             <!-- Section C -->
-            <div style="margin-bottom: 2.5rem; padding: 1.5rem; background: rgba(0,0,0,0.03); border-radius: 8px;">
-              <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--primary);">SNI (Server Name Indication) Guard</h3>
-              <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 1rem;">Allows VIGILANT to apply behavioral policies to encrypted apps (like Instagram & TikTok) that block full SSL inspection.</p>
-              <label class="toggle-switch-container" style="display: flex; align-items: center; gap: 1rem; cursor: pointer;">
-                <input type="checkbox" id="behavioral-sni-enabled" class="d-none">
-                <div class="toggle-slider" onclick="this.previousElementSibling.click(); this.classList.toggle('active')"></div>
-                <span style="font-weight: 600;">Enable SNI Fallback Tracking</span>
-              </label>
+            <div class="behavioral-section">
+              <h3 class="behavioral-title">SNI (Server Name Indication) Guard</h3>
+              
+              <div class="toggle-control-group">
+                <div class="toggle-label-container">
+                  <h4 class="toggle-main-label">Enable SNI Fallback Tracking</h4>
+                  <p class="toggle-sub-description">
+                    Allows VIGILANT to apply behavioral policies to encrypted apps (like Instagram & TikTok) that block full SSL inspection.
+                  </p>
+                </div>
+                
+                <div class="switch-container">
+                  <span id="sni-status-text" class="switch-status-indicator" style="color: #1A938A;">ON</span>
+                  <label class="switch">
+                    <input type="checkbox" id="behavioral-sni-enabled" checked onchange="updateSNIStatusIndicator(this)">
+                    <span class="slider round"></span>
+                  </label>
+                </div>
+              </div>
             </div>
 
             <!-- Action Bar -->

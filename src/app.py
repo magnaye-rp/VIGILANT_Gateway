@@ -2078,6 +2078,76 @@ def update_device_policy():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route("/api/restraints/registry", methods=["GET"])
+def get_restraints_registry():
+    """Get active network blocks/restraints registry"""
+    try:
+        restraints = []
+        
+        if DB_PATH.exists():
+            with _open_db() as connection:
+                if _table_exists(connection, "network_devices"):
+                    rows = connection.execute(
+                        """
+                        SELECT ip_address, mac_address, hostname, custom_name, policy, first_seen, last_seen
+                        FROM network_devices
+                        WHERE policy = 'blacklist'
+                        ORDER BY last_seen DESC
+                        """
+                    ).fetchall()
+                    
+                    for row in rows:
+                        restraints.append({
+                            "ip_address": row[0],
+                            "mac_address": row[1],
+                            "hostname": row[2] or "Unknown",
+                            "custom_name": row[3],
+                            "policy": row[4],
+                            "first_seen": row[5],
+                            "last_seen": row[6]
+                        })
+        
+        return jsonify({"restraints": restraints})
+    except Exception as exc:
+        app.logger.error(f"Failed to get restraints registry: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/restraints/release", methods=["POST"])
+def release_restraint():
+    """Release IP restriction from restraints registry"""
+    try:
+        data = request.get_json(silent=True) or {}
+        ip_address = data.get("ip_address")
+        
+        if not ip_address:
+            return jsonify({"error": "IP address is required"}), 400
+        
+        with _open_db() as connection:
+            if not _table_exists(connection, "network_devices"):
+                return jsonify({"error": "Network devices table does not exist"}), 404
+            
+            now = time.time()
+            connection.execute(
+                """
+                UPDATE network_devices
+                SET policy = 'none', updated_at = ?
+                WHERE ip_address = ?
+                """,
+                (now, ip_address)
+            )
+            connection.commit()
+            app.logger.info(f"Released restraint for IP: {ip_address}")
+        
+        # Remove firewall block
+        _remove_firewall_block(ip_address)
+        
+        return jsonify({"status": "success", "message": f"Released restraint for {ip_address}"})
+    except Exception as exc:
+        app.logger.error(f"Failed to release restraint: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
 def _init_network_devices_db() -> None:
     """Initialize network_devices table for device management"""
     try:
