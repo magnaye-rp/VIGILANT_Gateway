@@ -393,19 +393,26 @@ EOF
 # =====================================================================
 echo "Configuring passwordless sudo for dnsmasq and hostapd..."
 
-# 1. Determine the user running the dashboard (defaulting to www-data if not set)
-WEB_USER="www-data" 
+# 1. Dynamically find the user running the vigilant systemd service
+# If it's not a service yet, it defaults to the user who owns the git repo directory
+WEB_USER=$(systemctl show -p User vigilant-dashboard.service | cut -d= -f2)
 
-# 2. Write the targeted non-interactive sudoers ruleset
+if [ -z "$WEB_USER" ] || [ "$WEB_USER" = "root" ] || [ "$WEB_USER" = "" ]; then
+    WEB_USER=$(stat -c '%U' .)
+fi
+
+echo "Detected application execution user: $WEB_USER"
+
+# 2. Write the absolute paths for both systemctl and service commands to cover all bases
 cat << EOF | sudo tee /etc/sudoers.d/vigilant-services > /dev/null
-# Granted permissions for the application runtime user to cycle network cards
-$WEB_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart dnsmasq, /usr/bin/systemctl restart hostapd
+# Targeted ruleset for network card recycling
+$WEB_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart dnsmasq, /usr/bin/systemctl restart hostapd, /bin/systemctl restart dnsmasq, /bin/systemctl restart hostapd
 EOF
 
-# 3. Secure the file with required system permissions (must be 0440)
+# 3. Secure the file permissions strictly (Linux rejects sudoer files that are too open)
 sudo chmod 0440 /etc/sudoers.d/vigilant-services
 
-echo "Sudoers rules successfully injected and secured!"
+echo "Sudoers rules successfully injected for $WEB_USER!"
 }
 
 
