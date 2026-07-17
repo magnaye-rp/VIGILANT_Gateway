@@ -6,7 +6,7 @@
           <div class="card-header">
             <div>
               <div class="card-title">Network Devices</div>
-              <div class="card-subtitle">Track active clients, throughput, and manage network restrictions</div>
+              <div class="card-subtitle">Track active clients and manage network restrictions</div>
             </div>
             <button class="btn-secondary" onclick="loadDevices()" style="padding: 0.5rem 1rem;">Refresh</button>
           </div>
@@ -18,13 +18,12 @@
                   <th>Hostname</th>
                   <th>IP Address</th>
                   <th>MAC Address</th>
-                  <th>State</th>
-                  <th>Action</th>
+                  <th>Filter Policy</th>
                 </tr>
               </thead>
               <tbody id="devices-tbody">
                 <tr>
-                  <td colspan="5" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Loading devices...</td>
+                  <td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Loading devices...</td>
                 </tr>
               </tbody>
             </table>

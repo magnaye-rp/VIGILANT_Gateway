@@ -1237,53 +1237,48 @@
       const devices = data.devices || [];
 
       if (devices.length === 0) {
-        tableBody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No devices detected</td></tr>';
+        tableBody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No devices detected</td></tr>';
         return;
       }
 
       tableBody.innerHTML = devices.map(device => {
-        const throughput = device.throughput ? `${device.throughput.rx || 0} / ${device.throughput.tx || 0} Mbps` : '0.0 / 0.0 Mbps';
-        const isThrottled = device.policy === 'blacklist' || device.is_throttled;
-        const stateClass = isThrottled ? 'danger' : 'success';
-        const stateLabel = isThrottled ? 'Throttled' : 'Allowed';
+        const currentPolicy = device.policy || 'none';
         
         return `
           <tr>
             <td style="font-weight: 500;">${device.hostname || device.custom_name || 'Unknown Device'}</td>
             <td style="font-family: monospace; font-size: 0.9rem;">${device.ip_address || '—'}</td>
             <td style="font-family: monospace; font-size: 0.9rem;">${device.mac_address || '—'}</td>
-            <td style="color: var(--primary); font-weight: 600;">${throughput}</td>
-            <td><span class="category-badge ${stateClass}">${stateLabel}</span></td>
             <td>
-              <label class="toggle-switch-container">
-                <input type="checkbox" ${isThrottled ? 'checked' : ''} onchange="toggleDeviceThrottle('${device.ip_address}', this.checked)" class="d-none">
-                <div class="toggle-slider ${isThrottled ? 'active' : ''}" onclick="this.previousElementSibling.click(); this.classList.toggle('active')"></div>
-              </label>
+              <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                <button class="btn-whitelist" onclick="setFilter('${device.mac_address}', 'whitelist')" style="padding: 0.25rem 0.5rem; font-size: 0.8rem; background: var(--success); color: white; border: none; border-radius: 4px; cursor: pointer;">Whitelist</button>
+                <button class="btn-blacklist" onclick="setFilter('${device.mac_address}', 'blacklist')" style="padding: 0.25rem 0.5rem; font-size: 0.8rem; background: var(--danger); color: white; border: none; border-radius: 4px; cursor: pointer;">Blacklist</button>
+                <button class="btn-reset" onclick="setFilter('${device.mac_address}', 'none')" style="padding: 0.25rem 0.5rem; font-size: 0.8rem; background: var(--surface-lighter); color: var(--text); border: 1px solid var(--border); border-radius: 4px; cursor: pointer;">Reset</button>
+              </div>
             </td>
           </tr>
         `;
       }).join('');
     } catch (error) {
-      tableBody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading devices</td></tr>';
+      tableBody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading devices</td></tr>';
     }
   }
 
-  async function toggleDeviceThrottle(ipAddress, shouldThrottle) {
-    const policy = shouldThrottle ? 'blacklist' : 'none';
+  async function setFilter(macAddress, policy) {
     try {
       const response = await fetch('/api/devices/policy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ip_address: ipAddress, policy: policy })
+        body: JSON.stringify({ mac_address: macAddress, policy: policy })
       });
       if (response.ok) {
-        showToast(`Device ${shouldThrottle ? 'throttled' : 'allowed'} successfully`, 'success');
+        showToast(`Device policy set to ${policy}`, 'success');
         loadDevices();
       } else {
-        showToast('Failed to update device state', 'danger');
+        showToast('Failed to update device policy', 'danger');
       }
     } catch (error) {
-      showToast('Error updating device state', 'danger');
+      showToast('Error updating device policy', 'danger');
     }
   }
 
@@ -1819,8 +1814,8 @@
       const response = await fetch('/api/keywords');
       const keywords = await response.json();
 
-      if (keywords.length === 0) {
-        tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No keywords blocked</td></tr>';
+      if (!keywords || keywords.length === 0) {
+        tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No constraints active</td></tr>';
         return;
       }
 
