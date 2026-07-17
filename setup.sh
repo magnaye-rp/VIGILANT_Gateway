@@ -389,6 +389,25 @@ EOF
     log_success "Hostapd Access Point is live with Intel AP stability optimizations!"
 }
 
+# =====================================================================
+# CONFIGURE PASSWORDLESS SUDO FOR NETWORK SERVICE MANAGEMENT
+# =====================================================================
+echo "Configuring passwordless sudo for dnsmasq and hostapd..."
+
+# 1. Determine the user running the dashboard (defaulting to www-data if not set)
+WEB_USER="www-data" 
+
+# 2. Write the targeted non-interactive sudoers ruleset
+cat << EOF | sudo tee /etc/sudoers.d/vigilant-services > /dev/null
+# Granted permissions for the application runtime user to cycle network cards
+$WEB_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart dnsmasq, /usr/bin/systemctl restart hostapd
+EOF
+
+# 3. Secure the file with required system permissions (must be 0440)
+sudo chmod 0440 /etc/sudoers.d/vigilant-services
+
+echo "Sudoers rules successfully injected and secured!"
+
 # ─── Stage 7.6: Wi-Fi Power Saving Disable ────────────────────────────────────
 stage_7_6_wifi_power_save() {
     echo ""

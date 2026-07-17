@@ -2298,7 +2298,7 @@ def api_system_control():
                 return jsonify({"error": f"Firewall reload error: {str(e)}"}), 500
         elif action == "restart_dnsmasq":
             try:
-                subprocess.run(["sudo", "systemctl", "restart", "dnsmasq"], check=True, capture_output=True, text=True, timeout=30)
+                subprocess.run(["sudo", "-n", "systemctl", "restart", "dnsmasq"], check=True, capture_output=True, text=True, timeout=30)
                 return jsonify({"status": "success", "message": "dnsmasq reloaded successfully."})
             except subprocess.CalledProcessError as e:
                 error_output = e.stderr or str(e)
@@ -2316,7 +2316,7 @@ def api_system_control():
                 return jsonify({"status": "warning", "message": f"dnsmasq reload encountered an issue: {str(e)}"})
         elif action == "restart_hostapd":
             try:
-                subprocess.run(["sudo", "systemctl", "restart", "hostapd"], check=True, capture_output=True, text=True, timeout=30)
+                subprocess.run(["sudo", "-n", "systemctl", "restart", "hostapd"], check=True, capture_output=True, text=True, timeout=30)
                 return jsonify({"status": "success", "message": "Hostapd interface reloaded successfully."})
             except subprocess.CalledProcessError as e:
                 error_output = e.stderr or str(e)
