@@ -1105,6 +1105,9 @@
     if (tabId === 'filtering') {
       loadCategoryHints();
     }
+    if (tabId === 'behavioral-control') {
+      loadBehavioralSettings();
+    }
   }
 
   // ─── Device Management ───
@@ -1589,65 +1592,74 @@
     }
   }
 
-  function toggleVelocityCustom(type) {
-    const preset = document.getElementById(`${type}-velocity-preset`).value;
-    const container = document.getElementById(`${type}-velocity-custom-container`);
-    if (preset === 'custom') {
-      container.style.display = 'block';
-    } else {
-      container.style.display = 'none';
+  async function loadBehavioralSettings() {
+    try {
+      const response = await fetch('/api/config/behavioral');
+      if (!response.ok) throw new Error('Failed to fetch behavioral settings');
+      const data = await response.json();
+      
+      const netPreset = document.getElementById('behavioral-network-preset');
+      const netCustom = document.getElementById('behavioral-network-custom');
+      if (netPreset) netPreset.value = data.network_velocity_preset || 'Medium';
+      if (netCustom) netCustom.value = data.network_velocity_custom || 150;
+      toggleBehavioralCustom('network');
+      
+      const scrollPreset = document.getElementById('behavioral-scroll-preset');
+      const scrollCustom = document.getElementById('behavioral-scroll-custom');
+      if (scrollPreset) scrollPreset.value = data.physical_scroll_preset || 'Medium';
+      if (scrollCustom) scrollCustom.value = data.physical_scroll_custom || 75;
+      toggleBehavioralCustom('scroll');
+      
+      const sniEnabled = document.getElementById('behavioral-sni-enabled');
+      if (sniEnabled) sniEnabled.checked = data.sni_filtering_enabled;
+      if (sniEnabled) {
+        const slider = sniEnabled.nextElementSibling;
+        if (data.sni_filtering_enabled) slider.classList.add('active');
+        else slider.classList.remove('active');
+      }
+    } catch (e) {
+      console.error(e);
+      showToast('Error loading behavioral settings', 'danger');
     }
   }
 
-  async function saveBehavioralSettings() {
-    const nlpMode = document.getElementById('nlp-mode')?.value;
-    
-    const netPreset = document.getElementById('network-velocity-preset')?.value;
-    const netCustom = document.getElementById('network-velocity-custom')?.value;
-    const networkVelocity = netPreset === 'custom' ? netCustom : netPreset;
+  function toggleBehavioralCustom(type) {
+    const preset = document.getElementById(`behavioral-${type}-preset`).value;
+    const container = document.getElementById(`behavioral-${type}-custom-container`);
+    if (preset === 'Custom') {
+      container.classList.remove('hidden');
+    } else {
+      container.classList.add('hidden');
+    }
+  }
 
-    const scrollPreset = document.getElementById('scroll-velocity-preset')?.value;
-    const scrollCustom = document.getElementById('scroll-velocity-custom')?.value;
-    const scrollVelocity = scrollPreset === 'custom' ? scrollCustom : scrollPreset;
+  async function saveBehavioralSettings(event) {
+    if (event) event.preventDefault();
     
-    // Also save throttle enabled / rate to /api/config if they are part of it? 
-    // The prompt only asked for behavioral endpoint: nlp_accuracy, proxy_velocity_threshold, request_threshold
-    
-    if (!networkVelocity || (netPreset === 'custom' && !netCustom)) {
-      showToast('Please provide a valid Network Velocity value', 'danger');
-      return;
-    }
-    
-    if (!scrollVelocity || (scrollPreset === 'custom' && !scrollCustom)) {
-      showToast('Please provide a valid Scroll Velocity value', 'danger');
-      return;
-    }
+    const netPreset = document.getElementById('behavioral-network-preset').value;
+    const netCustom = document.getElementById('behavioral-network-custom').value;
+    const scrollPreset = document.getElementById('behavioral-scroll-preset').value;
+    const scrollCustom = document.getElementById('behavioral-scroll-custom').value;
+    const sniEnabled = document.getElementById('behavioral-sni-enabled').checked;
+
+    const payload = {
+      network_velocity_preset: netPreset,
+      physical_scroll_preset: scrollPreset,
+      sni_filtering_enabled: sniEnabled
+    };
+
+    if (netPreset === 'Custom') payload.network_velocity_custom = parseInt(netCustom, 10);
+    if (scrollPreset === 'Custom') payload.physical_scroll_custom = parseInt(scrollCustom, 10);
 
     try {
       const response = await fetch('/api/config/behavioral', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          nlp_accuracy: nlpMode,
-          proxy_velocity_threshold: networkVelocity,
-          request_threshold: scrollVelocity
-        })
+        body: JSON.stringify(payload)
       });
-
-      if (!response.ok) throw new Error('Server returned HTTP status ' + response.status);
-
       const data = await response.json();
-      if (data.status === 'success') {
-        showToast('Behavioral settings saved successfully!', 'success');
-        // We also want to save the basic unified form items related to throttle
-        const throttleEnabled = document.getElementById('throttle-enabled')?.checked;
-        const throttleRate = document.getElementById('throttle-rate')?.value;
-        await fetch('/api/config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ throttle_enabled: throttleEnabled, throttle_rate: throttleRate })
-        });
-        await loadConfigToUI();
+      if (response.ok) {
+        showToast(data.message || 'Behavioral settings saved successfully!', 'success');
       } else {
         showToast('Save failed: ' + (data.error || 'Unknown error'), 'danger');
       }

@@ -1430,10 +1430,11 @@ def get_behavioral_config():
     try:
         config = load_config()
         behavioral_config = {
-            "network_velocity_threshold": config.get("network_velocity_threshold", "1.5"),
-            "physical_scroll_threshold": config.get("physical_scroll_threshold", "75"),
-            "throttle_rate": config.get("proxy_throttle_rate", "512kbit"),
-            "pinned_domains": config.get("proxy_pinned_domains", "instagram.com,facebook.com,tiktok.com,x.com,twitter.com")
+            "network_velocity_preset": config.get("network_velocity_preset", "Medium"),
+            "network_velocity_custom": int(config.get("network_velocity_custom", 150)),
+            "physical_scroll_preset": config.get("physical_scroll_preset", "Medium"),
+            "physical_scroll_custom": int(config.get("physical_scroll_custom", 75)),
+            "sni_filtering_enabled": config.get("sni_filtering_enabled", "true") in ["true", True, "1", 1]
         }
         return jsonify(behavioral_config)
     except Exception as exc:
@@ -1450,74 +1451,34 @@ def save_behavioral_config():
             return jsonify({"error": "JSON object payload is required"}), 400
 
         config_updates = {}
-        validation_errors = []
-
-        # Preset mappings
-        VELOCITY_PRESETS = {'Low': 2.0, 'Medium': 1.5, 'High': 1.1}
-        SCROLL_PRESETS = {'Low': 120, 'Medium': 75, 'High': 40}
-
-        # Handle Network Velocity
-        if "network_velocity_preset" in payload:
-            preset = str(payload["network_velocity_preset"]).strip()
-            if preset in VELOCITY_PRESETS:
-                config_updates["network_velocity_threshold"] = str(VELOCITY_PRESETS[preset])
-            elif preset.lower() == "custom":
-                try:
-                    val = float(payload.get("network_velocity_custom", 0))
-                    if val <= 0:
-                        validation_errors.append("network_velocity_custom must be > 0")
-                    else:
-                        config_updates["network_velocity_threshold"] = str(val)
-                except (ValueError, TypeError):
-                    validation_errors.append("Invalid custom network velocity")
-            else:
-                # Direct threshold payload backwards compatibility
-                try:
-                    val = float(preset)
-                    if val > 0:
-                        config_updates["network_velocity_threshold"] = str(val)
-                except ValueError:
-                    validation_errors.append("Invalid network velocity preset")
-
-        # Handle Physical Scroll
-        if "physical_scroll_preset" in payload:
-            preset = str(payload["physical_scroll_preset"]).strip()
-            if preset in SCROLL_PRESETS:
-                config_updates["physical_scroll_threshold"] = str(SCROLL_PRESETS[preset])
-            elif preset.lower() == "custom":
-                try:
-                    val = int(payload.get("physical_scroll_custom", 0))
-                    if val <= 0:
-                        validation_errors.append("physical_scroll_custom must be > 0")
-                    else:
-                        config_updates["physical_scroll_threshold"] = str(val)
-                except (ValueError, TypeError):
-                    validation_errors.append("Invalid custom physical scroll")
-            else:
-                try:
-                    val = int(preset)
-                    if val > 0:
-                        config_updates["physical_scroll_threshold"] = str(val)
-                except ValueError:
-                    validation_errors.append("Invalid physical scroll preset")
-
-        # Other fields (Throttle rate and pinned domains from legacy proxy config)
-        if "proxy_throttle_rate" in payload:
-            rate = str(payload["proxy_throttle_rate"]).strip()
-            if rate:
-                config_updates["proxy_throttle_rate"] = rate
         
-        if "proxy_pinned_domains" in payload:
-            config_updates["proxy_pinned_domains"] = str(payload["proxy_pinned_domains"]).strip()
-
-        if validation_errors:
-            return jsonify({"error": "Invalid configuration values", "details": validation_errors}), 400
-
+        # Validations
+        if "network_velocity_preset" in payload:
+            config_updates["network_velocity_preset"] = str(payload["network_velocity_preset"])
+            
+        if "network_velocity_custom" in payload:
+            try:
+                config_updates["network_velocity_custom"] = int(payload["network_velocity_custom"])
+            except ValueError:
+                return jsonify({"error": "network_velocity_custom must be an integer"}), 400
+                
+        if "physical_scroll_preset" in payload:
+            config_updates["physical_scroll_preset"] = str(payload["physical_scroll_preset"])
+            
+        if "physical_scroll_custom" in payload:
+            try:
+                config_updates["physical_scroll_custom"] = int(payload["physical_scroll_custom"])
+            except ValueError:
+                return jsonify({"error": "physical_scroll_custom must be an integer"}), 400
+                
+        if "sni_filtering_enabled" in payload:
+            config_updates["sni_filtering_enabled"] = str(payload["sni_filtering_enabled"]).lower()
+            
         if not config_updates:
             return jsonify({"error": "No valid behavioral configuration parameters provided"}), 400
 
         save_config(config_updates)
-        return jsonify({"status": "success", "message": "Behavioral configuration updated successfully"})
+        return jsonify({"status": "success", "message": "Behavioral settings updated successfully"})
 
     except Exception as exc:
         app.logger.error("Failed to save behavioral config: %s", exc)

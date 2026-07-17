@@ -106,6 +106,74 @@
         </div>
       </div>
 
+      <!-- Behavioral Control Tab -->
+      <div id="tab-behavioral-control" class="tab-content">
+        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Behavioral Control & Habit Management <i class="fa-solid fa-info-circle tooltip-trigger" data-tooltip="Manage how the system analyzes pacing and encryption patterns to limit excessive consumption."></i></h2>
+
+        <div class="card glassmorphic-card" style="margin-bottom: 2rem; background: var(--surface); box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.15); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 12px; padding: 2rem;">
+          
+          <form id="behavioral-form" onsubmit="saveBehavioralSettings(event)">
+            <!-- Section A -->
+            <div style="margin-bottom: 2rem;">
+              <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem; color: var(--primary);">Network Request Velocity</h3>
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Preset Sensitivity</label>
+                  <select id="behavioral-network-preset" onchange="toggleBehavioralCustom('network')">
+                    <option value="Low">Low (200%)</option>
+                    <option value="Medium">Medium (150%)</option>
+                    <option value="High">High (110%)</option>
+                    <option value="Custom">Custom</option>
+                  </select>
+                </div>
+                <div class="form-group hidden" id="behavioral-network-custom-container">
+                  <label class="form-label">Custom Value (%)</label>
+                  <input type="number" id="behavioral-network-custom" min="50" max="500" placeholder="e.g. 150">
+                </div>
+              </div>
+            </div>
+
+            <!-- Section B -->
+            <div style="margin-bottom: 2rem;">
+              <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem; color: var(--primary);">Physical Scroll Telemetry Control</h3>
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Preset Sensitivity</label>
+                  <select id="behavioral-scroll-preset" onchange="toggleBehavioralCustom('scroll')">
+                    <option value="Low">Low (120/min)</option>
+                    <option value="Medium">Medium (75/min)</option>
+                    <option value="High">High (40/min)</option>
+                    <option value="Custom">Custom</option>
+                  </select>
+                </div>
+                <div class="form-group hidden" id="behavioral-scroll-custom-container">
+                  <label class="form-label">Custom Value (Events/Min)</label>
+                  <input type="number" id="behavioral-scroll-custom" min="1" max="500" placeholder="e.g. 75">
+                </div>
+              </div>
+            </div>
+
+            <!-- Section C -->
+            <div style="margin-bottom: 2.5rem; padding: 1.5rem; background: rgba(0,0,0,0.03); border-radius: 8px;">
+              <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--primary);">SNI (Server Name Indication) Guard</h3>
+              <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 1rem;">Allows VIGILANT to apply behavioral policies to encrypted apps (like Instagram & TikTok) that block full SSL inspection.</p>
+              <label class="toggle-switch-container" style="display: flex; align-items: center; gap: 1rem; cursor: pointer;">
+                <input type="checkbox" id="behavioral-sni-enabled" class="d-none">
+                <div class="toggle-slider" onclick="this.previousElementSibling.click(); this.classList.toggle('active')"></div>
+                <span style="font-weight: 600;">Enable SNI Fallback Tracking</span>
+              </label>
+            </div>
+
+            <!-- Action Bar -->
+            <div style="display: flex; justify-content: flex-end;">
+              <button type="submit" class="btn-primary" id="behavioral-save-btn" style="transition: all 0.3s ease; display: flex; align-items: center; gap: 0.5rem; width: auto;">
+                <i class="fa-solid fa-save"></i> Save Settings
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+
       <!-- Settings & Setup Tab -->
       <div id="tab-settings" class="tab-content">
         <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Settings & Setup</h2>
@@ -215,7 +283,7 @@
               <div class="form-group">
                 <label class="form-label">
                   NLP Toggle
-                  <i class="fas fa-question-circle tooltip-trigger" data-tooltip="Toggles the Natural Language Processing engine mode. Fast uses less CPU, while Strict provides better accuracy for detecting harmful content."></i>
+                  <i class="fa-solid fa-question-circle tooltip-trigger" data-tooltip="Toggles the Natural Language Processing engine mode. Fast uses less CPU, while Strict provides better accuracy for detecting harmful content."></i>
                 </label>
                 <select id="nlp-mode">
                   <option value="fast">Fast (Lower accuracy, ~70%)</option>
@@ -223,42 +291,6 @@
                   <option value="strict">Strict (Higher accuracy, ~95%)</option>
                 </select>
                 <div class="form-hint">Trade-off between speed and accuracy</div>
-              </div>
-
-              <div class="form-row">
-                <div class="form-group">
-                  <label class="form-label">
-                    Network Request Velocity Threshold
-                    <i class="fas fa-question-circle tooltip-trigger" data-tooltip="Network Request Velocity measures how fast a device requests web content. Lowering this percentage makes the system quicker to flag background app streaming and apply dynamic throttling."></i>
-                  </label>
-                  <select id="network-velocity-preset" onchange="toggleVelocityCustom('network')">
-                    <option value="2.0">Low Sensitivity (200%)</option>
-                    <option value="1.5">Medium Sensitivity (150% - Capstone Baseline)</option>
-                    <option value="1.1">High Sensitivity (110%)</option>
-                    <option value="custom">Custom</option>
-                  </select>
-                  <div id="network-velocity-custom-container" style="display: none; margin-top: 0.5rem;">
-                    <input type="number" id="network-velocity-custom" step="0.1" min="0.1" placeholder="e.g. 1.5">
-                    <div class="form-hint">Custom Value (multiplier for baseline request rate)</div>
-                  </div>
-                </div>
-
-                <div class="form-group">
-                  <label class="form-label">
-                    Physical Scroll Velocity Threshold
-                    <i class="fas fa-question-circle tooltip-trigger" data-tooltip="Scroll Telemetry monitors how fast users scroll through content. A lower events/min threshold will aggressively flag doomscrolling behavior."></i>
-                  </label>
-                  <select id="scroll-velocity-preset" onchange="toggleVelocityCustom('scroll')">
-                    <option value="120">Low Sensitivity (120 events/min)</option>
-                    <option value="75">Medium Sensitivity (75 events/min)</option>
-                    <option value="40">High Sensitivity (40 events/min)</option>
-                    <option value="custom">Custom</option>
-                  </select>
-                  <div id="scroll-velocity-custom-container" style="display: none; margin-top: 0.5rem;">
-                    <input type="number" id="scroll-velocity-custom" min="1" max="500" placeholder="e.g. 90">
-                    <div class="form-hint">Custom Value (events/min)</div>
-                  </div>
-                </div>
               </div>
 
               <div class="form-row">
