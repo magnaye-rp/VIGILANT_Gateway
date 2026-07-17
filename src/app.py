@@ -2018,30 +2018,6 @@ def set_device_filter():
         return jsonify({"error": str(exc)}), 500
 
 
-@app.route("/api/categories/hints/<int:hint_id>", methods=["DELETE"])
-def delete_category_hint(hint_id):
-    """Delete a category hint mapping"""
-    try:
-        with _open_db() as connection:
-            if not _table_exists(connection, "category_hints"):
-                return jsonify({"error": "Category hints table does not exist"}), 404
-
-            cursor = connection.execute(
-                "DELETE FROM category_hints WHERE id = ?",
-                (hint_id,)
-            )
-            connection.commit()
-
-            if cursor.rowcount == 0:
-                return jsonify({"error": "Category hint not found"}), 404
-
-            return jsonify({"status": "success", "message": "Category hint deleted"}), 200
-
-    except sqlite3.Error as exc:
-        app.logger.error("Failed to delete category hint: %s", exc)
-        return jsonify({"error": str(exc)}), 500
-
-
 @app.route("/api/network/throughput", methods=["GET"])
 def get_network_throughput():
     """Get actual network throughput by reading /proc/net/dev for active interfaces"""
