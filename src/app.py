@@ -1949,6 +1949,12 @@ def delete_category_hint(hint_id):
             if cursor.rowcount == 0:
                 return jsonify({"error": "Category hint not found"}), 404
 
+            return jsonify({"status": "success", "message": "Category hint deleted"}), 200
+
+    except sqlite3.Error as exc:
+        app.logger.error("Failed to delete category hint: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
 
 @app.route("/api/devices/filter", methods=["POST"])
 def set_device_filter():
