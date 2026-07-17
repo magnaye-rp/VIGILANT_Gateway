@@ -89,16 +89,27 @@ def init_db():
 db_lock = threading.Lock()
 
 def load_proxy_config():
-    """Load proxy configuration from database"""
+    """Load proxy and behavioral configuration from database"""
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Load velocity threshold
-        cursor.execute("SELECT value FROM config_settings WHERE key = 'proxy_velocity_threshold'")
+        # Load network velocity threshold (multiplier)
+        cursor.execute("SELECT value FROM config_settings WHERE key = 'network_velocity_threshold'")
         row = cursor.fetchone()
-        velocity_threshold = float(row[0]) if row else DEFAULT_VELOCITY_THRESHOLD
+        network_velocity_threshold = float(row[0]) if row else DEFAULT_VELOCITY_THRESHOLD
         
+        # Load physical scroll threshold (absolute RPM)
+        cursor.execute("SELECT value FROM config_settings WHERE key = 'physical_scroll_threshold'")
+        row = cursor.fetchone()
+        physical_scroll_threshold = int(row[0]) if row else 75
+        
+        # Load NLP enabled flag
+        cursor.execute("SELECT value FROM config_settings WHERE key = 'nlp_enabled'")
+        row = cursor.fetchone()
+        nlp_enabled_str = row[0] if row else "true"
+        nlp_enabled = nlp_enabled_str.lower() in ["true", "1", "yes"]
+
         # Load throttle rate
         cursor.execute("SELECT value FROM config_settings WHERE key = 'proxy_throttle_rate'")
         row = cursor.fetchone()
@@ -122,14 +133,18 @@ def load_proxy_config():
         conn.close()
         
         return {
-            'velocity_threshold': velocity_threshold,
+            'network_velocity_threshold': network_velocity_threshold,
+            'physical_scroll_threshold': physical_scroll_threshold,
+            'nlp_enabled': nlp_enabled,
             'throttle_rate': throttle_rate,
             'pinned_domains': pinned_domains
         }
     except Exception as e:
         print(f"[VIGILANT] Error loading proxy config from database: {e}, using defaults")
         return {
-            'velocity_threshold': DEFAULT_VELOCITY_THRESHOLD,
+            'network_velocity_threshold': DEFAULT_VELOCITY_THRESHOLD,
+            'physical_scroll_threshold': 75,
+            'nlp_enabled': True,
             'throttle_rate': DEFAULT_THROTTLE_RATE,
             'pinned_domains': set(DEFAULT_PINNED_DOMAINS.split(','))
         }
@@ -265,7 +280,8 @@ def compute_velocity(client_ip):
 
 def should_throttle(client_ip, host):
     config = load_proxy_config()
-    velocity_threshold = config['velocity_threshold']
+    network_velocity_threshold = config['network_velocity_threshold']
+    physical_scroll_threshold = config['physical_scroll_threshold']
     social_domains = load_social_domains()
     
     base = ".".join(host.lstrip("www.").split(".")[-2:])
@@ -274,7 +290,9 @@ def should_throttle(client_ip, host):
     rpm_now, rpm_base = compute_velocity(client_ip)
     if session_totals[client_ip] < MIN_REQUESTS_BASELINE:
         return False, rpm_now, rpm_base
-    flagged = rpm_now > (rpm_base * velocity_threshold)
+        
+    # Flag if relative velocity (multiplier) OR absolute physical scroll (RPM limit) is violated
+    flagged = (rpm_now > (rpm_base * network_velocity_threshold)) or (rpm_now > physical_scroll_threshold)
     return flagged, rpm_now, rpm_base
 
 # ─── Text Normalization Helper ──────────────────────────────────────
@@ -304,11 +322,19 @@ def categorize_content(text, host=""):
         text = ""
 
     hint_category, hint_score = get_domain_hint(host)
+    
+    config = load_proxy_config()
+    nlp_enabled = config['nlp_enabled']
 
-    doc      = nlp(text[:10000]) if len(text) >= 20 else None
-    entities = [(ent.text, ent.label_) for ent in doc.ents] if doc else []
-    tokens   = {t.lemma_.lower() for t in doc
-                if not t.is_stop and t.is_alpha} if doc else set()
+    if nlp_enabled:
+        doc      = nlp(text[:10000]) if len(text) >= 20 else None
+        entities = [(ent.text, ent.label_) for ent in doc.ents] if doc else []
+        tokens   = {t.lemma_.lower() for t in doc
+                    if not t.is_stop and t.is_alpha} if doc else set()
+    else:
+        doc = None
+        entities = []
+        tokens = set(normalize_text(text).split()) if len(text) >= 20 else set()
 
     scores = {}
     for category, keywords in CATEGORY_KEYWORDS.items():

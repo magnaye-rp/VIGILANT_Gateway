@@ -49,41 +49,7 @@
             </table>
           </div>
 
-          <!-- CARD 3: Advanced Tuning Configuration -->
-          <div class="settings-card full-width">
-            <div class="card-header">
-              <div>
-                <div class="card-title">Advanced Tuning Configuration</div>
-                <div class="card-subtitle">Global network parameters and proxy engine settings</div>
-              </div>
-            </div>
 
-            <form id="proxy-config-form">
-              <div class="form-row">
-                <div class="form-group">
-                  <label class="form-label">Velocity Threshold</label>
-                  <input type="number" id="proxy-velocity-threshold" step="0.1" min="0.1" placeholder="1.5" required>
-                  <div class="form-hint">Multiplier for baseline request rate to trigger throttling</div>
-                </div>
-
-                <div class="form-group">
-                  <label class="form-label">Throttle Rate</label>
-                  <input type="text" id="proxy-throttle-rate" placeholder="512kbit" required>
-                  <div class="form-hint">Bandwidth limit for throttled clients (e.g., 512kbit, 1mbit)</div>
-                </div>
-              </div>
-
-              <div class="form-group">
-                <label class="form-label">Pinned Domains</label>
-                <textarea id="proxy-pinned-domains" rows="3" placeholder="instagram.com,facebook.com,tiktok.com,x.com,twitter.com" required></textarea>
-                <div class="form-hint">Comma-separated domains with SSL certificate pinning (pass through without decryption)</div>
-              </div>
-
-              <div style="margin-top: 1.5rem;">
-                <button type="submit" class="btn btn-success">Save Tuning Profile</button>
-              </div>
-            </form>
-          </div>
 
           <!-- CARD 4: Traffic Categorization Rules -->
           <div class="settings-card full-width">
@@ -143,6 +109,21 @@
       <!-- Settings & Setup Tab -->
       <div id="tab-settings" class="tab-content">
         <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Settings & Setup</h2>
+
+        <div class="card" style="margin-bottom: 2rem;">
+          <div class="card-header">
+            <div class="card-title">Appearance</div>
+            <div class="card-subtitle">Customize the dashboard interface</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Interface Theme Preference</label>
+            <select id="theme-preference" onchange="toggleTheme(this.value)" style="width: 200px;">
+              <option value="light">Light Mode</option>
+              <option value="dark">Dark Mode</option>
+            </select>
+            <div class="form-hint">Choose between light and dark visual themes.</div>
+          </div>
+        </div>
 
         <!-- Advanced Settings Toggle -->
         <div style="margin-bottom: 2rem; display: flex; align-items: center; gap: 1rem;">
@@ -337,9 +318,9 @@
             <div class="card-body">
                 <p class="text-muted">Export your keyword blocklists, MAC whitelists, and network controls to a backup file, or restore them onto this server gateway device.</p>
                 <div class="d-flex align-items-center justify-content-between flex-wrap" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;">
-                    <a href="/api/config/export" class="btn btn-primary m-2">Download Settings JSON Backup</a>
+                    <a href="/api/config/setup/export" class="btn btn-primary m-2">Download Settings JSON Backup</a>
                     
-                    <form action="/api/config/import" method="POST" enctype="multipart/form-data" class="form-inline m-2" style="display: flex; gap: 1rem; align-items: center;">
+                    <form action="/api/config/setup/import" method="POST" enctype="multipart/form-data" class="form-inline m-2" style="display: flex; gap: 1rem; align-items: center;">
                         <div class="form-group mr-2" style="margin-bottom: 0;">
                             <input type="file" name="config_file" accept=".json" class="form-control-file" required>
                         </div>

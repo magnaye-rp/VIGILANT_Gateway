@@ -4,21 +4,39 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>VIGILANT Gateway - Admin Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
     :root {
-      --primary: #00d9ff;
-      --primary-dark: #0099cc;
-      --surface: #0f1419;
-      --surface-light: #1a1f26;
-      --surface-lighter: #252d38;
-      --text: #e0e6ed;
-      --text-secondary: #8b93a1;
+      /* Main Accent Color */
+      --primary: #1A938A;
+      --primary-dark: #157A72;
+      
+      /* Light Mode Defaults */
+      --bg: #F8F9FA;
+      --surface: rgba(255, 255, 255, 0.75);
+      --surface-light: rgba(255, 255, 255, 0.6);
+      --surface-lighter: rgba(255, 255, 255, 0.5);
+      --text: #212529;
+      --text-secondary: #495057;
+      --border: rgba(0, 0, 0, 0.08);
+      
       --success: #00d084;
       --warning: #ffa500;
       --danger: #ff3860;
-      --border: #2d3748;
-      --radius: 12px;
-      --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      --radius: 16px;
+      --transition: all 0.3s ease;
+    }
+
+    :root[data-theme="dark"] {
+      /* Dark Mode Defaults */
+      --bg: #1E2022;
+      --surface: rgba(33, 37, 41, 0.75);
+      --surface-light: rgba(33, 37, 41, 0.6);
+      --surface-lighter: rgba(33, 37, 41, 0.5);
+      --text: #F8F9FA;
+      --text-secondary: #adb5bd;
+      --border: rgba(255, 255, 255, 0.08);
     }
 
     * {
@@ -30,9 +48,9 @@
     html, body {
       width: 100%;
       height: 100%;
-      background: var(--surface);
+      background: var(--bg);
       color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       font-size: 16px;
       line-height: 1.5;
     }
@@ -172,39 +190,30 @@
     }
 
     /* ─── Cards & Panels ─── */
-    .card {
-      background: var(--surface-light);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 1.5rem;
-      margin-bottom: 1.5rem;
+    .card, .settings-card, .stat-card, .modal-content, .toast {
+      background: var(--surface) !important;
+      backdrop-filter: blur(12px) saturate(180%);
+      -webkit-backdrop-filter: blur(12px) saturate(180%);
+      border: 1px solid var(--border) !important;
+      border-radius: var(--radius) !important;
+      padding: 2rem !important;
+      margin-bottom: 2.5rem !important;
       transition: var(--transition);
+      box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.05);
     }
 
-    .card:hover {
-      border-color: var(--primary);
-      box-shadow: 0 0 20px rgba(0, 217, 255, 0.1);
+    .card:hover, .settings-card:hover, .stat-card:hover {
+      border-color: var(--primary) !important;
+      transform: scale(1.01);
+      box-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.08);
     }
 
     /* ─── Settings Cards Grid Layout ─── */
     .settings-grid {
       display: grid;
       grid-template-columns: repeat(2, 1fr);
-      gap: 1.5rem;
-      margin-bottom: 2rem;
-    }
-
-    .settings-card {
-      background: var(--surface-light);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 1.5rem;
-      transition: var(--transition);
-    }
-
-    .settings-card:hover {
-      border-color: var(--primary);
-      box-shadow: 0 0 20px rgba(0, 217, 255, 0.1);
+      gap: 2.5rem;
+      margin-bottom: 2.5rem;
     }
 
     .settings-card.full-width {
@@ -330,9 +339,10 @@
     input[type="password"]:focus,
     select:focus,
     textarea:focus {
-      outline: none;
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
       border-color: var(--primary);
-      box-shadow: 0 0 0 3px rgba(0, 217, 255, 0.1);
+      box-shadow: 0 0 0 3px rgba(26, 147, 138, 0.2);
     }
 
     input[type="checkbox"],
@@ -404,15 +414,11 @@
     .stats-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 1.5rem;
-      margin-bottom: 2rem;
+      gap: 2.5rem;
+      margin-bottom: 2.5rem;
     }
 
     .stat-card {
-      background: var(--surface-light);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 1.5rem;
       text-align: center;
     }
 
@@ -797,32 +803,24 @@
   <!-- Sidebar Navigation -->
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
-      <div class="sidebar-logo">🔒 VIGILANT</div>
+      <div class="sidebar-logo"><i class="fa-solid fa-lock"></i> VIGILANT</div>
     </div>
     <nav class="sidebar-nav">
-      <div class="nav-item active" onclick="switchTab('dashboard')">
-        <div class="nav-icon">📊</div>
-        <span>Dashboard</span>
+      <div class="nav-item active" onclick="switchTab('system-status')">
+        <div class="nav-icon"><i class="fa-solid fa-chart-bar"></i></div>
+        <span>System Status</span>
       </div>
       <div class="nav-item" onclick="switchTab('filtering')">
-        <div class="nav-icon">🛡️</div>
-        <span>Filtering</span>
+        <div class="nav-icon"><i class="fa-solid fa-shield-halved"></i></div>
+        <span>Content Filtering</span>
+      </div>
+      <div class="nav-item" onclick="switchTab('behavioral-control')">
+        <div class="nav-icon"><i class="fa-solid fa-eye"></i></div>
+        <span>Behavioral Control</span>
       </div>
       <div class="nav-item" onclick="switchTab('settings')">
-        <div class="nav-icon">⚙️</div>
-        <span>Settings & Setup</span>
-      </div>
-      <div class="nav-item" onclick="switchTab('traffic')">
-        <div class="nav-icon">📡</div>
-        <span>Traffic Log</span>
-      </div>
-      <div class="nav-item" onclick="switchTab('devices')">
-        <div class="nav-icon">📱</div>
-        <span>Devices</span>
-      </div>
-      <div class="nav-item" onclick="switchTab('system')">
-        <div class="nav-icon">🖥️</div>
-        <span>System</span>
+        <div class="nav-icon"><i class="fa-solid fa-gear"></i></div>
+        <span>Setup</span>
       </div>
     </nav>
     <div style="padding: 1rem 1.5rem; border-top: 1px solid var(--border); font-size: 0.8rem; color: var(--text-secondary);">
@@ -837,9 +835,14 @@
         <button class="menu-toggle" onclick="toggleSidebar()">☰</button>
         <div class="header-title">VIGILANT Gateway</div>
       </div>
-      <div class="header-status">
-        <div class="status-dot"></div>
-        <span>System Online</span>
+      <div style="display: flex; align-items: center; gap: 1.5rem;">
+        <div class="header-status">
+          <div class="status-dot"></div>
+          <span>System Online</span>
+        </div>
+        <button onclick="showHelpToolkit()" style="background: none; border: none; color: var(--primary); font-size: 1.5rem; cursor: pointer; font-weight: bold; display: flex; align-items: center;" title="Dynamic Help Toolkit">
+          &lt;?&gt;
+        </button>
       </div>
     </header>
 
@@ -943,12 +946,24 @@
   </div>
 </div>
 
+<!-- Modal for Help -->
+<div class="modal" id="toolkitModal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <div class="modal-title" id="toolkitTitle">Help Toolkit</div>
+      <button class="modal-close" onclick="closeModal('toolkitModal')">✕</button>
+    </div>
+    <div id="toolkitContent" style="margin-bottom: 1.5rem; color: var(--text-secondary);"></div>
+    <button class="btn-primary" onclick="closeModal('toolkitModal')">Close</button>
+  </div>
+</div>
+
 <!-- Toast Container -->
 <div class="toast-container" id="toastContainer"></div>
 
 <script>
   // ─── State Management ─── 
-  let currentTab = 'dashboard';
+  let currentTab = 'system-status'; // Global state for active tab
   let currentWizardStep = 1;
   let pendingConfirmAction = null;
   let currentPage = 1;
@@ -956,20 +971,52 @@
   let totalPages = 1;
 
   // ─── Tab Navigation ───
+  function showHelpToolkit() {
+    const toolkitModal = document.getElementById('toolkitModal');
+    const toolkitTitle = document.getElementById('toolkitTitle');
+    const toolkitContent = document.getElementById('toolkitContent');
+    
+    toolkitModal.classList.add('active');
+    
+    switch(currentTab) {
+      case 'system-status':
+        toolkitTitle.innerText = "System Status Help";
+        toolkitContent.innerHTML = "Here you can see the <strong>network overview</strong>, monitor <strong>real-time logging</strong>, and keep track of <strong>device counting</strong>.";
+        break;
+      case 'filtering':
+        toolkitTitle.innerText = "Content Filtering Help";
+        toolkitContent.innerHTML = "This section manages <strong>Natural Language Processing (NLP)</strong> parameters, <strong>entity classification</strong> (Educational, Harmful, etc.), and configuration for <strong>keyword triggers</strong>.";
+        break;
+      case 'behavioral-control':
+        toolkitTitle.innerText = "Behavioral Control Help";
+        toolkitContent.innerHTML = "Understand the difference between <strong>Network Request Velocity</strong> (algorithmic parsing of background traffic) and <strong>Physical Scroll Telemetry</strong> (active user doomscrolling). This section also handles <strong>SNI fallback scanning</strong> for encrypted apps.";
+        break;
+      case 'settings':
+        toolkitTitle.innerText = "Setup Help";
+        toolkitContent.innerHTML = "Manage system <strong>backups</strong>, perform <strong>configuration restorations</strong>, and configure <strong>edge interface bindings</strong>.";
+        break;
+      default:
+        toolkitTitle.innerText = "Help Toolkit";
+        toolkitContent.innerHTML = "Context-aware help is available here depending on your active tab.";
+    }
+  }
+
   function switchTab(tabId) {
     document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
     document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+    
     document.getElementById(`tab-${tabId}`)?.classList.add('active');
-    window.event?.currentTarget?.classList.add('active');
+    event.currentTarget.classList.add('active');
+    
     currentTab = tabId;
-    closeSidebar();
-
-    if (tabId === 'dashboard') refreshStats();
-    if (tabId === 'traffic') loadTrafficLogs();
+    
+    if (tabId === 'system-status') {
+      refreshStats();
+      loadTrafficLogs();
+      loadDevices();
+    }
     if (tabId === 'settings') loadUnifiedConfig();
     if (tabId === 'filtering') {
-      loadKeywords();
-      loadProxyConfig();
       loadCategoryHints();
     }
     if (tabId === 'devices') loadDevices();
@@ -1567,57 +1614,7 @@
     }
   });
 
-  // ─── Proxy Engine Configuration ───
-  async function loadProxyConfig() {
-    try {
-      const response = await fetch('/api/config/proxy');
-      const config = await response.json();
 
-      document.getElementById('proxy-velocity-threshold').value = config.proxy_velocity_threshold || '1.5';
-      document.getElementById('proxy-throttle-rate').value = config.proxy_throttle_rate || '512kbit';
-      document.getElementById('proxy-pinned-domains').value = config.proxy_pinned_domains || 'instagram.com,facebook.com,tiktok.com,x.com,twitter.com';
-    } catch (error) {
-      console.error('Error loading proxy config:', error);
-    }
-  }
-
-  document.getElementById('proxy-config-form').addEventListener('submit', async function(e) {
-    e.preventDefault();
-
-    const velocityThreshold = document.getElementById('proxy-velocity-threshold').value;
-    const throttleRate = document.getElementById('proxy-throttle-rate').value;
-    const pinnedDomains = document.getElementById('proxy-pinned-domains').value;
-
-    if (!velocityThreshold || !throttleRate || !pinnedDomains) {
-      showToast('Please fill in all proxy configuration fields', 'danger');
-      return;
-    }
-
-    try {
-      const response = await fetch('/api/config/proxy', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          proxy_velocity_threshold: velocityThreshold,
-          proxy_throttle_rate: throttleRate,
-          proxy_pinned_domains: pinnedDomains
-        })
-      });
-
-      const data = await response.json();
-
-      if (response.ok) {
-        showToast('Proxy engine settings applied successfully', 'success');
-      } else {
-        showToast(data.error || 'Failed to apply proxy settings', 'danger');
-      }
-    } catch (error) {
-      console.error('Error saving proxy config:', error);
-      showToast('Error applying proxy settings', 'danger');
-    }
-  });
 
   // ─── Category Hints Management ───
   async function loadCategoryHints() {
@@ -2020,7 +2017,33 @@
     const wizardForm = document.getElementById('wizardForm');
     if (wizardForm) wizardForm.addEventListener('submit', saveWizardConfig);
   });
-</script>
 
+  // Load unified config on startup if needed
+  // window.addEventListener('DOMContentLoaded', loadUnifiedConfig);
+
+  // ─── Theme Management ───
+  function toggleTheme(mode) {
+    document.documentElement.setAttribute('data-theme', mode);
+    localStorage.setItem('ui-theme', mode);
+    
+    // Background fetch to backend
+    fetch('/api/config/ui-theme', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ theme: mode })
+    }).catch(e => console.log('Theme sync error:', e));
+  }
+
+  function initTheme() {
+    const savedTheme = localStorage.getItem('ui-theme') || 'light';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+    const themeSelect = document.getElementById('theme-preference');
+    if (themeSelect) {
+      themeSelect.value = savedTheme;
+    }
+  }
+
+  window.addEventListener('DOMContentLoaded', initTheme);
+</script>
 </body>
 </html>

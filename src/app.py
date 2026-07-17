@@ -60,26 +60,22 @@ DEFAULT_CONFIG = {
     "dhcp_start": "192.168.10.10",
     "dhcp_end": "192.168.10.50",
     "upstream_dns": "8.8.8.8\n8.8.4.4",
-    "block_harmful": True,
-    "block_distracting": False,
+    "nlp_enabled": "true",
     "nlp_accuracy": "balanced",
-    "throttle_enabled": True,
-    "request_threshold": 30,
-    "throttle_rate": "",
-    "enable_https": False,
-    "log_retention": "",
-    "proxy_velocity_threshold": "1.5",
-    "proxy_throttle_rate": "512kbit",
-    "proxy_pinned_domains": "instagram.com,facebook.com,tiktok.com,x.com,twitter.com"
+    "network_velocity_threshold": "1.5",
+    "physical_scroll_threshold": "75",
+    "throttle_enabled": "true",
+    "throttle_rate": "256",
+    "ui_theme": "light"
 }
 
 # Maintain backward compatibility
 CONFIG_DEFAULTS = DEFAULT_CONFIG
 
 ALLOWED_CONFIG_KEYS = set(CONFIG_DEFAULTS)
-BOOLEAN_CONFIG_KEYS = {"block_harmful", "block_distracting", "throttle_enabled", "enable_https"}
-INTEGER_CONFIG_KEYS = {"request_threshold", "throttle_rate", "log_retention"}
-STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "upstream_dns", "nlp_accuracy", "proxy_velocity_threshold", "proxy_throttle_rate", "proxy_pinned_domains"}
+BOOLEAN_CONFIG_KEYS = set()
+INTEGER_CONFIG_KEYS = set()
+STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "upstream_dns", "nlp_accuracy", "network_velocity_threshold", "physical_scroll_threshold", "throttle_rate", "nlp_enabled", "throttle_enabled", "ui_theme"}
 TRAFFIC_CATEGORIES = ("Educational", "Productive", "Distracting", "Harmful")
 DEFAULT_SYSTEM_METRICS = {
     "cpu_percent": 0.0,
@@ -619,11 +615,8 @@ def init_config_db() -> None:
             for key, value in CONFIG_DEFAULTS.items():
                 connection.execute(
                     """
-                    INSERT INTO config_settings (key, value, updated_at)
+                    INSERT OR IGNORE INTO config_settings (key, value, updated_at)
                     VALUES (?, ?, ?)
-                    ON CONFLICT(key) DO UPDATE SET
-                        value = excluded.value,
-                        updated_at = excluded.updated_at
                     """,
                     (key, str(value), now_ts),
                 )
@@ -910,30 +903,7 @@ def get_stats():
             "network_config": _get_network_config()
         })
 
-@app.route('/api/settings', methods=['POST'])
-def save_dashboard_settings():
-    try:
-        settings_data = request.get_json(silent=True) or {}
-        if not isinstance(settings_data, dict):
-            return jsonify({"error": "JSON object payload is required"}), 400
 
-        save_config(settings_data)
-        return jsonify({"status": "success", "message": "Settings updated"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
-
-
-@app.route("/api/reset", methods=["POST"])
-def api_reset():
-    try:
-        save_config(CONFIG_DEFAULTS)
-        # Write network configuration files with defaults
-        _write_dnsmasq_config(CONFIG_DEFAULTS)
-        _write_netplan_config(CONFIG_DEFAULTS)
-        return jsonify({"status": "success", "message": "Settings reset to defaults"})
-    except Exception as exc:
-        app.logger.error("Failed to reset configuration: %s", exc)
-        return jsonify({"error": str(exc)}), 500
 
 
 @app.route("/api/config/reset", methods=["POST"])
@@ -1038,7 +1008,7 @@ def export_logs():
         return abort(500, description="Failed to generate CSV export")
 
 
-@app.route('/api/config/export')
+@app.route('/api/config/setup/export')
 def export_config():
     try:
         keywords = [row['keyword'] for row in query_db("SELECT keyword FROM keyword_blacklist")]
@@ -1070,7 +1040,7 @@ def export_config():
     return response
 
 
-@app.route('/api/config/import', methods=['POST'])
+@app.route('/api/config/setup/import', methods=['POST'])
 def import_config():
     if 'config_file' not in request.files:
         flash("No file uploaded", "error")
@@ -1118,10 +1088,25 @@ def import_config():
         flash(f"Failed to import config: {str(e)}", "error")
         
     return redirect(url_for('dashboard'))
+@app.route("/api/config/ui-theme", methods=["POST"])
+def save_ui_theme():
+    """Save the UI theme preference (light/dark)"""
+    try:
+        payload = request.get_json(silent=True) or {}
+        theme = str(payload.get("theme", "")).strip().lower()
+        
+        if theme not in ["light", "dark"]:
+            return jsonify({"error": "Invalid theme. Must be 'light' or 'dark'"}), 400
+            
+        save_config({"ui_theme": theme})
+        return jsonify({"status": "success", "message": "Theme preference saved"})
+    except Exception as exc:
+        app.logger.error("Failed to save ui-theme: %s", exc)
+        return jsonify({"error": str(exc)}), 500
 
 
-@app.route("/api/config", methods=["GET", "POST"])
-def api_config():
+@app.route("/api/config/setup", methods=["GET", "POST"])
+def api_config_setup():
     if request.method == "GET":
         config = load_config()
         # Add network configuration from config files
@@ -1266,74 +1251,24 @@ def delete_keyword(keyword_id):
         return jsonify({"error": str(exc)}), 500
 
 
-@app.route("/api/config/proxy", methods=["GET"])
-def get_proxy_config():
-    """Get proxy engine configuration parameters"""
+@app.route("/api/config/filtering", methods=["GET"])
+def get_filtering_config():
+    """Get content filtering configuration parameters"""
     try:
         config = load_config()
-        proxy_config = {
-            "proxy_velocity_threshold": config.get("proxy_velocity_threshold", "1.5"),
-            "proxy_throttle_rate": config.get("proxy_throttle_rate", "512kbit"),
-            "proxy_pinned_domains": config.get("proxy_pinned_domains", "instagram.com,facebook.com,tiktok.com,x.com,twitter.com")
+        filtering_config = {
+            "nlp_enabled": config.get("nlp_enabled", "true"),
+            "nlp_accuracy": config.get("nlp_accuracy", "balanced")
         }
-        return jsonify(proxy_config)
+        return jsonify(filtering_config)
     except Exception as exc:
-        app.logger.error("Failed to get proxy config: %s", exc)
+        app.logger.error("Failed to get filtering config: %s", exc)
         return jsonify({"error": str(exc)}), 500
 
 
-@app.route("/api/config/proxy", methods=["POST"])
-def save_proxy_config():
-    """Save proxy engine configuration parameters"""
-    try:
-        payload = request.get_json(silent=True) or {}
-        if not isinstance(payload, dict):
-            return jsonify({"error": "JSON object payload is required"}), 400
-
-        proxy_updates = {}
-        validation_errors = []
-
-        # Validate and extract proxy_velocity_threshold
-        if "proxy_velocity_threshold" in payload:
-            try:
-                threshold = float(payload["proxy_velocity_threshold"])
-                if threshold <= 0:
-                    validation_errors.append("proxy_velocity_threshold must be greater than 0")
-                else:
-                    proxy_updates["proxy_velocity_threshold"] = str(threshold)
-            except (ValueError, TypeError):
-                validation_errors.append("proxy_velocity_threshold must be a valid number")
-
-        # Validate and extract proxy_throttle_rate
-        if "proxy_throttle_rate" in payload:
-            throttle_rate = str(payload["proxy_throttle_rate"]).strip()
-            if not throttle_rate:
-                validation_errors.append("proxy_throttle_rate cannot be empty")
-            else:
-                proxy_updates["proxy_throttle_rate"] = throttle_rate
-
-        # Validate and extract proxy_pinned_domains
-        if "proxy_pinned_domains" in payload:
-            domains = str(payload["proxy_pinned_domains"]).strip()
-            proxy_updates["proxy_pinned_domains"] = domains
-
-        if validation_errors:
-            return jsonify({"error": "Invalid configuration values", "details": validation_errors}), 400
-
-        if not proxy_updates:
-            return jsonify({"error": "No valid proxy configuration parameters provided"}), 400
-
-        save_config(proxy_updates)
-        return jsonify({"status": "success", "message": "Proxy configuration updated successfully"})
-
-    except Exception as exc:
-        app.logger.error("Failed to save proxy config: %s", exc)
-        return jsonify({"error": str(exc)}), 500
-
-
-@app.route("/api/config/behavioral", methods=["POST"])
-def save_behavioral_config():
-    """Save behavioral engine configuration parameters (NLP, Velocity, Scroll)"""
+@app.route("/api/config/filtering", methods=["POST"])
+def save_filtering_config():
+    """Save content filtering configuration parameters"""
     try:
         payload = request.get_json(silent=True) or {}
         if not isinstance(payload, dict):
@@ -1342,6 +1277,13 @@ def save_behavioral_config():
         config_updates = {}
         validation_errors = []
 
+        if "nlp_enabled" in payload:
+            nlp_enabled = str(payload["nlp_enabled"]).strip().lower()
+            if nlp_enabled in ["true", "false", "1", "0"]:
+                config_updates["nlp_enabled"] = nlp_enabled
+            else:
+                validation_errors.append("Invalid nlp_enabled value")
+
         if "nlp_accuracy" in payload:
             nlp_mode = str(payload["nlp_accuracy"]).strip()
             if nlp_mode in ["fast", "balanced", "strict"]:
@@ -1349,26 +1291,106 @@ def save_behavioral_config():
             else:
                 validation_errors.append("Invalid nlp_accuracy")
 
-        if "proxy_velocity_threshold" in payload:
-            try:
-                threshold = float(payload["proxy_velocity_threshold"])
-                if threshold <= 0:
-                    validation_errors.append("proxy_velocity_threshold must be greater than 0")
-                else:
-                    config_updates["proxy_velocity_threshold"] = str(threshold)
-            except (ValueError, TypeError):
-                validation_errors.append("proxy_velocity_threshold must be a valid number")
-                
-        if "request_threshold" in payload:
-            try:
-                threshold = int(payload["request_threshold"])
-                if threshold < 1:
-                    validation_errors.append("request_threshold must be greater than 0")
-                else:
-                    config_updates["request_threshold"] = threshold
-            except (ValueError, TypeError):
-                validation_errors.append("request_threshold must be a valid integer")
-                
+        if validation_errors:
+            return jsonify({"error": "Invalid configuration values", "details": validation_errors}), 400
+
+        if not config_updates:
+            return jsonify({"error": "No valid filtering configuration parameters provided"}), 400
+
+        save_config(config_updates)
+        return jsonify({"status": "success", "message": "Filtering configuration updated successfully"})
+
+    except Exception as exc:
+        app.logger.error("Failed to save filtering config: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/config/behavioral", methods=["GET"])
+def get_behavioral_config():
+    """Get behavioral configuration parameters"""
+    try:
+        config = load_config()
+        behavioral_config = {
+            "network_velocity_threshold": config.get("network_velocity_threshold", "1.5"),
+            "physical_scroll_threshold": config.get("physical_scroll_threshold", "75"),
+            "throttle_rate": config.get("proxy_throttle_rate", "512kbit"),
+            "pinned_domains": config.get("proxy_pinned_domains", "instagram.com,facebook.com,tiktok.com,x.com,twitter.com")
+        }
+        return jsonify(behavioral_config)
+    except Exception as exc:
+        app.logger.error("Failed to get behavioral config: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/config/behavioral", methods=["POST"])
+def save_behavioral_config():
+    """Save behavioral configuration parameters with preset mapping logic"""
+    try:
+        payload = request.get_json(silent=True) or {}
+        if not isinstance(payload, dict):
+            return jsonify({"error": "JSON object payload is required"}), 400
+
+        config_updates = {}
+        validation_errors = []
+
+        # Preset mappings
+        VELOCITY_PRESETS = {'Low': 2.0, 'Medium': 1.5, 'High': 1.1}
+        SCROLL_PRESETS = {'Low': 120, 'Medium': 75, 'High': 40}
+
+        # Handle Network Velocity
+        if "network_velocity_preset" in payload:
+            preset = str(payload["network_velocity_preset"]).strip()
+            if preset in VELOCITY_PRESETS:
+                config_updates["network_velocity_threshold"] = str(VELOCITY_PRESETS[preset])
+            elif preset.lower() == "custom":
+                try:
+                    val = float(payload.get("network_velocity_custom", 0))
+                    if val <= 0:
+                        validation_errors.append("network_velocity_custom must be > 0")
+                    else:
+                        config_updates["network_velocity_threshold"] = str(val)
+                except (ValueError, TypeError):
+                    validation_errors.append("Invalid custom network velocity")
+            else:
+                # Direct threshold payload backwards compatibility
+                try:
+                    val = float(preset)
+                    if val > 0:
+                        config_updates["network_velocity_threshold"] = str(val)
+                except ValueError:
+                    validation_errors.append("Invalid network velocity preset")
+
+        # Handle Physical Scroll
+        if "physical_scroll_preset" in payload:
+            preset = str(payload["physical_scroll_preset"]).strip()
+            if preset in SCROLL_PRESETS:
+                config_updates["physical_scroll_threshold"] = str(SCROLL_PRESETS[preset])
+            elif preset.lower() == "custom":
+                try:
+                    val = int(payload.get("physical_scroll_custom", 0))
+                    if val <= 0:
+                        validation_errors.append("physical_scroll_custom must be > 0")
+                    else:
+                        config_updates["physical_scroll_threshold"] = str(val)
+                except (ValueError, TypeError):
+                    validation_errors.append("Invalid custom physical scroll")
+            else:
+                try:
+                    val = int(preset)
+                    if val > 0:
+                        config_updates["physical_scroll_threshold"] = str(val)
+                except ValueError:
+                    validation_errors.append("Invalid physical scroll preset")
+
+        # Other fields (Throttle rate and pinned domains from legacy proxy config)
+        if "proxy_throttle_rate" in payload:
+            rate = str(payload["proxy_throttle_rate"]).strip()
+            if rate:
+                config_updates["proxy_throttle_rate"] = rate
+        
+        if "proxy_pinned_domains" in payload:
+            config_updates["proxy_pinned_domains"] = str(payload["proxy_pinned_domains"]).strip()
+
         if validation_errors:
             return jsonify({"error": "Invalid configuration values", "details": validation_errors}), 400
 
@@ -1381,6 +1403,7 @@ def save_behavioral_config():
     except Exception as exc:
         app.logger.error("Failed to save behavioral config: %s", exc)
         return jsonify({"error": str(exc)}), 500
+
 
 
 @app.route("/api/categories/hints", methods=["GET"])
