@@ -1010,7 +1010,7 @@ def get_stats():
     try:
         # Pagination parameters
         page = request.args.get('page', 1, type=int)
-        per_page = request.args.get('per_page', 10, type=int)
+        per_page = request.args.get('per_page', 100, type=int)
         
         # Filter parameters
         category_filter = request.args.get('category', '').strip()
@@ -1349,7 +1349,7 @@ def api_config():
     try:
         config = load_config()
         
-        # Ensure required keys exist with fallback defaults
+        # Ensure required keys exist with fallback defaults, including custom numeric columns
         fallback_config = {
             "nlp_enabled": True,
             "keywords": "tiktok, instagram, facebook, scroll, short",
@@ -1368,6 +1368,19 @@ def api_config():
             if key not in config or config[key] is None:
                 config[key] = value
         
+        # Ensure custom numeric values are properly converted from database strings
+        if "network_velocity_custom" in config and config["network_velocity_custom"] is not None:
+            try:
+                config["network_velocity_custom"] = int(config["network_velocity_custom"])
+            except (ValueError, TypeError):
+                config["network_velocity_custom"] = 150
+        
+        if "physical_scroll_custom" in config and config["physical_scroll_custom"] is not None:
+            try:
+                config["physical_scroll_custom"] = int(config["physical_scroll_custom"])
+            except (ValueError, TypeError):
+                config["physical_scroll_custom"] = 75
+        
         # Add network configuration from config files
         network_config = _get_network_config()
         
@@ -1381,17 +1394,18 @@ def api_config():
         missing_keys = {k: v for k, v in fallback_config.items() if k not in config or config.get(k) is None}
         if missing_keys:
             try:
-                with _open_db() as connection:
+                with sqlite3.connect(DB_PATH) as conn:
+                    conn.row_factory = sqlite3.Row
                     now_ts = time.time()
                     for key, value in missing_keys.items():
-                        connection.execute(
+                        conn.execute(
                             """
                             INSERT OR IGNORE INTO config_settings (key, value, updated_at)
                             VALUES (?, ?, ?)
                             """,
                             (key, str(value), now_ts)
                         )
-                    connection.commit()
+                    conn.commit()
                     app.logger.info(f"Wrote missing config defaults: {list(missing_keys.keys())}")
             except sqlite3.Error as db_exc:
                 app.logger.warning(f"Failed to write missing config defaults: {db_exc}")
@@ -1470,9 +1484,11 @@ def api_config_setup():
 
         # Write configuration directly to SQLite database with robust transaction
         try:
-            with _open_db() as connection:
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.row_factory = sqlite3.Row
+                
                 # Ensure config_settings table exists with all required columns
-                connection.execute(
+                conn.execute(
                     """
                     CREATE TABLE IF NOT EXISTS config_settings (
                         key TEXT PRIMARY KEY,
@@ -1483,16 +1499,29 @@ def api_config_setup():
                 )
                 
                 # Check for missing columns and add them if needed (defensive ALTER TABLE)
-                cursor = connection.execute("PRAGMA table_info(config_settings)")
+                cursor = conn.execute("PRAGMA table_info(config_settings)")
                 existing_columns = {row[1] for row in cursor.fetchall()}
                 
+                # Add missing columns dynamically
+                required_columns = {"upstream_interface", "distribution_interface", "theme_mode", 
+                                   "network_velocity_preset", "network_velocity_custom",
+                                   "physical_scroll_preset", "physical_scroll_custom"}
+                
+                for column in required_columns:
+                    if column not in existing_columns:
+                        try:
+                            conn.execute(f"ALTER TABLE config_settings ADD COLUMN {column} TEXT")
+                            app.logger.info(f"Added missing column to config_settings: {column}")
+                        except sqlite3.Error as alter_exc:
+                            app.logger.warning(f"Failed to add column {column}: {alter_exc}")
+                
                 # Start transaction
-                connection.execute("BEGIN TRANSACTION")
+                conn.execute("BEGIN TRANSACTION")
                 
                 try:
                     now_ts = time.time()
                     for key, value in setup_updates.items():
-                        connection.execute(
+                        conn.execute(
                             """
                             INSERT INTO config_settings (key, value, updated_at)
                             VALUES (?, ?, ?)
@@ -1503,10 +1532,10 @@ def api_config_setup():
                             (key, str(value), now_ts)
                         )
                     
-                    connection.commit()
+                    conn.commit()
                     app.logger.info(f"Setup configuration saved: {list(setup_updates.keys())}")
                 except Exception as tx_exc:
-                    connection.rollback()
+                    conn.rollback()
                     app.logger.error(f"Transaction failed, rolled back: {tx_exc}")
                     return jsonify({"error": f"Database transaction failed: {tx_exc}"}), 500
                 
@@ -1534,8 +1563,7 @@ def api_config_setup():
         # Return explicit success response as requested
         return jsonify({
             "status": "success",
-            "message": "Setup configuration saved successfully",
-            "saved_keys": list(setup_updates.keys())
+            "message": "Configuration saved successfully"
         })
 
     # Otherwise, use the general configuration handler
@@ -1822,10 +1850,11 @@ def save_behavioral_config():
             preset = str(payload["network_velocity_preset"])
             config_updates["network_velocity_preset"] = preset
             
-            # When preset is Custom, save the custom integer value
+            # When preset is Custom, save the custom integer value directly
             if preset == "Custom" and "network_velocity_custom" in payload:
                 try:
-                    config_updates["network_velocity_custom"] = int(payload["network_velocity_custom"])
+                    custom_value = int(payload["network_velocity_custom"])
+                    config_updates["network_velocity_custom"] = custom_value
                 except ValueError:
                     return jsonify({"error": "network_velocity_custom must be an integer"}), 400
             elif preset != "Custom":
@@ -1838,10 +1867,11 @@ def save_behavioral_config():
             preset = str(payload["physical_scroll_preset"])
             config_updates["physical_scroll_preset"] = preset
             
-            # When preset is Custom, save the custom integer value
+            # When preset is Custom, save the custom integer value directly
             if preset == "Custom" and "physical_scroll_custom" in payload:
                 try:
-                    config_updates["physical_scroll_custom"] = int(payload["physical_scroll_custom"])
+                    custom_value = int(payload["physical_scroll_custom"])
+                    config_updates["physical_scroll_custom"] = custom_value
                 except ValueError:
                     return jsonify({"error": "physical_scroll_custom must be an integer"}), 400
             elif preset != "Custom":
@@ -1855,7 +1885,62 @@ def save_behavioral_config():
         if not config_updates:
             return jsonify({"error": "No valid behavioral configuration parameters provided"}), 400
 
-        save_config(config_updates)
+        # Write directly to database with thread-safe connection and dynamic schema
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            
+            # Ensure config_settings table exists
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS config_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT,
+                    updated_at REAL
+                )
+                """
+            )
+            
+            # Check for missing columns and add them if needed
+            cursor = conn.execute("PRAGMA table_info(config_settings)")
+            existing_columns = {row[1] for row in cursor.fetchall()}
+            
+            # Add missing columns dynamically for behavioral settings
+            behavioral_columns = {"network_velocity_preset", "network_velocity_custom",
+                                "physical_scroll_preset", "physical_scroll_custom",
+                                "sni_filtering_enabled"}
+            
+            for column in behavioral_columns:
+                if column not in existing_columns:
+                    try:
+                        conn.execute(f"ALTER TABLE config_settings ADD COLUMN {column} TEXT")
+                        app.logger.info(f"Added missing column to config_settings: {column}")
+                    except sqlite3.Error as alter_exc:
+                        app.logger.warning(f"Failed to add column {column}: {alter_exc}")
+            
+            # Start transaction
+            conn.execute("BEGIN TRANSACTION")
+            
+            try:
+                now_ts = time.time()
+                for key, value in config_updates.items():
+                    conn.execute(
+                        """
+                        INSERT INTO config_settings (key, value, updated_at)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(key) DO UPDATE SET
+                            value = excluded.value,
+                            updated_at = excluded.updated_at
+                        """,
+                        (key, str(value), now_ts)
+                    )
+                
+                conn.commit()
+                app.logger.info(f"Behavioral configuration saved: {list(config_updates.keys())}")
+            except Exception as tx_exc:
+                conn.rollback()
+                app.logger.error(f"Transaction failed, rolled back: {tx_exc}")
+                return jsonify({"error": f"Database transaction failed: {tx_exc}"}), 500
+
         return jsonify({"status": "success", "message": "Behavioral settings updated successfully"})
 
     except Exception as exc:
@@ -2275,9 +2360,10 @@ def get_restraints_registry():
         restraints = []
         
         if DB_PATH.exists():
-            with _open_db() as connection:
-                if _table_exists(connection, "network_devices"):
-                    rows = connection.execute(
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.row_factory = sqlite3.Row
+                if _table_exists(conn, "network_devices"):
+                    rows = conn.execute(
                         """
                         SELECT ip_address, mac_address, hostname, custom_name, policy, first_seen, last_seen
                         FROM network_devices
@@ -2297,10 +2383,10 @@ def get_restraints_registry():
                             "last_seen": row[6]
                         })
         
-        return jsonify({"restraints": restraints})
+        return jsonify({"status": "success", "restraints": restraints})
     except Exception as exc:
         app.logger.error(f"Failed to get restraints registry: {exc}")
-        return jsonify({"error": str(exc)}), 500
+        return jsonify({"status": "error", "error": str(exc)}), 500
 
 
 @app.route("/api/restraints/release", methods=["POST"])

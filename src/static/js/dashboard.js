@@ -3,7 +3,7 @@ let currentTab = 'system'; // Global state for active tab
 let currentWizardStep = 1;
 let pendingConfirmAction = null;
 let currentPage = 1;
-let perPage = 10;
+let perPage = 100;
 let totalPages = 1;
 
 // ─── Tab Navigation ───
@@ -580,8 +580,8 @@ async function saveUnifiedConfig(e) {
 
 async function loadBehavioralSettings() {
   try {
-    const response = await fetch('/api/config/behavioral');
-    if (!response.ok) throw new Error('Failed to fetch behavioral settings');
+    const response = await fetch('/api/config');
+    if (!response.ok) throw new Error('Failed to fetch configuration');
     const data = await response.json();
     
     const netPreset = document.getElementById('behavioral-network-preset');
@@ -635,13 +635,23 @@ async function saveBehavioralSettings(event) {
     sni_filtering_enabled: sniEnabled
   };
   
-  // Only include custom values when preset is Custom
+  // Read active values from DOM and cast to integers when Custom is selected
   if (netPreset === 'Custom') {
-    payload.network_velocity_custom = parseInt(netCustom, 10) || 150;
+    const customValue = parseInt(netCustom, 10);
+    if (isNaN(customValue) || customValue <= 0) {
+      showToast('Network velocity custom value must be a positive integer', 'danger');
+      return;
+    }
+    payload.network_velocity_custom = customValue;
   }
   
   if (scrollPreset === 'Custom') {
-    payload.physical_scroll_custom = parseInt(scrollCustom, 10) || 75;
+    const customValue = parseInt(scrollCustom, 10);
+    if (isNaN(customValue) || customValue <= 0) {
+      showToast('Physical scroll custom value must be a positive integer', 'danger');
+      return;
+    }
+    payload.physical_scroll_custom = customValue;
   }
   
   try {
@@ -1195,7 +1205,9 @@ function startDashboardPolling() {
       
       const shieldIntegrity = document.getElementById('nerve-shield-integrity');
       if (shieldIntegrity) {
-        shieldIntegrity.textContent = `${data.devices.total_connected} Active / ${data.devices.throttled_count} Throttled`;
+        const activeCount = data.devices?.total_connected || data.clients || 0;
+        const throttledCount = data.devices?.throttled_count || data.throttles?.length || 0;
+        shieldIntegrity.textContent = `${activeCount} Active / ${throttledCount} Throttled`;
       }
       
       const nlpStatus = document.getElementById('nerve-nlp-status');
@@ -1236,22 +1248,22 @@ function startDashboardPolling() {
         const tableBody = document.getElementById('devices-tbody');
         if (tableBody && data.dhcp_allocations.length > 0) {
           tableBody.innerHTML = data.dhcp_allocations.map(device => {
-            const throughput = `${device.rx_mbps || 0} / ${device.tx_mbps || 0} Mbps`;
-            const stateClass = 'success';
-            const stateLabel = 'Active';
+            const policy = device.policy || 'none';
+            const stateClass = policy === 'blacklist' ? 'danger' : (policy === 'whitelist' ? 'success' : 'secondary');
+            const stateLabel = policy === 'blacklist' ? 'Blacklisted' : (policy === 'whitelist' ? 'Whitelisted' : 'Default');
             
             return `
               <tr>
                 <td style="font-weight: 500;">${device.hostname || device.custom_name || 'Unknown Device'}</td>
                 <td style="font-family: monospace; font-size: 0.9rem;">${device.ip_address || '—'}</td>
                 <td style="font-family: monospace; font-size: 0.9rem;">${device.mac_address || '—'}</td>
-                <td style="color: var(--primary); font-weight: 600;">${throughput}</td>
                 <td><span class="category-badge ${stateClass}">${stateLabel}</span></td>
                 <td>
-                  <label class="toggle-switch-container">
-                    <input type="checkbox" onchange="toggleDeviceThrottle('${device.ip_address}', this.checked)" class="d-none">
-                    <div class="toggle-slider" onclick="this.previousElementSibling.click(); this.classList.toggle('active')"></div>
-                  </label>
+                  <div class="device-filter-pills">
+                    <button class="filter-pill whitelist ${policy === 'whitelist' ? 'active' : ''}" onclick="setDeviceFilter('${device.mac_address}', 'whitelist', this)">Whitelist</button>
+                    <button class="filter-pill blacklist ${policy === 'blacklist' ? 'active' : ''}" onclick="setDeviceFilter('${device.mac_address}', 'blacklist', this)">Blacklist</button>
+                    <button class="filter-pill none ${policy === 'none' ? 'active' : ''}" onclick="setDeviceFilter('${device.mac_address}', 'none', this)">Default</button>
+                  </div>
                 </td>
               </tr>
             `;

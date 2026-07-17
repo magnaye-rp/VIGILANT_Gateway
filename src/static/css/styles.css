@@ -191,6 +191,9 @@ html, body {
   margin-bottom: 2.5rem !important;
   transition: var(--transition);
   box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
 }
 
 .card:hover, .settings-card:hover, .stat-card:hover {
@@ -818,7 +821,7 @@ button {
 }
 
 /* ─── Layout Flow & Glassmorphism Fixes ─── */
-.behavioral-card, .glass-card {
+.behavioral-card, .glass-card, .glassmorphic-card {
   display: flex;
   flex-direction: column;
   gap: 1.5rem !important;
