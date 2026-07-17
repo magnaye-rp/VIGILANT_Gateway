@@ -130,7 +130,7 @@ stage_1_dependencies() {
     log_info "Installing system packages..."
     apt-get install -y \
         python3 python3-pip python3-venv \
-        hostapd dnsmasq iptables iptables-persistent \
+        hostapd dnsmasq iptables iw iptables-persistent \
         wireless-tools netfilter-persistent \
         git curl wget nano \
         > /dev/null 2>&1
