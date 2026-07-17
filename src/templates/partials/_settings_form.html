@@ -110,13 +110,13 @@
       <div id="tab-behavioral-control" class="tab-content">
         <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Behavioral Control & Habit Management <i class="fa-solid fa-info-circle tooltip-trigger" data-tooltip="Manage how the system analyzes pacing and encryption patterns to limit excessive consumption."></i></h2>
 
-        <div class="card glassmorphic-card" style="margin-bottom: 2rem; background: var(--surface); box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.15); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 12px; padding: 2rem;">
-          
+        <div class="card glassmorphic-card behavioral-card" style="background: var(--surface); box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.15); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 12px; padding: 2rem;">
+
           <form id="behavioral-form" onsubmit="saveBehavioralSettings(event)">
             <!-- Section A -->
-            <div style="margin-bottom: 2rem;">
+            <div>
               <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem; color: var(--primary);">Network Request Velocity</h3>
-              <div class="form-row">
+              <div class="behavioral-preset-grid">
                 <div class="form-group">
                   <label class="form-label">Preset Sensitivity</label>
                   <select id="behavioral-network-preset" onchange="toggleBehavioralCustom('network')">
@@ -134,9 +134,9 @@
             </div>
 
             <!-- Section B -->
-            <div style="margin-bottom: 2rem;">
+            <div>
               <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem; color: var(--primary);">Physical Scroll Telemetry Control</h3>
-              <div class="form-row">
+              <div class="behavioral-preset-grid">
                 <div class="form-group">
                   <label class="form-label">Preset Sensitivity</label>
                   <select id="behavioral-scroll-preset" onchange="toggleBehavioralCustom('scroll')">

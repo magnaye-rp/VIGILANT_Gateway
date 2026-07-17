@@ -825,6 +825,32 @@
       z-index: 1000;
       pointer-events: none;
     }
+
+    /* ─── Behavioral Control CSS Fixes ─── */
+    .behavioral-card {
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+      margin-bottom: 2rem;
+    }
+
+    /* Fix flickering tooltips */
+    .tooltip-text,
+    .help-tooltip {
+      pointer-events: none;
+      transition: opacity 0.2s ease-in-out;
+    }
+
+    /* Grid layout for presets and custom inputs */
+    .behavioral-preset-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    .behavioral-preset-grid .form-group {
+      margin-bottom: 0;
+    }
   </style>
 </head>
 <body>
@@ -1383,8 +1409,10 @@
 
       const config = await response.json();
       
-      // Populate network interface dropdowns
-      populateInterfaceDropdowns(config.available_interfaces || []);
+      // Populate network interface dropdowns with available interfaces
+      if (config.available_interfaces && Array.isArray(config.available_interfaces)) {
+        populateInterfaceDropdowns(config.available_interfaces);
+      }
       
       // Sync filtering settings
       syncConfigInputs(['block-harmful'], config.block_harmful);

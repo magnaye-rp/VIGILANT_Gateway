@@ -8,6 +8,7 @@ import importlib
 import importlib.util
 import csv
 import io
+import socket
 from pathlib import Path
 import platform
 from collections import deque
@@ -586,6 +587,23 @@ def _write_netplan_config(config: dict) -> bool:
         return False
 
 
+def get_system_interfaces() -> list:
+    """Get list of available network interfaces using socket.if_nameindex()"""
+    try:
+        interfaces = socket.if_nameindex()
+        # Extract interface names from (index, name) tuples
+        iface_names = [name for index, name in interfaces]
+        # Filter out loopback and virtual interfaces for cleaner list
+        filtered = [iface for iface in iface_names if not iface.startswith('lo') and not iface.startswith('veth') and not iface.startswith('docker')]
+        if filtered:
+            return sorted(filtered)
+    except Exception as exc:
+        app.logger.warning("Failed to get network interfaces via socket.if_nameindex: %s", exc)
+        # Fallback to common interface names
+        return ['eth0', 'wlan0', 'enp0s3', 'wlp1s0']
+    return []
+
+
 def _get_network_interfaces() -> list:
     """Get list of available network interfaces from system"""
     if psutil is not None:
@@ -731,6 +749,23 @@ def load_config() -> dict:
                 config[key] = _coerce_config_value(key, raw_value)
             except (TypeError, ValueError):
                 config[key] = CONFIG_DEFAULTS[key]
+
+        # Write missing default keys to database
+        missing_keys = set(CONFIG_DEFAULTS.keys()) - set(config.keys())
+        if missing_keys:
+            with _open_db() as connection:
+                now_ts = time.time()
+                for key in missing_keys:
+                    connection.execute(
+                        """
+                        INSERT OR IGNORE INTO config_settings (key, value, updated_at)
+                        VALUES (?, ?, ?)
+                        """,
+                        (key, str(CONFIG_DEFAULTS[key]), now_ts),
+                    )
+                connection.commit()
+                app.logger.info("Wrote missing default config keys: %s", missing_keys)
+
     except sqlite3.Error as exc:
         app.logger.warning("load_config failed: %s", exc)
 
@@ -1224,6 +1259,28 @@ def save_ui_theme():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route("/api/config", methods=["GET"])
+def api_config():
+    """Standardized configuration API endpoint - returns global config with available interfaces"""
+    try:
+        config = load_config()
+        # Add network configuration from config files
+        network_config = _get_network_config()
+        
+        # Add available network interfaces using the new socket-based function
+        network_config["available_interfaces"] = get_system_interfaces()
+        
+        # Merge network config into response
+        config.update(network_config)
+        return jsonify(config)
+    except Exception as exc:
+        app.logger.error("Failed to load config: %s", exc)
+        # Return safe fallback with defaults
+        fallback_config = dict(CONFIG_DEFAULTS)
+        fallback_config["available_interfaces"] = get_system_interfaces()
+        return jsonify(fallback_config)
+
+
 @app.route("/api/config/setup", methods=["GET", "POST"])
 def api_config_setup():
     if request.method == "GET":
@@ -1232,7 +1289,7 @@ def api_config_setup():
         network_config = _get_network_config()
         
         # Add available network interfaces
-        network_config["available_interfaces"] = _get_network_interfaces()
+        network_config["available_interfaces"] = get_system_interfaces()
         
         # Merge network config into response
         config.update(network_config)
