@@ -857,6 +857,11 @@
       color: #212529 !important; /* Force text to remain visible */
     }
 
+    [data-theme="light"] .glassmorphic-card {
+      background: rgba(255, 255, 255, 0.9) !important;
+      color: #212529 !important;
+    }
+
     /* ─── Behavioral Control CSS Fixes ─── */
     .behavioral-preset-grid {
       display: grid;
@@ -1097,7 +1102,7 @@
               </div>
               <div style="display: flex; gap: 0.5rem; align-items: center;">
                 <span class="category-badge success" id="status-dnsmasq">Active</span>
-                <button id="btn-restart-dnsmasq" class="btn-secondary" style="padding: 0.5rem 1rem;" onclick="executeSystemControl('restart_dnsmasq', this)">Reload</button>
+                <button id="btn-restart-dnsmasq" class="btn-secondary" style="padding: 0.5rem 1rem;" disabled>Reload</button>
               </div>
             </div>
           </div>
@@ -1161,7 +1166,7 @@
   let currentWizardStep = 1;
   let pendingConfirmAction = null;
   let currentPage = 1;
-  let perPage = 10;
+  let perPage = 100;
   let totalPages = 1;
 
   // ─── Tab Navigation ───
@@ -1221,6 +1226,7 @@
     if (tabId === 'settings') loadUnifiedConfig();
     if (tabId === 'filtering') {
       loadCategoryHints();
+      loadKeywords();
     }
     if (tabId === 'behavioral-control') {
       loadBehavioralSettings();
@@ -1993,7 +1999,7 @@
       const searchFilter = clientFilter || domainFilter;
       
       // Build URL with filter parameters
-      let url = `/api/stats?page=${currentPage}&per_page=${perPage}`;
+      let url = `/api/stats?page=${currentPage}&limit=100`;
       if (categoryFilter) {
         url += `&category=${encodeURIComponent(categoryFilter)}`;
       }
@@ -2405,13 +2411,10 @@
                   <td style="font-weight: 500;">${device.hostname || device.custom_name || 'Unknown Device'}</td>
                   <td style="font-family: monospace; font-size: 0.9rem;">${device.ip_address || '—'}</td>
                   <td style="font-family: monospace; font-size: 0.9rem;">${device.mac_address || '—'}</td>
-                  <td style="color: var(--primary); font-weight: 600;">${throughput}</td>
-                  <td><span class="category-badge ${stateClass}">${stateLabel}</span></td>
                   <td>
-                    <label class="toggle-switch-container">
-                      <input type="checkbox" onchange="toggleDeviceThrottle('${device.ip_address}', this.checked)" class="d-none">
-                      <div class="toggle-slider" onclick="this.previousElementSibling.click(); this.classList.toggle('active')"></div>
-                    </label>
+                    <button class="btn btn-sm btn-success" onclick="setFilter('${device.mac_address}', 'whitelist')">Whitelist</button>
+                    <button class="btn btn-sm btn-danger" onclick="setFilter('${device.mac_address}', 'blacklist')">Blacklist</button>
+                    <button class="btn btn-sm btn-secondary" onclick="setFilter('${device.mac_address}', 'none')">Reset</button>
                   </td>
                 </tr>
               `;

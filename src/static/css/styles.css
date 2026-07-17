@@ -1049,3 +1049,10 @@ button {
   color: white;
   border-color: #808080;
 }
+
+body.light-mode .nerve-center, 
+body.light-mode .nerve-center *, 
+[data-theme="light"] .nerve-center, 
+[data-theme="light"] .nerve-center * {
+    color: #0f172a !important;
+}

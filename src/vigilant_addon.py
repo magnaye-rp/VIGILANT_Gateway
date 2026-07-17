@@ -18,6 +18,22 @@ DEFAULT_VELOCITY_THRESHOLD = 1.5
 DEFAULT_THROTTLE_RATE = "512kbit"
 DEFAULT_PINNED_DOMAINS = "instagram.com,facebook.com,tiktok.com,x.com,twitter.com"
 
+# Global asset whitelist
+GLOBAL_WHITELIST = {
+    "github.com", "githubassets.com", "githubusercontent.com", "git-scm.com",
+    "google.com", "gstatic.com", "googleapis.com", "googleusercontent.com",
+    "microsoft.com", "windows.net", "live.com", "office.com", "apple.com",
+    "mzstatic.com", "icloud.com", "aws.amazon.com", "cloudfront.net", "cdnjs.cloudflare.com"
+}
+
+def is_whitelisted(host: str) -> bool:
+    """Check if a host (or its parent domain) is in the global whitelist."""
+    clean = host.lstrip("www.")
+    for w in GLOBAL_WHITELIST:
+        if clean == w or clean.endswith('.' + w):
+            return True
+    return False
+
 # Default social domains for doomscroll detection
 DEFAULT_SOCIAL_DOMAINS = {
     "facebook.com", "www.facebook.com",
@@ -354,6 +370,10 @@ def categorize_content(text, host=""):
                 scores["Productive"] = scores.get("Productive", 0) + 1
 
     if scores.get("Harmful", 0) > 0:
+        # Downgrade harmful if contains common utility terms
+        utility_terms = {"git", "code", "dev", "assets", "static", "github", "google", "microsoft", "apple"}
+        if any(term in tokens for term in utility_terms):
+            return "Educational", entities
         return "Harmful", entities
 
     best = max(scores, key=scores.get)
@@ -504,7 +524,13 @@ class VIGILANTAddon:
     def request(self, flow: http.HTTPFlow):
         client_ip = flow.client_conn.peername[0]
         host      = flow.request.pretty_host
-
+        
+        # Whitelist bypass: asset subdomains
+        if is_whitelisted(host):
+            log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Educational", False, [])
+            print(f"[VIGILANT] WHITELIST BYPASS (request): {host} -> {client_ip}")
+            return
+        
         # TLS Passthrough: Check if host belongs to pinned SSL certificate domains
         # These apps have hardcoded SSL pinning and must pass through without decryption
         config = load_proxy_config()
@@ -593,7 +619,13 @@ class VIGILANTAddon:
         path         = flow.request.path[:120]
         method       = flow.request.method
         content_type = flow.response.headers.get("content-type", "")
-
+        
+        # Whitelist bypass: asset subdomains
+        if is_whitelisted(host):
+            log_request(client_ip, host, path, method, "Educational", False, [])
+            print(f"[VIGILANT] WHITELIST BYPASS (response): {host} -> {client_ip}")
+            return
+        
         # TLS Passthrough: Skip response filtering for pinned domains
         config = load_proxy_config()
         pinned_domains = config['pinned_domains']

@@ -75,10 +75,10 @@ DEFAULT_CONFIG = {
 # Maintain backward compatibility
 CONFIG_DEFAULTS = DEFAULT_CONFIG
 
-ALLOWED_CONFIG_KEYS = set(CONFIG_DEFAULTS)
-BOOLEAN_CONFIG_KEYS = set()
-INTEGER_CONFIG_KEYS = set()
-STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "upstream_dns", "nlp_accuracy", "network_velocity_threshold", "physical_scroll_threshold", "throttle_rate", "nlp_enabled", "throttle_enabled", "ui_theme"}
+ALLOWED_CONFIG_KEYS = set(CONFIG_DEFAULTS) | {"block_harmful", "block_distracting", "enable_https", "log_retention", "network_velocity_preset", "network_velocity_custom", "physical_scroll_preset", "physical_scroll_custom", "sni_filtering_enabled"}
+BOOLEAN_CONFIG_KEYS = {"block_harmful", "block_distracting", "nlp_enabled", "throttle_enabled", "enable_https", "sni_filtering_enabled"}
+INTEGER_CONFIG_KEYS = {"network_velocity_threshold", "physical_scroll_threshold", "throttle_rate", "log_retention", "network_velocity_custom", "physical_scroll_custom"}
+STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "upstream_dns", "nlp_accuracy", "ui_theme", "network_velocity_preset", "physical_scroll_preset"}
 TRAFFIC_CATEGORIES = ("Educational", "Productive", "Distracting", "Harmful")
 DEFAULT_SYSTEM_METRICS = {
     "cpu_percent": 0.0,
@@ -2728,20 +2728,7 @@ def _discover_network_devices() -> list:
         if not device_info['mac_address'] and ip_address in arp_entries:
             device_info['mac_address'] = arp_entries[ip_address]['mac_address']
         
-        # Add throughput data
-        throughput = _get_device_throughput(ip_address)
-        # Normalize throughput keys for frontend compatibility
-        throughput_summary = {
-            'rx_bytes': int(throughput.get('rx_bytes', 0) or 0),
-            'tx_bytes': int(throughput.get('tx_bytes', 0) or 0),
-            'rx_mbps': float(throughput.get('rx_mbps', throughput.get('rx_rate_kb_s', 0) / 1024 if throughput.get('rx_rate_kb_s') else 0)) or 0.0,
-            'tx_mbps': float(throughput.get('tx_mbps', throughput.get('tx_rate_kb_s', 0) / 1024 if throughput.get('tx_rate_kb_s') else 0)) or 0.0,
-        }
-        # Also provide short keys used by legacy JS
-        throughput_summary['rx'] = throughput_summary['rx_mbps']
-        throughput_summary['tx'] = throughput_summary['tx_mbps']
-
-        device_info['throughput'] = throughput_summary
+        # Throughput data removed - not displayed in UI
         
         discovered_devices[ip_address] = device_info
     
@@ -2763,8 +2750,6 @@ def _discover_network_devices() -> list:
                     discovered_devices[ip_address]['policy'] = row[4]
                     discovered_devices[ip_address]['first_seen'] = row[5]
                     discovered_devices[ip_address]['last_seen'] = now
-                    # Refresh throughput for known devices
-                    discovered_devices[ip_address]['throughput'] = _get_device_throughput(ip_address)
                 else:
                     # Keep device in database even if not currently active
                     discovered_devices[ip_address] = {
@@ -2775,8 +2760,7 @@ def _discover_network_devices() -> list:
                         'policy': row[4],
                         'first_seen': row[5],
                         'last_seen': row[6],
-                        'active': False,
-                        'throughput': _get_device_throughput(ip_address)
+                        'active': False
                     }
             
             # Update database with discovered devices

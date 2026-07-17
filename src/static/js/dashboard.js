@@ -880,7 +880,7 @@ async function loadTrafficLogs() {
     const searchFilter = clientFilter || domainFilter;
     
     // Build URL with filter parameters
-    let url = `/api/stats?page=${currentPage}&per_page=${perPage}`;
+    let url = `/api/stats?page=${currentPage}&limit=100`;
     if (categoryFilter) {
       url += `&category=${encodeURIComponent(categoryFilter)}`;
     }
