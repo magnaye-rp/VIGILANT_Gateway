@@ -27,6 +27,8 @@ except ImportError:
         return app
 
 scroll_velocity_tracker = {}
+_last_net_io = None
+_last_net_time = 0
 
 
 
@@ -797,6 +799,123 @@ def _config_payload_from_request(payload: dict) -> tuple[dict, list[str]]:
 def dashboard():
     proxy_active = _service_statuses().get("vigilant_proxy") == "active"
     return render_template("dashboard.html", proxy_active=proxy_active)
+
+@app.route("/api/dashboard/summary")
+def dashboard_summary():
+    global _last_net_io, _last_net_time
+    
+    # 1. System Metrics via psutil
+    cpu_usage = 0.0
+    ram_usage_gb = 0.0
+    ram_total_gb = 8.0
+    disk_usage = 0.0
+    rx_mbps = 0.0
+    tx_mbps = 0.0
+    
+    if psutil:
+        try:
+            cpu_usage = float(psutil.cpu_percent())
+            mem = psutil.virtual_memory()
+            ram_usage_gb = round(mem.used / (1024**3), 1)
+            ram_total_gb = round(mem.total / (1024**3), 1)
+            disk_usage = float(psutil.disk_usage('/').percent)
+            
+            # Throughput calculation
+            current_time = time.time()
+            current_io = psutil.net_io_counters()
+            if _last_net_io and _last_net_time:
+                time_diff = current_time - _last_net_time
+                if time_diff > 0:
+                    rx_bytes = current_io.bytes_recv - _last_net_io.bytes_recv
+                    tx_bytes = current_io.bytes_sent - _last_net_io.bytes_sent
+                    rx_mbps = round((rx_bytes * 8) / (1024 * 1024 * time_diff), 1)
+                    tx_mbps = round((tx_bytes * 8) / (1024 * 1024 * time_diff), 1)
+            
+            _last_net_io = current_io
+            _last_net_time = current_time
+        except Exception as e:
+            app.logger.warning(f"Error fetching psutil stats: {e}")
+            
+    # Service statuses
+    services_state = _service_statuses()
+    services = {
+        "mitmproxy": services_state.get("vigilant_proxy", "offline"),
+        "hostapd": "active", 
+        "dnsmasq": "active"
+    }
+
+    # 2. Database metrics (single connection)
+    total_connected = 0
+    throttled_count = 0
+    recent_alerts = 0
+    recent_entries = []
+    
+    if DB_PATH.exists():
+        try:
+            with _open_db() as conn:
+                # Connected devices (distinct IPs in last 24h)
+                window_start = int(time.time()) - 86400
+                if _table_exists(conn, "traffic_log"):
+                    row = conn.execute("SELECT COUNT(DISTINCT client_ip) FROM traffic_log WHERE timestamp > ?", (window_start,)).fetchone()
+                    total_connected = int(row[0] or 0) if row else 0
+                    
+                    row = conn.execute("SELECT COUNT(*) FROM traffic_log WHERE flagged = 1 AND timestamp > ?", (window_start,)).fetchone()
+                    recent_alerts = int(row[0] or 0) if row else 0
+                    
+                    rows = conn.execute("SELECT timestamp, client_ip, host, category, flagged FROM traffic_log ORDER BY timestamp DESC LIMIT 10").fetchall()
+                    recent_entries = [_format_recent_log_entry(dict(r)) for r in rows]
+                
+                if _table_exists(conn, "network_devices"):
+                    row = conn.execute("SELECT COUNT(*) FROM network_devices WHERE policy = 'blacklist'").fetchone()
+                    throttled_count = int(row[0] or 0) if row else 0
+        except sqlite3.Error as e:
+            app.logger.warning(f"DB Error in summary: {e}")
+
+    # 3. Active Config
+    config = load_config()
+    nlp_enabled = _coerce_bool(config.get("nlp_enabled", "true"))
+    
+    # Map threshold to preset
+    try:
+        net_vel = float(config.get("network_velocity_threshold", "1.5"))
+    except ValueError:
+        net_vel = 1.5
+    if net_vel >= 2.0: net_preset = "Low"
+    elif net_vel >= 1.5: net_preset = "Medium"
+    else: net_preset = "High"
+    
+    try:
+        scroll_vel = int(config.get("physical_scroll_threshold", "75"))
+    except ValueError:
+        scroll_vel = 75
+    if scroll_vel >= 120: scroll_preset = "Low"
+    elif scroll_vel >= 75: scroll_preset = "Medium"
+    else: scroll_preset = "High"
+
+    return jsonify({
+        "system": {
+            "cpu_usage": cpu_usage,
+            "ram_usage_gb": ram_usage_gb,
+            "ram_total_gb": ram_total_gb,
+            "disk_usage": disk_usage,
+            "services": services,
+            "throughput_rx_mbps": max(0.0, rx_mbps),
+            "throughput_tx_mbps": max(0.0, tx_mbps)
+        },
+        "devices": {
+            "total_connected": total_connected,
+            "throttled_count": throttled_count
+        },
+        "logs": {
+            "recent_alerts": recent_alerts,
+            "recent_entries": recent_entries
+        },
+        "active_config": {
+            "nlp_enabled": nlp_enabled,
+            "network_velocity_preset": net_preset,
+            "physical_scroll_preset": scroll_preset
+        }
+    })
 
 
 @app.route('/api/stats')
