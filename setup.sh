@@ -404,30 +404,18 @@ stage_7_6_wifi_power_save() {
         return
     fi
     
-    log_info "Disabling power saving on $WIFI_INTERFACE immediately..."
-    iw dev "$WIFI_INTERFACE" set power_save off
-    log_success "Power saving disabled immediately"
-    
-    # Make permanent via systemd service
-    log_info "Creating systemd service for permanent power save disable..."
-    cat << EOF > /etc/systemd/system/vigilant-wifi-power-save.service
-[Unit]
-Description=Disable Wi-Fi Power Saving on $WIFI_INTERFACE
-After=network.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/sbin/iw dev $WIFI_INTERFACE set power_save off
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    
-    systemctl daemon-reload
-    systemctl enable vigilant-wifi-power-save.service
-    systemctl start vigilant-wifi-power-save.service
-    
-    log_success "Wi-Fi power saving permanently disabled via systemd service"
+    echo "[INFO] Disabling power saving on wlp1s0..."
+    if ! sudo iw dev wlp1s0 set power_save off 2>/dev/null; then
+        echo "[WARN] Direct iw power control is unsupported on this driver. Applying persistent module options instead..."
+        
+        # Write persistent kernel parameters to force-disable power saving for iwlwifi
+        echo "options iwlwifi power_save=0 uapsd_disable=1" | sudo tee /etc/modprobe.d/iwlwifi.conf > /dev/null
+        
+        echo "[✓] Kernel module configuration written to /etc/modprobe.d/iwlwifi.conf"
+        echo "[INFO] System reboot is recommended to apply permanent driver power-saving changes."
+    else
+        echo "[✓] Power saving successfully disabled via iw tool."
+    fi
 }
 
 # ─── Stage 8: Certificates ──────────────────────────────────────────────────

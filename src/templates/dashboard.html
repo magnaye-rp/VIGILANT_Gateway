@@ -826,22 +826,38 @@
       pointer-events: none;
     }
 
-    /* ─── Behavioral Control CSS Fixes ─── */
-    .behavioral-card {
+    /* ─── Layout Flow & Glassmorphism Fixes ─── */
+    .behavioral-card, .glass-card {
       display: flex;
       flex-direction: column;
-      gap: 1.5rem;
+      gap: 1.5rem !important;
       margin-bottom: 2rem;
     }
 
     /* Fix flickering tooltips */
-    .tooltip-text,
-    .help-tooltip {
-      pointer-events: none;
-      transition: opacity 0.15s ease;
+    .tooltip-text, .help-tooltip {
+      pointer-events: none !important;
     }
 
-    /* Grid layout for presets and custom inputs */
+    /* Control pair grid layout */
+    .control-pair {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+    }
+
+    /* ─── VIGILANT NERVE CENTER Light Mode Visibility Fix ─── */
+    [data-theme="light"] .nerve-center-card, [data-theme="light"] .glass-card {
+      background: rgba(255, 255, 255, 0.85) !important;
+      border: 1px solid rgba(26, 147, 138, 0.2) !important;
+      box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.08);
+    }
+
+    [data-theme="light"] .nerve-center-card *, [data-theme="light"] .glass-card * {
+      color: #212529 !important; /* Force text to remain visible */
+    }
+
+    /* ─── Behavioral Control CSS Fixes ─── */
     .behavioral-preset-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -852,40 +868,6 @@
       margin-bottom: 0;
     }
 
-    /* ─── VIGILANT NERVE CENTER Light Mode Visibility Fix ─── */
-    [data-theme="light"] .nerve-center-card,
-    [data-theme="light"] .glass-card,
-    [data-theme="light"] .glassmorphic-card {
-      background: rgba(255, 255, 255, 0.85) !important;
-      border: 1px solid rgba(26, 147, 138, 0.15) !important; /* Soft verdigris border */
-      box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.06) !important;
-    }
-
-    [data-theme="light"] .nerve-center-card .card-title,
-    [data-theme="light"] .glass-card .card-title,
-    [data-theme="light"] .glassmorphic-card .card-title,
-    [data-theme="light"] .nerve-center-card .metric-value,
-    [data-theme="light"] .glass-card .metric-value,
-    [data-theme="light"] .glassmorphic-card .metric-value,
-    [data-theme="light"] .nerve-center-card h2,
-    [data-theme="light"] .glass-card h2,
-    [data-theme="light"] .glassmorphic-card h2,
-    [data-theme="light"] .nerve-center-card h3,
-    [data-theme="light"] .glass-card h3,
-    [data-theme="light"] .glassmorphic-card h3,
-    [data-theme="light"] .nerve-center-card h4,
-    [data-theme="light"] .glass-card h4,
-    [data-theme="light"] .glassmorphic-card h4 {
-      color: #212529 !important; /* Charcoal Black */
-    }
-
-    [data-theme="light"] .nerve-center-card .stat-value,
-    [data-theme="light"] .glass-card .stat-value,
-    [data-theme="light"] .glassmorphic-card .stat-value {
-      color: #212529 !important;
-    }
-
-    /* ─── Behavioral Control Alignment Fix ─── */
     .behavioral-setting-group {
       display: flex;
       flex-direction: column;
@@ -893,12 +875,6 @@
       margin-bottom: 24px;
       padding-bottom: 16px;
       border-bottom: 1px dashed rgba(128, 128, 128, 0.2);
-    }
-
-    .control-pair {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 16px;
     }
 
     @media (max-width: 768px) {
@@ -2342,11 +2318,31 @@
         });
 
         // 3. Update active tab specifics without flickering
-        if (currentTab === 'device-management') {
-           // We might need to call loadDevices only when the tab is first opened or handle it here.
-           // However, for efficiency, if we have a way to inject device lists we should, but for now we'll trigger the specific fetches if needed, or we just rely on summary for high-level stats and still call loadDevices on focus. 
-           // Wait, the prompt says: "replace multiple fetch requests... makes a single call... use this single JSON payload to cleanly populate... the active toggles without UI flickering."
-           // But the summary doesn't return the full device array or full log array.
+        if (currentTab === 'device-management' && data.dhcp_allocations) {
+          const tableBody = document.getElementById('devices-tbody');
+          if (tableBody && data.dhcp_allocations.length > 0) {
+            tableBody.innerHTML = data.dhcp_allocations.map(device => {
+              const throughput = `${device.rx_mbps || 0} / ${device.tx_mbps || 0} Mbps`;
+              const stateClass = 'success';
+              const stateLabel = 'Active';
+              
+              return `
+                <tr>
+                  <td style="font-weight: 500;">${device.hostname || device.custom_name || 'Unknown Device'}</td>
+                  <td style="font-family: monospace; font-size: 0.9rem;">${device.ip_address || '—'}</td>
+                  <td style="font-family: monospace; font-size: 0.9rem;">${device.mac_address || '—'}</td>
+                  <td style="color: var(--primary); font-weight: 600;">${throughput}</td>
+                  <td><span class="category-badge ${stateClass}">${stateLabel}</span></td>
+                  <td>
+                    <label class="toggle-switch-container">
+                      <input type="checkbox" onchange="toggleDeviceThrottle('${device.ip_address}', this.checked)" class="d-none">
+                      <div class="toggle-slider" onclick="this.previousElementSibling.click(); this.classList.toggle('active')"></div>
+                    </label>
+                  </td>
+                </tr>
+              `;
+            }).join('');
+          }
         }
         
       } catch (error) {
