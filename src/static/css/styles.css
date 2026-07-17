@@ -850,13 +850,19 @@ button {
 
 /* ─── Behavioral Control CSS Fixes ─── */
 .behavioral-preset-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
   gap: 1rem;
+  align-items: center;
 }
 
 .behavioral-preset-grid .form-group {
   margin-bottom: 0;
+  flex: 1;
+}
+
+.behavioral-preset-grid .form-group:first-child {
+  flex: 0 0 auto;
+  min-width: 200px;
 }
 
 .behavioral-setting-group {
@@ -932,4 +938,64 @@ button {
   letter-spacing: 0.05em;
   min-width: 30px;
   text-align: right;
+}
+
+/* ─── Device Filter Pills ─── */
+.device-filter-pills {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.filter-pill {
+  padding: 0.35rem 0.85rem;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  border: 2px solid transparent;
+  user-select: none;
+}
+
+.filter-pill:hover {
+  transform: scale(1.05);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.filter-pill.whitelist {
+  background: rgba(0, 208, 132, 0.15);
+  color: #00d084;
+  border-color: rgba(0, 208, 132, 0.3);
+}
+
+.filter-pill.whitelist:hover, .filter-pill.whitelist.active {
+  background: #00d084;
+  color: white;
+  border-color: #00d084;
+}
+
+.filter-pill.blacklist {
+  background: rgba(255, 56, 96, 0.15);
+  color: #ff3860;
+  border-color: rgba(255, 56, 96, 0.3);
+}
+
+.filter-pill.blacklist:hover, .filter-pill.blacklist.active {
+  background: #ff3860;
+  color: white;
+  border-color: #ff3860;
+}
+
+.filter-pill.none {
+  background: rgba(128, 128, 128, 0.15);
+  color: #808080;
+  border-color: rgba(128, 128, 128, 0.3);
+}
+
+.filter-pill.none:hover, .filter-pill.none.active {
+  background: #808080;
+  color: white;
+  border-color: #808080;
 }

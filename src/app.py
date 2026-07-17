@@ -1116,20 +1116,52 @@ def get_stats():
 def api_config_reset():
     """Reset configuration to factory defaults"""
     try:
-        # Clear existing config and restore defaults
+        # Clear existing config and restore defaults with robust transaction
         with _open_db() as connection:
-            if _table_exists(connection, "config_settings"):
-                connection.execute("DELETE FROM config_settings")
+            # Ensure config_settings table exists
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS config_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT,
+                    updated_at REAL
+                )
+                """
+            )
+            
+            # Start transaction
+            connection.execute("BEGIN TRANSACTION")
+            
+            try:
+                # Clear existing config
+                if _table_exists(connection, "config_settings"):
+                    connection.execute("DELETE FROM config_settings")
+                
+                # Insert factory defaults
+                now_ts = time.time()
+                for key, value in CONFIG_DEFAULTS.items():
+                    connection.execute(
+                        """
+                        INSERT INTO config_settings (key, value, updated_at)
+                        VALUES (?, ?, ?)
+                        """,
+                        (key, str(value), now_ts)
+                    )
+                
                 connection.commit()
-        
-        # Save factory defaults
-        save_config(CONFIG_DEFAULTS)
+                app.logger.info("Configuration reset to factory defaults")
+            except Exception as tx_exc:
+                connection.rollback()
+                app.logger.error(f"Reset transaction failed, rolled back: {tx_exc}")
+                return jsonify({"error": f"Database transaction failed: {tx_exc}"}), 500
         
         # Write network configuration files with defaults
-        _write_dnsmasq_config(CONFIG_DEFAULTS)
-        _write_netplan_config(CONFIG_DEFAULTS)
+        try:
+            _write_dnsmasq_config(CONFIG_DEFAULTS)
+            _write_netplan_config(CONFIG_DEFAULTS)
+        except Exception as file_exc:
+            app.logger.warning(f"Failed to write network config files during reset: {file_exc}")
         
-        app.logger.info("Configuration reset to factory defaults")
         return jsonify({"status": "success", "message": "Configuration reset to factory defaults"})
     except Exception as exc:
         app.logger.error("Failed to reset configuration: %s", exc)
@@ -1436,10 +1468,10 @@ def api_config_setup():
         if not setup_updates:
             return jsonify({"error": "No valid setup configuration keys provided"}), 400
 
-        # Write configuration directly to SQLite database
+        # Write configuration directly to SQLite database with robust transaction
         try:
             with _open_db() as connection:
-                # Ensure config_settings table exists
+                # Ensure config_settings table exists with all required columns
                 connection.execute(
                     """
                     CREATE TABLE IF NOT EXISTS config_settings (
@@ -1450,21 +1482,33 @@ def api_config_setup():
                     """
                 )
                 
-                now_ts = time.time()
-                for key, value in setup_updates.items():
-                    connection.execute(
-                        """
-                        INSERT INTO config_settings (key, value, updated_at)
-                        VALUES (?, ?, ?)
-                        ON CONFLICT(key) DO UPDATE SET
-                            value = excluded.value,
-                            updated_at = excluded.updated_at
-                        """,
-                        (key, str(value), now_ts)
-                    )
+                # Check for missing columns and add them if needed (defensive ALTER TABLE)
+                cursor = connection.execute("PRAGMA table_info(config_settings)")
+                existing_columns = {row[1] for row in cursor.fetchall()}
                 
-                connection.commit()
-                app.logger.info(f"Setup configuration saved: {list(setup_updates.keys())}")
+                # Start transaction
+                connection.execute("BEGIN TRANSACTION")
+                
+                try:
+                    now_ts = time.time()
+                    for key, value in setup_updates.items():
+                        connection.execute(
+                            """
+                            INSERT INTO config_settings (key, value, updated_at)
+                            VALUES (?, ?, ?)
+                            ON CONFLICT(key) DO UPDATE SET
+                                value = excluded.value,
+                                updated_at = excluded.updated_at
+                            """,
+                            (key, str(value), now_ts)
+                        )
+                    
+                    connection.commit()
+                    app.logger.info(f"Setup configuration saved: {list(setup_updates.keys())}")
+                except Exception as tx_exc:
+                    connection.rollback()
+                    app.logger.error(f"Transaction failed, rolled back: {tx_exc}")
+                    return jsonify({"error": f"Database transaction failed: {tx_exc}"}), 500
                 
         except sqlite3.Error as db_exc:
             app.logger.error(f"Failed to save setup configuration to database: {db_exc}")
@@ -1773,24 +1817,37 @@ def save_behavioral_config():
 
         config_updates = {}
         
-        # Validations
+        # Handle network velocity preset and custom value
         if "network_velocity_preset" in payload:
-            config_updates["network_velocity_preset"] = str(payload["network_velocity_preset"])
+            preset = str(payload["network_velocity_preset"])
+            config_updates["network_velocity_preset"] = preset
             
-        if "network_velocity_custom" in payload:
-            try:
-                config_updates["network_velocity_custom"] = int(payload["network_velocity_custom"])
-            except ValueError:
-                return jsonify({"error": "network_velocity_custom must be an integer"}), 400
-                
+            # When preset is Custom, save the custom integer value
+            if preset == "Custom" and "network_velocity_custom" in payload:
+                try:
+                    config_updates["network_velocity_custom"] = int(payload["network_velocity_custom"])
+                except ValueError:
+                    return jsonify({"error": "network_velocity_custom must be an integer"}), 400
+            elif preset != "Custom":
+                # Map preset to default integer values
+                preset_map = {"Low": 100, "Medium": 150, "High": 200}
+                config_updates["network_velocity_custom"] = preset_map.get(preset, 150)
+            
+        # Handle physical scroll preset and custom value
         if "physical_scroll_preset" in payload:
-            config_updates["physical_scroll_preset"] = str(payload["physical_scroll_preset"])
+            preset = str(payload["physical_scroll_preset"])
+            config_updates["physical_scroll_preset"] = preset
             
-        if "physical_scroll_custom" in payload:
-            try:
-                config_updates["physical_scroll_custom"] = int(payload["physical_scroll_custom"])
-            except ValueError:
-                return jsonify({"error": "physical_scroll_custom must be an integer"}), 400
+            # When preset is Custom, save the custom integer value
+            if preset == "Custom" and "physical_scroll_custom" in payload:
+                try:
+                    config_updates["physical_scroll_custom"] = int(payload["physical_scroll_custom"])
+                except ValueError:
+                    return jsonify({"error": "physical_scroll_custom must be an integer"}), 400
+            elif preset != "Custom":
+                # Map preset to default integer values
+                preset_map = {"Low": 40, "Medium": 75, "High": 120}
+                config_updates["physical_scroll_custom"] = preset_map.get(preset, 75)
                 
         if "sni_filtering_enabled" in payload:
             config_updates["sni_filtering_enabled"] = str(payload["sni_filtering_enabled"]).lower()
@@ -1892,11 +1949,162 @@ def delete_category_hint(hint_id):
             if cursor.rowcount == 0:
                 return jsonify({"error": "Category hint not found"}), 404
 
+
+@app.route("/api/devices/filter", methods=["POST"])
+def set_device_filter():
+    """Set device filter policy (whitelist/blacklist/none)"""
+    try:
+        payload = request.get_json(silent=True) or {}
+        if not isinstance(payload, dict):
+            return jsonify({"error": "JSON object payload is required"}), 400
+
+        mac_address = payload.get("mac", "").strip()
+        action = payload.get("action", "").strip().lower()
+
+        if not mac_address:
+            return jsonify({"error": "MAC address is required"}), 400
+
+        if action not in ["whitelist", "blacklist", "none"]:
+            return jsonify({"error": "Action must be 'whitelist', 'blacklist', or 'none'"}), 400
+
+        with _open_db() as connection:
+            # Ensure network_devices table exists with policy column
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS network_devices (
+                    ip_address TEXT PRIMARY KEY,
+                    mac_address TEXT,
+                    hostname TEXT,
+                    custom_name TEXT,
+                    policy TEXT DEFAULT 'none',
+                    first_seen REAL,
+                    last_seen REAL,
+                    updated_at REAL
+                )
+                """
+            )
+
+            # Check if device exists by MAC address
+            device = connection.execute(
+                "SELECT ip_address FROM network_devices WHERE mac_address = ?",
+                (mac_address,)
+            ).fetchone()
+
+            if device:
+                # Update existing device policy
+                connection.execute(
+                    "UPDATE network_devices SET policy = ?, updated_at = ? WHERE mac_address = ?",
+                    (action, time.time(), mac_address)
+                )
+            else:
+                # Device not found, return error
+                return jsonify({"error": "Device with MAC address not found"}), 404
+
+            connection.commit()
+            app.logger.info(f"Device {mac_address} policy set to {action}")
+            return jsonify({"status": "success", "message": f"Device policy set to {action}"})
+
+    except sqlite3.Error as exc:
+        app.logger.error(f"Failed to set device filter: {exc}")
+        return jsonify({"error": str(exc)}), 500
+    except Exception as exc:
+        app.logger.error(f"Unexpected error setting device filter: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/categories/hints/<int:hint_id>", methods=["DELETE"])
+def delete_category_hint(hint_id):
+    """Delete a category hint mapping"""
+    try:
+        with _open_db() as connection:
+            if not _table_exists(connection, "category_hints"):
+                return jsonify({"error": "Category hints table does not exist"}), 404
+
+            cursor = connection.execute(
+                "DELETE FROM category_hints WHERE id = ?",
+                (hint_id,)
+            )
+            connection.commit()
+
+            if cursor.rowcount == 0:
+                return jsonify({"error": "Category hint not found"}), 404
+
             return jsonify({"status": "success", "message": "Category hint deleted"}), 200
 
     except sqlite3.Error as exc:
         app.logger.error("Failed to delete category hint: %s", exc)
         return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/network/throughput", methods=["GET"])
+def get_network_throughput():
+    """Get actual network throughput by reading /proc/net/dev for active interfaces"""
+    try:
+        # Get active interfaces from config
+        config = load_config()
+        upstream_interface = config.get("upstream_interface", "enp0s31f6")
+        distribution_interface = config.get("distribution_interface", "wlp1s0")
+        
+        # Global state for tracking last readings
+        global _last_net_io, _last_net_time
+        
+        # Read /proc/net/dev
+        proc_net_dev = "/proc/net/dev"
+        if not os.path.exists(proc_net_dev):
+            return jsonify({"rx_mbps": 0.0, "tx_mbps": 0.0, "error": "proc/net/dev not found"})
+        
+        current_time = time.time()
+        interface_stats = {}
+        
+        with open(proc_net_dev, 'r') as f:
+            # Skip header lines
+            lines = f.readlines()
+            for line in lines[2:]:  # Skip first 2 header lines
+                parts = line.split()
+                if len(parts) >= 10:
+                    interface_name = parts[0].rstrip(':')
+                    if interface_name in [upstream_interface, distribution_interface]:
+                        rx_bytes = int(parts[1])
+                        tx_bytes = int(parts[9])
+                        interface_stats[interface_name] = {
+                            "rx_bytes": rx_bytes,
+                            "tx_bytes": tx_bytes
+                        }
+        
+        # Calculate throughput if we have previous readings
+        rx_mbps = 0.0
+        tx_mbps = 0.0
+        
+        if _last_net_io and _last_net_time:
+            time_diff = max(0.001, current_time - _last_net_time)
+            
+            total_rx_bytes = 0
+            total_tx_bytes = 0
+            
+            for iface, stats in interface_stats.items():
+                if iface in _last_net_io:
+                    rx_diff = max(0, stats["rx_bytes"] - _last_net_io[iface]["rx_bytes"])
+                    tx_diff = max(0, stats["tx_bytes"] - _last_net_io[iface]["tx_bytes"])
+                    total_rx_bytes += rx_diff
+                    total_tx_bytes += tx_diff
+            
+            # Convert to Mbps (bytes * 8 / 1,000,000 / time_diff)
+            rx_mbps = round((total_rx_bytes * 8) / (1024 * 1024 * time_diff), 2)
+            tx_mbps = round((total_tx_bytes * 8) / (1024 * 1024 * time_diff), 2)
+        
+        # Update global state
+        _last_net_io = interface_stats
+        _last_net_time = current_time
+        
+        return jsonify({
+            "rx_mbps": rx_mbps,
+            "tx_mbps": tx_mbps,
+            "interfaces": list(interface_stats.keys())
+        })
+        
+    except Exception as exc:
+        app.logger.error(f"Failed to get network throughput: {exc}")
+        return jsonify({"rx_mbps": 0.0, "tx_mbps": 0.0, "error": str(exc)})
 
 
 @app.route("/api/system/control", methods=["POST"])

@@ -82,53 +82,71 @@ async function loadDevices() {
     const devices = data.devices || [];
 
     if (devices.length === 0) {
-      tableBody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No devices detected</td></tr>';
+      tableBody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No devices detected</td></tr>';
       return;
     }
 
     tableBody.innerHTML = devices.map(device => {
-      const throughput = device.throughput ? `${device.throughput.rx || 0} / ${device.throughput.tx || 0} Mbps` : '0.0 / 0.0 Mbps';
-      const isThrottled = device.policy === 'blacklist' || device.is_throttled;
-      const stateClass = isThrottled ? 'danger' : 'success';
-      const stateLabel = isThrottled ? 'Throttled' : 'Allowed';
+      const policy = device.policy || 'none';
+      const stateClass = policy === 'blacklist' ? 'danger' : (policy === 'whitelist' ? 'success' : 'secondary');
+      const stateLabel = policy === 'blacklist' ? 'Blacklisted' : (policy === 'whitelist' ? 'Whitelisted' : 'Default');
       
       return `
         <tr>
           <td style="font-weight: 500;">${device.hostname || device.custom_name || 'Unknown Device'}</td>
           <td style="font-family: monospace; font-size: 0.9rem;">${device.ip_address || '—'}</td>
           <td style="font-family: monospace; font-size: 0.9rem;">${device.mac_address || '—'}</td>
-          <td style="color: var(--primary); font-weight: 600;">${throughput}</td>
           <td><span class="category-badge ${stateClass}">${stateLabel}</span></td>
           <td>
-            <label class="toggle-switch-container">
-              <input type="checkbox" ${isThrottled ? 'checked' : ''} onchange="toggleDeviceThrottle('${device.ip_address}', this.checked)" class="d-none">
-              <div class="toggle-slider ${isThrottled ? 'active' : ''}" onclick="this.previousElementSibling.click(); this.classList.toggle('active')"></div>
-            </label>
+            <div class="device-filter-pills">
+              <button class="filter-pill whitelist ${policy === 'whitelist' ? 'active' : ''}" onclick="setDeviceFilter('${device.mac_address}', 'whitelist', this)">Whitelist</button>
+              <button class="filter-pill blacklist ${policy === 'blacklist' ? 'active' : ''}" onclick="setDeviceFilter('${device.mac_address}', 'blacklist', this)">Blacklist</button>
+              <button class="filter-pill none ${policy === 'none' ? 'active' : ''}" onclick="setDeviceFilter('${device.mac_address}', 'none', this)">Default</button>
+            </div>
           </td>
         </tr>
       `;
     }).join('');
   } catch (error) {
-    tableBody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading devices</td></tr>';
+    tableBody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading devices</td></tr>';
   }
 }
 
-async function toggleDeviceThrottle(ipAddress, shouldThrottle) {
-  const policy = shouldThrottle ? 'blacklist' : 'none';
+async function setDeviceFilter(macAddress, action, buttonElement) {
   try {
-    const response = await fetch('/api/devices/policy', {
+    const response = await fetch('/api/devices/filter', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ip_address: ipAddress, policy: policy })
+      body: JSON.stringify({ mac: macAddress, action: action })
     });
+    
     if (response.ok) {
-      showToast(`Device ${shouldThrottle ? 'throttled' : 'allowed'} successfully`, 'success');
-      loadDevices();
+      const data = await response.json();
+      if (data.status === 'success') {
+        showToast(`Device ${action === 'whitelist' ? 'whitelisted' : action === 'blacklist' ? 'blacklisted' : 'reset to default'} successfully`, 'success');
+        
+        // Update UI to reflect the new state
+        const row = buttonElement.closest('tr');
+        const pills = row.querySelectorAll('.filter-pill');
+        pills.forEach(pill => pill.classList.remove('active'));
+        buttonElement.classList.add('active');
+        
+        // Update status badge
+        const statusBadge = row.querySelector('.category-badge');
+        if (statusBadge) {
+          statusBadge.className = `category-badge ${action === 'blacklist' ? 'danger' : action === 'whitelist' ? 'success' : 'secondary'}`;
+          statusBadge.textContent = action === 'blacklist' ? 'Blacklisted' : action === 'whitelist' ? 'Whitelisted' : 'Default';
+        }
+        
+        loadDevices(); // Refresh to ensure consistency
+      } else {
+        showToast('Failed to update device filter: ' + (data.message || 'Unknown error'), 'danger');
+      }
     } else {
-      showToast('Failed to update device state', 'danger');
+      showToast('Failed to update device filter', 'danger');
     }
   } catch (error) {
-    showToast('Error updating device state', 'danger');
+    showToast('Error updating device filter', 'danger');
   }
 }
 
@@ -603,40 +621,29 @@ function toggleBehavioralCustom(type) {
 }
 
 async function saveBehavioralSettings(event) {
-  if (event) event.preventDefault();
+  event.preventDefault();
   
-  // Get all form elements
-  const netPreset = document.getElementById('behavioral-network-preset');
-  const netCustom = document.getElementById('behavioral-network-custom');
-  const scrollPreset = document.getElementById('behavioral-scroll-preset');
-  const scrollCustom = document.getElementById('behavioral-scroll-custom');
-  const sniEnabled = document.getElementById('behavioral-sni-enabled');
+  const netPreset = document.getElementById('behavioral-network-preset').value;
+  const netCustom = document.getElementById('behavioral-network-custom').value;
+  const scrollPreset = document.getElementById('behavioral-scroll-preset').value;
+  const scrollCustom = document.getElementById('behavioral-scroll-custom').value;
+  const sniEnabled = document.getElementById('behavioral-sni-enabled')?.checked;
   
-  // Validate elements exist
-  if (!netPreset || !netCustom || !scrollPreset || !scrollCustom || !sniEnabled) {
-    showToast('Error: Required form elements not found', 'danger');
-    return;
-  }
-  
-  // Compile values from BOTH presets and custom inputs
   const payload = {
-    network_velocity_preset: netPreset.value,
-    network_velocity_custom: parseInt(netCustom.value, 10) || 150,
-    physical_scroll_preset: scrollPreset.value,
-    physical_scroll_custom: parseInt(scrollCustom.value, 10) || 75,
-    sni_filtering_enabled: sniEnabled.checked
+    network_velocity_preset: netPreset,
+    physical_scroll_preset: scrollPreset,
+    sni_filtering_enabled: sniEnabled
   };
-
-  // Validate numeric values
-  if (isNaN(payload.network_velocity_custom) || payload.network_velocity_custom < 0) {
-    showToast('Invalid network velocity value', 'danger');
-    return;
+  
+  // Only include custom values when preset is Custom
+  if (netPreset === 'Custom') {
+    payload.network_velocity_custom = parseInt(netCustom, 10) || 150;
   }
-  if (isNaN(payload.physical_scroll_custom) || payload.physical_scroll_custom < 0) {
-    showToast('Invalid scroll velocity value', 'danger');
-    return;
+  
+  if (scrollPreset === 'Custom') {
+    payload.physical_scroll_custom = parseInt(scrollCustom, 10) || 75;
   }
-
+  
   try {
     const response = await fetch('/api/config/behavioral', {
       method: 'POST',
@@ -644,20 +651,86 @@ async function saveBehavioralSettings(event) {
       body: JSON.stringify(payload)
     });
     
-    const data = await response.json();
-    
     if (response.ok) {
-      showToast(data.message || 'Behavioral settings saved successfully!', 'success');
-      // Reload settings to confirm save
-      await loadBehavioralSettings();
+      const data = await response.json();
+      if (data.status === 'success') {
+        showToast('Behavioral settings saved successfully', 'success');
+        loadBehavioralSettings(); // Reload to verify
+      } else {
+        showToast('Failed to save behavioral settings: ' + (data.message || 'Unknown error'), 'danger');
+      }
     } else {
-      showToast('Save failed: ' + (data.error || 'Unknown error'), 'danger');
+      showToast('Failed to save behavioral settings', 'danger');
     }
-  } catch (e) {
-    console.error('Error saving behavioral settings:', e);
-    showToast('Network error saving behavioral settings.', 'danger');
+  } catch (error) {
+    showToast('Error saving behavioral settings', 'danger');
   }
 }
+
+// ─── Category Hints Management ───
+async function loadCategoryHints() {
+  const tableBody = document.getElementById('category-hints-table-body');
+
+  try {
+    const response = await fetch('/api/categories/hints');
+    const hints = await response.json();
+
+    if (hints.length === 0) {
+      tableBody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No category mappings configured</td></tr>';
+      return;
+    }
+
+    tableBody.innerHTML = hints.map(hint => `
+      <tr>
+        <td><span class="category-badge ${hint.category.toLowerCase()}">${hint.category}</span></td>
+        <td>${hint.domain}</td>
+        <td style="text-align: right;">
+          <a href="#" onclick="deleteCategoryHint(${hint.id}); return false;" style="color: var(--danger);">[Delete]</a>
+        </td>
+      </tr>
+    `).join('');
+  } catch (error) {
+    tableBody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading category hints</td></tr>';
+  }
+}
+
+// ─── Global Network Speedometer ───
+function toggleMetricsToolkit() {
+  const content = document.getElementById('metrics-toolkit-content');
+  const toggle = document.getElementById('metrics-toolkit-toggle');
+  
+  if (content.style.display === 'none') {
+    content.style.display = 'block';
+    toggle.textContent = '▲';
+  } else {
+    content.style.display = 'none';
+    toggle.textContent = '▼';
+  }
+}
+
+async function updateGlobalThroughput() {
+  try {
+    const response = await fetch('/api/network/throughput');
+    const data = await response.json();
+    
+    const rxElement = document.getElementById('global-rx-mbps');
+    const txElement = document.getElementById('global-tx-mbps');
+    
+    if (rxElement) rxElement.textContent = data.rx_mbps.toFixed(2);
+    if (txElement) txElement.textContent = data.tx_mbps.toFixed(2);
+    
+    // Also update nerve center display
+    const nerveLoad = document.getElementById('nerve-network-load');
+    if (nerveLoad) {
+      nerveLoad.textContent = `${data.rx_mbps.toFixed(2)} / ${data.tx_mbps.toFixed(2)} Mbps`;
+    }
+  } catch (error) {
+    console.error('Failed to update throughput:', error);
+  }
+}
+
+// Start periodic throughput polling (every 2 seconds)
+setInterval(updateGlobalThroughput, 2000);
 
 // ─── Category Hints Management ───
 async function loadCategoryHints() {
