@@ -921,6 +921,7 @@ def dashboard_summary():
     # 3. Active Config
     config = load_config()
     nlp_enabled = _coerce_bool(config.get("nlp_enabled", "true"))
+    theme_mode = config.get("theme_mode", "dark")
     
     # Map threshold to preset
     try:
@@ -938,6 +939,30 @@ def dashboard_summary():
     if scroll_vel >= 120: scroll_preset = "Low"
     elif scroll_vel >= 75: scroll_preset = "Medium"
     else: scroll_preset = "High"
+
+    # 4. DHCP Client Allocations
+    dhcp_allocations = []
+    if DB_PATH.exists():
+        try:
+            with _open_db() as conn:
+                if _table_exists(conn, "network_devices"):
+                    rows = conn.execute("""
+                        SELECT ip_address, mac_address, hostname, custom_name, last_seen
+                        FROM network_devices
+                        ORDER BY last_seen DESC
+                    """).fetchall()
+                    dhcp_allocations = [
+                        {
+                            "ip_address": row[0],
+                            "mac_address": row[1],
+                            "hostname": row[2] or "Unknown",
+                            "custom_name": row[3],
+                            "last_seen": row[4]
+                        }
+                        for row in rows
+                    ]
+        except sqlite3.Error as e:
+            app.logger.warning(f"DB Error fetching DHCP allocations: {e}")
 
     return jsonify({
         "system": {
@@ -960,8 +985,10 @@ def dashboard_summary():
         "active_config": {
             "nlp_enabled": nlp_enabled,
             "network_velocity_preset": net_preset,
-            "physical_scroll_preset": scroll_preset
-        }
+            "physical_scroll_preset": scroll_preset,
+            "theme_mode": theme_mode
+        },
+        "dhcp_allocations": dhcp_allocations
     })
 
 
@@ -1448,7 +1475,11 @@ def api_config_setup():
                 app.logger.warning(f"Failed to write network config files during setup: {file_exc}")
 
         # Return explicit success response as requested
-        return jsonify({"status": "success"})
+        return jsonify({
+            "status": "success",
+            "message": "Setup configuration saved successfully",
+            "saved_keys": list(setup_updates.keys())
+        })
 
     # Otherwise, use the general configuration handler
     valid_updates, ignored_keys = _config_payload_from_request(payload)
