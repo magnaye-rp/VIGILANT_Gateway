@@ -387,9 +387,8 @@ EOF
     systemctl restart hostapd
     
     log_success "Hostapd Access Point is live with Intel AP stability optimizations!"
-}
 
-# =====================================================================
+    # =====================================================================
 # CONFIGURE PASSWORDLESS SUDO FOR NETWORK SERVICE MANAGEMENT
 # =====================================================================
 echo "Configuring passwordless sudo for dnsmasq and hostapd..."
@@ -407,6 +406,9 @@ EOF
 sudo chmod 0440 /etc/sudoers.d/vigilant-services
 
 echo "Sudoers rules successfully injected and secured!"
+}
+
+
 
 # ─── Stage 7.6: Wi-Fi Power Saving Disable ────────────────────────────────────
 stage_7_6_wifi_power_save() {
