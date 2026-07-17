@@ -1056,3 +1056,14 @@ body.light-mode .nerve-center *,
 [data-theme="light"] .nerve-center * {
     color: #0f172a !important;
 }
+
+body.light-mode .nerve-center h1,
+body.light-mode .nerve-center h2,
+body.light-mode .nerve-center h3,
+body.light-mode .nerve-center .card-title,
+[data-theme="light"] .nerve-center h1,
+[data-theme="light"] .nerve-center h2,
+[data-theme="light"] .nerve-center h3,
+[data-theme="light"] .nerve-center .card-title {
+    color: #0f172a !important;
+}

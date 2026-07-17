@@ -549,7 +549,7 @@ async function saveUnifiedConfig(e) {
   };
 
   try {
-    const response = await fetch('/api/config', {
+    const response = await fetch('/api/config/setup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -959,7 +959,7 @@ async function confirmReset() {
 
 async function factoryReset() {
   try {
-    const response = await fetch('/api/reset', { method: 'POST' });
+    const response = await fetch('/api/config/reset', { method: 'POST' });
     if (response.ok) {
       showToast('System reset to defaults', 'success');
       location.reload();
@@ -1029,7 +1029,9 @@ async function executeSystemControl(action, buttonElement) {
   const actionLabels = {
     'restart_proxy': '🔄 Restarting proxy...',
     'reload_config': '🔄 Restarting dashboard...',
-    'reload_firewall': '🔄 Reloading firewall...'
+    'reload_firewall': '🔄 Reloading firewall...',
+    'restart_dnsmasq': '🔄 Reloading DNS...',
+    'restart_hostapd': '🔄 Reloading WiFi...'
   };
   
   // Disable button and show loading state
@@ -1126,7 +1128,7 @@ async function saveWizardConfig(e) {
   };
 
   try {
-    const response = await fetch('/api/config', {
+    const response = await fetch('/api/config/setup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)

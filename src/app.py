@@ -1161,7 +1161,7 @@ def api_config_reset():
         except Exception as file_exc:
             app.logger.warning(f"Failed to write network config files during reset: {file_exc}")
         
-        return jsonify({"status": "success", "message": "Configuration reset to factory defaults"})
+        return jsonify({"status": "success", "message": "Configuration restored to defaults"})
     except Exception as exc:
         app.logger.error("Failed to reset configuration: %s", exc)
         return jsonify({"error": str(exc)}), 500
@@ -2207,6 +2207,10 @@ def api_system_control():
                 print("[MOCK] Would execute: sudo systemctl restart vigilant-dashboard.service")
             elif action == "reload_firewall":
                 print("[MOCK] Would execute: sudo netplan apply")
+            elif action == "restart_dnsmasq":
+                print("[MOCK] Would execute: sudo systemctl restart dnsmasq")
+            elif action == "restart_hostapd":
+                print("[MOCK] Would execute: sudo systemctl restart hostapd")
             else:
                 return jsonify({"error": f"Unknown action: {action}"}), 400
             
@@ -2292,6 +2296,18 @@ def api_system_control():
             except Exception as e:
                 print(f"Firewall reload error: {str(e)}")
                 return jsonify({"error": f"Firewall reload error: {str(e)}"}), 500
+        elif action == "restart_dnsmasq":
+            try:
+                subprocess.run(["sudo", "systemctl", "restart", "dnsmasq"], check=True)
+                return jsonify({"status": "success", "message": "Service reloaded successfully"})
+            except Exception as e:
+                return jsonify({"error": f"Failed to reload dnsmasq: {str(e)}"}), 500
+        elif action == "restart_hostapd":
+            try:
+                subprocess.run(["sudo", "systemctl", "restart", "hostapd"], check=True)
+                return jsonify({"status": "success", "message": "Service reloaded successfully"})
+            except Exception as e:
+                return jsonify({"error": f"Failed to reload hostapd: {str(e)}"}), 500
         else:
             return jsonify({"error": f"Unknown action: {action}"}), 400
             
