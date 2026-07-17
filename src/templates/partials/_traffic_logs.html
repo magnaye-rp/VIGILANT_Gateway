@@ -1,5 +1,5 @@
       <!-- Traffic Log Section -->
-      <div style="margin-top: 3rem;">
+      <div id="tab-traffic-logs" class="tab-content">
         <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Traffic Log</h2>
 
         <div class="card">
@@ -51,41 +51,6 @@
               <button class="btn-secondary" id="prev-page" onclick="changePage(-1)" style="padding: 0.5rem 1rem;">Previous</button>
               <button class="btn-secondary" id="next-page" onclick="changePage(1)" style="padding: 0.5rem 1rem;">Next</button>
             </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Devices Section -->
-      <div style="margin-top: 3rem;">
-        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Device Management</h2>
-
-        <div class="card">
-          <div class="card-header">
-            <div>
-              <div class="card-title">Network Devices</div>
-              <div class="card-subtitle">Connected clients and access control policies</div>
-            </div>
-            <button class="btn-secondary" onclick="loadDevices()" style="padding: 0.5rem 1rem;">Refresh</button>
-          </div>
-
-          <div style="overflow-x: auto;">
-            <table class="traffic-table">
-              <thead>
-                <tr>
-                  <th>IP Address</th>
-                  <th>MAC Address</th>
-                  <th>Hostname</th>
-                  <th>Custom Name</th>
-                  <th>Policy</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody id="devices-tbody">
-                <tr>
-                  <td colspan="6" style="text-align: center; color: var(--text-secondary);">Loading devices...</td>
-                </tr>
-              </tbody>
-            </table>
           </div>
         </div>
       </div>

@@ -632,10 +632,40 @@
     }
 
     /* ─── Toggle Switch ─── */
-    .toggle-switch {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.75rem;
+    .toggle-switch-container {
+      position: relative;
+      display: inline-block;
+      width: 44px;
+      height: 24px;
+    }
+    
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: var(--success);
+      transition: .4s;
+      border-radius: 24px;
+    }
+    
+    .toggle-slider:before {
+      position: absolute;
+      content: "";
+      height: 18px;
+      width: 18px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .4s;
+      border-radius: 50%;
+    }
+    
+    .toggle-slider.active {
+      background-color: var(--danger);
+    }
+    
+    .toggle-slider.active:before {
+      transform: translateX(20px);
     }
 
     /* ─── Responsive Design ─── */
@@ -806,9 +836,17 @@
       <div class="sidebar-logo"><i class="fa-solid fa-lock"></i> VIGILANT</div>
     </div>
     <nav class="sidebar-nav">
-      <div class="nav-item active" onclick="switchTab('system-status')">
-        <div class="nav-icon"><i class="fa-solid fa-chart-bar"></i></div>
-        <span>System Status</span>
+      <div class="nav-item active" onclick="switchTab('system')">
+        <div class="nav-icon"><i class="fa-solid fa-server"></i></div>
+        <span>System</span>
+      </div>
+      <div class="nav-item" onclick="switchTab('device-management')">
+        <div class="nav-icon"><i class="fa-solid fa-network-wired"></i></div>
+        <span>Device Management</span>
+      </div>
+      <div class="nav-item" onclick="switchTab('traffic-logs')">
+        <div class="nav-icon"><i class="fa-solid fa-list-ul"></i></div>
+        <span>Traffic Logs</span>
       </div>
       <div class="nav-item" onclick="switchTab('filtering')">
         <div class="nav-icon"><i class="fa-solid fa-shield-halved"></i></div>
@@ -847,18 +885,18 @@
     </header>
 
     <main class="content">
-      {% include 'partials/_metrics_panel.html' %}
+      {% include 'partials/_device_management.html' %}
       {% include 'partials/_settings_form.html' %}
       {% include 'partials/_traffic_logs.html' %}
 
       <!-- System Tab -->
-      <div id="tab-system" class="tab-content">
+      <div id="tab-system" class="tab-content active">
         <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">System Management</h2>
 
         <div class="stats-grid">
           <div class="stat-card">
-            <div class="stat-value" id="sys-uptime">—</div>
-            <div class="stat-label">Uptime</div>
+            <div class="stat-value" id="sys-throughput">0.0 / 0.0</div>
+            <div class="stat-label">Global Throughput (Mbps)</div>
           </div>
           <div class="stat-card">
             <div class="stat-value" id="sys-cpu">—</div>
@@ -866,11 +904,11 @@
           </div>
           <div class="stat-card">
             <div class="stat-value" id="sys-memory">—</div>
-            <div class="stat-label">Memory Usage</div>
+            <div class="stat-label">RAM Usage (8GB Total)</div>
           </div>
           <div class="stat-card">
             <div class="stat-value" id="sys-disk">—</div>
-            <div class="stat-label">Disk Usage</div>
+            <div class="stat-label">Storage Usage</div>
           </div>
         </div>
 
@@ -881,29 +919,32 @@
           <div style="display: flex; flex-direction: column; gap: 1rem;">
             <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem; background: var(--surface); border-radius: 8px;">
               <div>
-                <div style="font-weight: 600;">Proxy Service</div>
-                <div style="font-size: 0.85rem; color: var(--text-secondary);">mitmproxy transparent gateway</div>
+                <div style="font-weight: 600;">mitmproxy</div>
+                <div style="font-size: 0.85rem; color: var(--text-secondary);">Transparent interception proxy</div>
               </div>
-              <div style="display: flex; gap: 0.5rem;">
+              <div style="display: flex; gap: 0.5rem; align-items: center;">
+                <span class="category-badge success" id="status-mitmproxy">Active</span>
                 <button id="btn-restart-proxy" class="btn-secondary" style="padding: 0.5rem 1rem;" onclick="executeSystemControl('restart_proxy', this)">Restart</button>
               </div>
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem; background: var(--surface); border-radius: 8px;">
               <div>
-                <div style="font-weight: 600;">Dashboard Service</div>
-                <div style="font-size: 0.85rem; color: var(--text-secondary);">Flask admin interface</div>
+                <div style="font-weight: 600;">hostapd</div>
+                <div style="font-size: 0.85rem; color: var(--text-secondary);">Wireless access point daemon</div>
               </div>
-              <div style="display: flex; gap: 0.5rem;">
-                <button id="btn-restart-dashboard" class="btn-secondary" style="padding: 0.5rem 1rem;" onclick="executeSystemControl('reload_config', this)">Restart</button>
+              <div style="display: flex; gap: 0.5rem; align-items: center;">
+                <span class="category-badge success" id="status-hostapd">Active</span>
+                <button id="btn-restart-hostapd" class="btn-secondary" style="padding: 0.5rem 1rem;" onclick="executeSystemControl('restart_hostapd', this)">Reload</button>
               </div>
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem; background: var(--surface); border-radius: 8px;">
               <div>
-                <div style="font-weight: 600;">Firewall Rules</div>
-                <div style="font-size: 0.85rem; color: var(--text-secondary);">iptables and network configuration</div>
+                <div style="font-weight: 600;">dnsmasq</div>
+                <div style="font-size: 0.85rem; color: var(--text-secondary);">DHCP and DNS caching server</div>
               </div>
-              <div style="display: flex; gap: 0.5rem;">
-                <button id="btn-reload-firewall" class="btn-secondary" style="padding: 0.5rem 1rem;" onclick="executeSystemControl('reload_firewall', this)">Reload</button>
+              <div style="display: flex; gap: 0.5rem; align-items: center;">
+                <span class="category-badge success" id="status-dnsmasq">Active</span>
+                <button id="btn-restart-dnsmasq" class="btn-secondary" style="padding: 0.5rem 1rem;" onclick="executeSystemControl('restart_dnsmasq', this)">Reload</button>
               </div>
             </div>
           </div>
@@ -963,7 +1004,7 @@
 
 <script>
   // ─── State Management ─── 
-  let currentTab = 'system-status'; // Global state for active tab
+  let currentTab = 'system'; // Global state for active tab
   let currentWizardStep = 1;
   let pendingConfirmAction = null;
   let currentPage = 1;
@@ -979,9 +1020,17 @@
     toolkitModal.classList.add('active');
     
     switch(currentTab) {
-      case 'system-status':
-        toolkitTitle.innerText = "System Status Help";
-        toolkitContent.innerHTML = "Here you can see the <strong>network overview</strong>, monitor <strong>real-time logging</strong>, and keep track of <strong>device counting</strong>.";
+      case 'system':
+        toolkitTitle.innerText = "System Help";
+        toolkitContent.innerHTML = "Here you can view <strong>hardware diagnostics</strong> (CPU/RAM out of 8GB, storage), <strong>interface throughput</strong>, and <strong>service states</strong>.";
+        break;
+      case 'device-management':
+        toolkitTitle.innerText = "Device Management Help";
+        toolkitContent.innerHTML = "Here you can track <strong>physical network clients</strong>, view <strong>lease bindings</strong>, and manually trigger <strong>IP-based bandwidth shaping (throttling)</strong>.";
+        break;
+      case 'traffic-logs':
+        toolkitTitle.innerText = "Traffic Logs Help";
+        toolkitContent.innerHTML = "This section displays how <strong>decrypted payloads are logged</strong>, their <strong>category classification</strong>, and allows <strong>CSV exporting</strong> of historical network events.";
         break;
       case 'filtering':
         toolkitTitle.innerText = "Content Filtering Help";
@@ -1010,16 +1059,19 @@
     
     currentTab = tabId;
     
-    if (tabId === 'system-status') {
+    if (tabId === 'system') {
       refreshStats();
-      loadTrafficLogs();
+    }
+    if (tabId === 'device-management') {
       loadDevices();
+    }
+    if (tabId === 'traffic-logs') {
+      loadTrafficLogs();
     }
     if (tabId === 'settings') loadUnifiedConfig();
     if (tabId === 'filtering') {
       loadCategoryHints();
     }
-    if (tabId === 'devices') loadDevices();
   }
 
   // ─── Device Management ───
@@ -1037,36 +1089,48 @@
       }
 
       tableBody.innerHTML = devices.map(device => {
-        const policy = device.policy || 'none';
-        const policyClass = policy === 'whitelist' ? 'success' : policy === 'blacklist' ? 'danger' : '';
-        const policyBadge = policy !== 'none' ? `<span class="category-badge ${policyClass}">${policy}</span>` : '<span style="color: var(--text-secondary);">none</span>';
+        const throughput = device.throughput ? `${device.throughput.rx || 0} / ${device.throughput.tx || 0} Mbps` : '0.0 / 0.0 Mbps';
+        const isThrottled = device.policy === 'blacklist' || device.is_throttled;
+        const stateClass = isThrottled ? 'danger' : 'success';
+        const stateLabel = isThrottled ? 'Throttled' : 'Allowed';
         
         return `
           <tr>
+            <td style="font-weight: 500;">${device.hostname || device.custom_name || 'Unknown Device'}</td>
             <td style="font-family: monospace; font-size: 0.9rem;">${device.ip_address || '—'}</td>
             <td style="font-family: monospace; font-size: 0.9rem;">${device.mac_address || '—'}</td>
-            <td>${device.hostname || '—'}</td>
+            <td style="color: var(--primary); font-weight: 600;">${throughput}</td>
+            <td><span class="category-badge ${stateClass}">${stateLabel}</span></td>
             <td>
-              <input type="text" 
-                     value="${device.custom_name || ''}" 
-                     placeholder="Enter custom name"
-                     onchange="updateDeviceName('${device.ip_address}', this.value)"
-                     style="width: 120px; padding: 0.5rem; font-size: 0.85rem;">
-            </td>
-            <td>${policyBadge}</td>
-            <td>
-              <select onchange="updateDevicePolicy('${device.ip_address}', this.value)" 
-                      style="padding: 0.5rem; font-size: 0.85rem; width: 100px;">
-                <option value="none" ${policy === 'none' ? 'selected' : ''}>None</option>
-                <option value="whitelist" ${policy === 'whitelist' ? 'selected' : ''}>Whitelist</option>
-                <option value="blacklist" ${policy === 'blacklist' ? 'selected' : ''}>Blacklist</option>
-              </select>
+              <label class="toggle-switch-container">
+                <input type="checkbox" ${isThrottled ? 'checked' : ''} onchange="toggleDeviceThrottle('${device.ip_address}', this.checked)" class="d-none">
+                <div class="toggle-slider ${isThrottled ? 'active' : ''}" onclick="this.previousElementSibling.click(); this.classList.toggle('active')"></div>
+              </label>
             </td>
           </tr>
         `;
       }).join('');
     } catch (error) {
       tableBody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading devices</td></tr>';
+    }
+  }
+
+  async function toggleDeviceThrottle(ipAddress, shouldThrottle) {
+    const policy = shouldThrottle ? 'blacklist' : 'none';
+    try {
+      const response = await fetch('/api/devices/policy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip_address: ipAddress, policy: policy })
+      });
+      if (response.ok) {
+        showToast(`Device ${shouldThrottle ? 'throttled' : 'allowed'} successfully`, 'success');
+        loadDevices();
+      } else {
+        showToast('Failed to update device state', 'danger');
+      }
+    } catch (error) {
+      showToast('Error updating device state', 'danger');
     }
   }
 
@@ -1196,9 +1260,11 @@
       document.getElementById('recent-tbody').innerHTML = recentHtml || '<tr><td colspan="5" class="text-center" style="color: var(--text-secondary); padding: 2rem;">No traffic data yet</td></tr>';
 
       // Update system metrics
-      const systemUptime = document.getElementById('sys-uptime');
-      if (systemUptime) {
-        systemUptime.textContent = data.uptime || '—';
+      const sysThroughput = document.getElementById('sys-throughput');
+      if (sysThroughput) {
+        const rx = systemMetrics.throughput_rx || 0.0;
+        const tx = systemMetrics.throughput_tx || 0.0;
+        sysThroughput.textContent = `${rx} / ${tx}`;
       }
 
       const sysCpu = document.getElementById('sys-cpu');
@@ -1216,12 +1282,16 @@
         sysDisk.textContent = `${systemMetrics.disk_percent ?? 0}%`;
       }
 
-      const proxyStatusBadge = document.getElementById('proxyStatusBadge');
-      if (proxyStatusBadge) {
-        const proxyActive = data?.statuses?.vigilant_proxy === 'active';
-        proxyStatusBadge.textContent = proxyActive ? 'Active' : 'Inactive';
-        proxyStatusBadge.className = proxyActive ? 'badge success' : 'badge error';
-      }
+      // Update service statuses
+      const services = data.statuses || {};
+      ['mitmproxy', 'hostapd', 'dnsmasq'].forEach(svc => {
+        const badge = document.getElementById(`status-${svc}`);
+        if (badge) {
+          const isActive = services[svc] === 'active' || services[svc] === 'running';
+          badge.textContent = isActive ? 'Active' : 'Inactive';
+          badge.className = `category-badge ${isActive ? 'success' : 'danger'}`;
+        }
+      });
       
       // Update network configuration displays if on settings or wizard tab
       if (currentTab === 'settings' || currentTab === 'wizard') {

@@ -1,0 +1,34 @@
+      <!-- Devices Section -->
+      <div id="tab-device-management" class="tab-content">
+        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Device Management</h2>
+
+        <div class="card glassmorphic-card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">Network Devices</div>
+              <div class="card-subtitle">Track active clients, throughput, and manage network restrictions</div>
+            </div>
+            <button class="btn-secondary" onclick="loadDevices()" style="padding: 0.5rem 1rem;">Refresh</button>
+          </div>
+
+          <div style="overflow-x: auto;">
+            <table class="traffic-table">
+              <thead>
+                <tr>
+                  <th>Hostname</th>
+                  <th>IP Address</th>
+                  <th>MAC Address</th>
+                  <th>Throughput (Rx/Tx)</th>
+                  <th>State</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="devices-tbody">
+                <tr>
+                  <td colspan="6" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Loading devices...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
