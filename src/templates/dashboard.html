@@ -1106,7 +1106,7 @@
               </div>
               <div style="display: flex; gap: 0.5rem; align-items: center;">
                 <span class="category-badge success" id="status-dnsmasq">Active</span>
-                <button id="btn-restart-dnsmasq" class="btn-secondary" style="padding: 0.5rem 1rem;" disabled>Reload</button>
+                <button id="btn-restart-dnsmasq" class="btn-secondary" style="padding: 0.5rem 1rem;" onclick="executeSystemControl('restart_dnsmasq', this)">Reload</button>
               </div>
             </div>
           </div>
@@ -1693,7 +1693,7 @@
     };
 
     try {
-      const response = await fetch('/api/config', {
+      const response = await fetch('/api/config/setup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -2152,7 +2152,9 @@
     const actionLabels = {
       'restart_proxy': '🔄 Restarting proxy...',
       'reload_config': '🔄 Restarting dashboard...',
-      'reload_firewall': '🔄 Reloading firewall...'
+      'reload_firewall': '🔄 Reloading firewall...',
+      'restart_dnsmasq': '🔄 Reloading DNS...',
+      'restart_hostapd': '🔄 Reloading WiFi...'
     };
     
     // Disable button and show loading state
@@ -2175,8 +2177,14 @@
         setTimeout(() => {
           refreshStats();
         }, 1000);
+      } else if (response.ok && data.status === 'warning') {
+        showToast(data.message || 'Operation completed with warnings', 'warning');
+        
+        setTimeout(() => {
+          refreshStats();
+        }, 1000);
       } else {
-        showToast(data.error || 'Operation failed', 'error');
+        showToast(data.error || data.message || 'Operation failed', 'error');
       }
     } catch (error) {
       console.error('System control error:', error);
@@ -2249,7 +2257,7 @@
     };
 
     try {
-      const response = await fetch('/api/config', {
+      const response = await fetch('/api/config/setup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)

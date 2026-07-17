@@ -75,9 +75,9 @@ DEFAULT_CONFIG = {
 # Maintain backward compatibility
 CONFIG_DEFAULTS = DEFAULT_CONFIG
 
-ALLOWED_CONFIG_KEYS = set(CONFIG_DEFAULTS) | {"block_harmful", "block_distracting", "enable_https", "log_retention", "network_velocity_preset", "network_velocity_custom", "physical_scroll_preset", "physical_scroll_custom", "sni_filtering_enabled"}
+ALLOWED_CONFIG_KEYS = set(CONFIG_DEFAULTS) | {"block_harmful", "block_distracting", "enable_https", "log_retention", "network_velocity_preset", "network_velocity_custom", "physical_scroll_preset", "physical_scroll_custom", "sni_filtering_enabled", "request_threshold"}
 BOOLEAN_CONFIG_KEYS = {"block_harmful", "block_distracting", "nlp_enabled", "throttle_enabled", "enable_https", "sni_filtering_enabled"}
-INTEGER_CONFIG_KEYS = {"network_velocity_threshold", "physical_scroll_threshold", "throttle_rate", "log_retention", "network_velocity_custom", "physical_scroll_custom"}
+INTEGER_CONFIG_KEYS = {"network_velocity_threshold", "physical_scroll_threshold", "throttle_rate", "log_retention", "network_velocity_custom", "physical_scroll_custom", "request_threshold"}
 STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "upstream_dns", "nlp_accuracy", "ui_theme", "network_velocity_preset", "physical_scroll_preset"}
 TRAFFIC_CATEGORIES = ("Educational", "Productive", "Distracting", "Harmful")
 DEFAULT_SYSTEM_METRICS = {
@@ -2298,16 +2298,40 @@ def api_system_control():
                 return jsonify({"error": f"Firewall reload error: {str(e)}"}), 500
         elif action == "restart_dnsmasq":
             try:
-                subprocess.run(["sudo", "systemctl", "restart", "dnsmasq"], check=True)
-                return jsonify({"status": "success", "message": "Service reloaded successfully"})
+                subprocess.run(["sudo", "systemctl", "restart", "dnsmasq"], check=True, capture_output=True, text=True, timeout=30)
+                return jsonify({"status": "success", "message": "dnsmasq reloaded successfully."})
+            except subprocess.CalledProcessError as e:
+                error_output = e.stderr or str(e)
+                app.logger.warning(f"dnsmasq reload exited non-zero: {error_output}")
+                return jsonify({
+                    "status": "warning",
+                    "message": f"dnsmasq reloaded with warnings. Ensure DNS/DHCP config is valid. Details: {error_output}"
+                })
+            except subprocess.TimeoutExpired:
+                return jsonify({"status": "warning", "message": "dnsmasq reload timed out after 30s. The service may still be starting."})
+            except FileNotFoundError:
+                return jsonify({"status": "warning", "message": "systemctl not found. dnsmasq reload skipped (development environment)."})
             except Exception as e:
-                return jsonify({"error": f"Failed to reload dnsmasq: {str(e)}"}), 500
+                app.logger.error(f"dnsmasq reload unexpected error: {e}")
+                return jsonify({"status": "warning", "message": f"dnsmasq reload encountered an issue: {str(e)}"})
         elif action == "restart_hostapd":
             try:
-                subprocess.run(["sudo", "systemctl", "restart", "hostapd"], check=True)
-                return jsonify({"status": "success", "message": "Service reloaded successfully"})
+                subprocess.run(["sudo", "systemctl", "restart", "hostapd"], check=True, capture_output=True, text=True, timeout=30)
+                return jsonify({"status": "success", "message": "Hostapd interface reloaded successfully."})
+            except subprocess.CalledProcessError as e:
+                error_output = e.stderr or str(e)
+                app.logger.warning(f"hostapd reload exited non-zero: {error_output}")
+                return jsonify({
+                    "status": "warning",
+                    "message": f"Hostapd reloaded with warnings. Ensure wireless interface is up. Details: {error_output}"
+                })
+            except subprocess.TimeoutExpired:
+                return jsonify({"status": "warning", "message": "hostapd reload timed out after 30s. The service may still be starting."})
+            except FileNotFoundError:
+                return jsonify({"status": "warning", "message": "systemctl not found. hostapd reload skipped (development environment)."})
             except Exception as e:
-                return jsonify({"error": f"Failed to reload hostapd: {str(e)}"}), 500
+                app.logger.error(f"hostapd reload unexpected error: {e}")
+                return jsonify({"status": "warning", "message": f"hostapd reload encountered an issue: {str(e)}"})
         else:
             return jsonify({"error": f"Unknown action: {action}"}), 400
             

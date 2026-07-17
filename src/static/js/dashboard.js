@@ -1054,8 +1054,14 @@ async function executeSystemControl(action, buttonElement) {
       setTimeout(() => {
         refreshStats();
       }, 1000);
+    } else if (response.ok && data.status === 'warning') {
+      showToast(data.message || 'Operation completed with warnings', 'warning');
+      
+      setTimeout(() => {
+        refreshStats();
+      }, 1000);
     } else {
-      showToast(data.error || 'Operation failed', 'error');
+      showToast(data.error || data.message || 'Operation failed', 'error');
     }
   } catch (error) {
     console.error('System control error:', error);
