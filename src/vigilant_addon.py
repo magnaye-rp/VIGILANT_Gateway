@@ -600,12 +600,22 @@ class VIGILANTAddon:
             log_request(client_ip, host, path, method, final_category, False, [])
             return
 
+        # Error handling for large packet payloads (e.g. > 5MB)
+        MAX_PAYLOAD_SIZE = 5 * 1024 * 1024
         try:
-            body = flow.response.get_text(strict=False) or ""
+            if flow.response.content and len(flow.response.content) > MAX_PAYLOAD_SIZE:
+                print(f"[VIGILANT] Payload too large ({len(flow.response.content)} bytes) for {host}, skipping NLP")
+                final_category = domain_category if domain_category else "Uncategorized"
+                log_request(client_ip, host, path, method, final_category, False, [])
+                return
+                
+            # Safely decode the full content payload with decompression automatically handled
+            body = flow.response.text or ""
             
             if "text/html" in content_type:
-                # Strip HTML tags for HTML responses
-                clean = re.sub(r"<[^>]+>", " ", body)
+                # Strip out scripts and styles before removing other HTML tags
+                clean = re.sub(r'<(script|style)[^>]*>.*?</\1>', ' ', body, flags=re.IGNORECASE | re.DOTALL)
+                clean = re.sub(r"<[^>]+>", " ", clean)
                 clean = re.sub(r"\s+", " ", clean).strip()
             elif "application/json" in content_type:
                 # For JSON responses, extract text content by removing structural characters
@@ -614,7 +624,11 @@ class VIGILANTAddon:
             else:
                 # For other text types, just normalize whitespace
                 clean = re.sub(r"\s+", " ", body).strip()
-        except Exception:
+        except ValueError:
+            print(f"[VIGILANT] Failed to decode text payload for {host}")
+            clean = ""
+        except Exception as e:
+            print(f"[VIGILANT] Error processing response payload for {host}: {e}")
             clean = ""
 
         # STEP 2: Use domain category if available, otherwise use NLP categorization

@@ -1331,6 +1331,58 @@ def save_proxy_config():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route("/api/config/behavioral", methods=["POST"])
+def save_behavioral_config():
+    """Save behavioral engine configuration parameters (NLP, Velocity, Scroll)"""
+    try:
+        payload = request.get_json(silent=True) or {}
+        if not isinstance(payload, dict):
+            return jsonify({"error": "JSON object payload is required"}), 400
+
+        config_updates = {}
+        validation_errors = []
+
+        if "nlp_accuracy" in payload:
+            nlp_mode = str(payload["nlp_accuracy"]).strip()
+            if nlp_mode in ["fast", "balanced", "strict"]:
+                config_updates["nlp_accuracy"] = nlp_mode
+            else:
+                validation_errors.append("Invalid nlp_accuracy")
+
+        if "proxy_velocity_threshold" in payload:
+            try:
+                threshold = float(payload["proxy_velocity_threshold"])
+                if threshold <= 0:
+                    validation_errors.append("proxy_velocity_threshold must be greater than 0")
+                else:
+                    config_updates["proxy_velocity_threshold"] = str(threshold)
+            except (ValueError, TypeError):
+                validation_errors.append("proxy_velocity_threshold must be a valid number")
+                
+        if "request_threshold" in payload:
+            try:
+                threshold = int(payload["request_threshold"])
+                if threshold < 1:
+                    validation_errors.append("request_threshold must be greater than 0")
+                else:
+                    config_updates["request_threshold"] = threshold
+            except (ValueError, TypeError):
+                validation_errors.append("request_threshold must be a valid integer")
+                
+        if validation_errors:
+            return jsonify({"error": "Invalid configuration values", "details": validation_errors}), 400
+
+        if not config_updates:
+            return jsonify({"error": "No valid behavioral configuration parameters provided"}), 400
+
+        save_config(config_updates)
+        return jsonify({"status": "success", "message": "Behavioral configuration updated successfully"})
+
+    except Exception as exc:
+        app.logger.error("Failed to save behavioral config: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/api/categories/hints", methods=["GET"])
 def get_category_hints():
     """Get all category hints mappings"""

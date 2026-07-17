@@ -750,6 +750,45 @@
       margin-bottom: 1rem;
       opacity: 0.5;
     }
+
+    .tooltip-trigger {
+      color: #007bff;
+      margin-left: 5px;
+      cursor: help;
+      position: relative;
+      display: inline-block;
+    }
+    .tooltip-trigger:hover::after {
+      content: attr(data-tooltip);
+      position: absolute;
+      bottom: 150%;
+      left: 50%;
+      transform: translateX(-50%);
+      background-color: #333;
+      color: #fff;
+      padding: 10px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      font-weight: normal;
+      white-space: normal;
+      width: 280px;
+      z-index: 1000;
+      text-align: left;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+      pointer-events: none;
+    }
+    .tooltip-trigger:hover::before {
+      content: "";
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      border-width: 6px;
+      border-style: solid;
+      border-color: #333 transparent transparent transparent;
+      z-index: 1000;
+      pointer-events: none;
+    }
   </style>
 </head>
 <body>
@@ -1198,7 +1237,35 @@
       syncConfigInputs(['block-harmful'], config.block_harmful);
       syncConfigInputs(['block-distracting'], config.block_distracting);
       syncConfigInputs(['throttle-enabled'], config.throttle_enabled);
-      syncConfigInputs(['throttle-threshold'], config.request_threshold);
+      
+      // Sync Behavioral Settings
+      const netVelPreset = document.getElementById('network-velocity-preset');
+      const netVelCustom = document.getElementById('network-velocity-custom');
+      if (netVelPreset && config.proxy_velocity_threshold) {
+        let val = String(config.proxy_velocity_threshold);
+        if (['2.0', '1.5', '1.1'].includes(val)) {
+          netVelPreset.value = val;
+          document.getElementById('network-velocity-custom-container').style.display = 'none';
+        } else {
+          netVelPreset.value = 'custom';
+          netVelCustom.value = val;
+          document.getElementById('network-velocity-custom-container').style.display = 'block';
+        }
+      }
+      
+      const scrollVelPreset = document.getElementById('scroll-velocity-preset');
+      const scrollVelCustom = document.getElementById('scroll-velocity-custom');
+      if (scrollVelPreset && config.request_threshold) {
+        let val = String(config.request_threshold);
+        if (['120', '75', '40'].includes(val)) {
+          scrollVelPreset.value = val;
+          document.getElementById('scroll-velocity-custom-container').style.display = 'none';
+        } else {
+          scrollVelPreset.value = 'custom';
+          scrollVelCustom.value = val;
+          document.getElementById('scroll-velocity-custom-container').style.display = 'block';
+        }
+      }
       
       // Sync network settings
       syncConfigInputs(['upstream-interface'], config.upstream_interface);
@@ -1330,7 +1397,10 @@
       block_harmful: Boolean(blockHarmfulEl?.checked),
       block_distracting: Boolean(blockDistractingEl?.checked),
       throttle_enabled: Boolean(throttleEnabledEl?.checked),
-      request_threshold: Number.parseInt(velocityThresholdEl?.value || '0', 10) || 0,
+      // Use behavioral logic for backward compatibility in unified form
+      request_threshold: document.getElementById('scroll-velocity-preset')?.value === 'custom' 
+                         ? Number.parseInt(document.getElementById('scroll-velocity-custom')?.value || '0', 10) 
+                         : Number.parseInt(document.getElementById('scroll-velocity-preset')?.value || '0', 10),
       // Network configuration
       upstream_interface: upstreamInterfaceEl?.value || 'enp0s31f6',
       distribution_interface: distributionInterfaceEl?.value || 'wlp1s0',
@@ -1368,6 +1438,75 @@
       showToast('Network error: Could not reach backend data layer.', 'danger');
     }
   }
+
+  function toggleVelocityCustom(type) {
+    const preset = document.getElementById(`${type}-velocity-preset`).value;
+    const container = document.getElementById(`${type}-velocity-custom-container`);
+    if (preset === 'custom') {
+      container.style.display = 'block';
+    } else {
+      container.style.display = 'none';
+    }
+  }
+
+  async function saveBehavioralSettings() {
+    const nlpMode = document.getElementById('nlp-mode')?.value;
+    
+    const netPreset = document.getElementById('network-velocity-preset')?.value;
+    const netCustom = document.getElementById('network-velocity-custom')?.value;
+    const networkVelocity = netPreset === 'custom' ? netCustom : netPreset;
+
+    const scrollPreset = document.getElementById('scroll-velocity-preset')?.value;
+    const scrollCustom = document.getElementById('scroll-velocity-custom')?.value;
+    const scrollVelocity = scrollPreset === 'custom' ? scrollCustom : scrollPreset;
+    
+    // Also save throttle enabled / rate to /api/config if they are part of it? 
+    // The prompt only asked for behavioral endpoint: nlp_accuracy, proxy_velocity_threshold, request_threshold
+    
+    if (!networkVelocity || (netPreset === 'custom' && !netCustom)) {
+      showToast('Please provide a valid Network Velocity value', 'danger');
+      return;
+    }
+    
+    if (!scrollVelocity || (scrollPreset === 'custom' && !scrollCustom)) {
+      showToast('Please provide a valid Scroll Velocity value', 'danger');
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/config/behavioral', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nlp_accuracy: nlpMode,
+          proxy_velocity_threshold: networkVelocity,
+          request_threshold: scrollVelocity
+        })
+      });
+
+      if (!response.ok) throw new Error('Server returned HTTP status ' + response.status);
+
+      const data = await response.json();
+      if (data.status === 'success') {
+        showToast('Behavioral settings saved successfully!', 'success');
+        // We also want to save the basic unified form items related to throttle
+        const throttleEnabled = document.getElementById('throttle-enabled')?.checked;
+        const throttleRate = document.getElementById('throttle-rate')?.value;
+        await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ throttle_enabled: throttleEnabled, throttle_rate: throttleRate })
+        });
+        await loadConfigToUI();
+      } else {
+        showToast('Save failed: ' + (data.error || 'Unknown error'), 'danger');
+      }
+    } catch (e) {
+      console.error(e);
+      showToast('Network error saving behavioral settings.', 'danger');
+    }
+  }
+
 
   // ─── Keyword Filtering ───
   async function loadKeywords() {

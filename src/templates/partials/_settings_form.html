@@ -227,12 +227,15 @@
           <div id="advanced-settings" class="d-none">
             <div class="card" style="margin-bottom: 2rem;">
               <div class="card-header">
-                <div class="card-title">Advanced Network Configuration</div>
-                <div class="card-subtitle">Deep-dive network settings</div>
+                <div class="card-title">Behavioral Control Settings</div>
+                <div class="card-subtitle">Intelligent traffic analysis and behavioral telemetry</div>
               </div>
 
               <div class="form-group">
-                <label class="form-label">NLP Model Accuracy</label>
+                <label class="form-label">
+                  NLP Toggle
+                  <i class="fas fa-question-circle tooltip-trigger" data-tooltip="Toggles the Natural Language Processing engine mode. Fast uses less CPU, while Strict provides better accuracy for detecting harmful content."></i>
+                </label>
                 <select id="nlp-mode">
                   <option value="fast">Fast (Lower accuracy, ~70%)</option>
                   <option value="balanced" selected>Balanced (Good accuracy, ~85%)</option>
@@ -240,27 +243,50 @@
                 </select>
                 <div class="form-hint">Trade-off between speed and accuracy</div>
               </div>
-            </div>
 
-            <div class="card" style="margin-bottom: 2rem;">
-              <div class="card-header">
-                <div class="card-title">Doomscroll Prevention Configuration</div>
-                <div class="card-subtitle">Configure velocity-based throttling for social media</div>
-              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">
+                    Network Request Velocity Threshold
+                    <i class="fas fa-question-circle tooltip-trigger" data-tooltip="Network Request Velocity measures how fast a device requests web content. Lowering this percentage makes the system quicker to flag background app streaming and apply dynamic throttling."></i>
+                  </label>
+                  <select id="network-velocity-preset" onchange="toggleVelocityCustom('network')">
+                    <option value="2.0">Low Sensitivity (200%)</option>
+                    <option value="1.5">Medium Sensitivity (150% - Capstone Baseline)</option>
+                    <option value="1.1">High Sensitivity (110%)</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                  <div id="network-velocity-custom-container" style="display: none; margin-top: 0.5rem;">
+                    <input type="number" id="network-velocity-custom" step="0.1" min="0.1" placeholder="e.g. 1.5">
+                    <div class="form-hint">Custom Value (multiplier for baseline request rate)</div>
+                  </div>
+                </div>
 
-              <div class="form-group">
-                <label class="form-label">Enable Throttling</label>
-                <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer;">
-                  <input type="checkbox" id="throttle-enabled" checked>
-                  <span id="throttle-status">Enabled</span>
-                </label>
+                <div class="form-group">
+                  <label class="form-label">
+                    Physical Scroll Velocity Threshold
+                    <i class="fas fa-question-circle tooltip-trigger" data-tooltip="Scroll Telemetry monitors how fast users scroll through content. A lower events/min threshold will aggressively flag doomscrolling behavior."></i>
+                  </label>
+                  <select id="scroll-velocity-preset" onchange="toggleVelocityCustom('scroll')">
+                    <option value="120">Low Sensitivity (120 events/min)</option>
+                    <option value="75">Medium Sensitivity (75 events/min)</option>
+                    <option value="40">High Sensitivity (40 events/min)</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                  <div id="scroll-velocity-custom-container" style="display: none; margin-top: 0.5rem;">
+                    <input type="number" id="scroll-velocity-custom" min="1" max="500" placeholder="e.g. 90">
+                    <div class="form-hint">Custom Value (events/min)</div>
+                  </div>
+                </div>
               </div>
 
               <div class="form-row">
                 <div class="form-group">
-                  <label class="form-label">Request Threshold (per minute)</label>
-                  <input type="number" id="throttle-threshold" value="30" min="10" max="100">
-                  <div class="form-hint">Trigger throttling when exceeds this rate</div>
+                  <label class="form-label">Enable Throttling</label>
+                  <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer;">
+                    <input type="checkbox" id="throttle-enabled" checked>
+                    <span id="throttle-status">Enabled</span>
+                  </label>
                 </div>
                 <div class="form-group">
                   <label class="form-label">Throttle Rate</label>
