@@ -193,7 +193,7 @@ html, body {
   box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.05);
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 1.5rem !important;
 }
 
 .card:hover, .settings-card:hover, .stat-card:hover {
@@ -206,7 +206,7 @@ html, body {
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 2.5rem;
+  gap: 2.5rem !important;
   margin-bottom: 2.5rem;
 }
 
@@ -289,7 +289,7 @@ html, body {
 
 /* ─── Form Controls ─── */
 .form-group {
-  margin-bottom: 1.5rem;
+  margin-bottom: 1.5rem !important;
 }
 
 .form-label {
@@ -309,7 +309,7 @@ html, body {
 .form-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-  gap: 1.5rem;
+  gap: 1.5rem !important;
 }
 
 input[type="text"],
@@ -408,7 +408,7 @@ button {
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 2.5rem;
+  gap: 2.5rem !important;
   margin-bottom: 2.5rem;
 }
 
@@ -828,6 +828,15 @@ button {
   margin-bottom: 2rem;
 }
 
+/* Ensure proper flexbox spacing for all card content */
+.card > *, .settings-card > *, .stat-card > *, .behavioral-card > *, .glass-card > *, .glassmorphic-card > * {
+  margin-bottom: 0;
+}
+
+.card > *:not(:last-child), .settings-card > *:not(:last-child), .stat-card > *:not(:last-child), .behavioral-card > *:not(:last-child), .glass-card > *:not(:last-child), .glassmorphic-card > *:not(:last-child) {
+  margin-bottom: 1.5rem;
+}
+
 /* Fix flickering tooltips */
 .tooltip-text, .help-tooltip {
   pointer-events: none !important;
@@ -841,14 +850,52 @@ button {
 }
 
 /* ─── VIGILANT NERVE CENTER Light Mode Visibility Fix ─── */
-[data-theme="light"] .nerve-center-card, [data-theme="light"] .glass-card {
-  background: rgba(255, 255, 255, 0.85) !important;
-  border: 1px solid rgba(26, 147, 138, 0.2) !important;
-  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.08);
+[data-theme="light"] .nerve-center-card, 
+[data-theme="light"] .glass-card, 
+[data-theme="light"] .glassmorphic-card {
+  background: rgba(255, 255, 255, 0.95) !important;
+  border: 1px solid rgba(26, 147, 138, 0.3) !important;
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.12);
+  color: #0f172a !important; /* Deep slate/charcoal for absolute readability */
 }
 
-[data-theme="light"] .nerve-center-card *, [data-theme="light"] .glass-card * {
-  color: #212529 !important; /* Force text to remain visible */
+/* Override inline styles with higher specificity for light mode */
+[data-theme="light"] .glassmorphic-card[style*="color: white"],
+[data-theme="light"] .glassmorphic-card[style*="color: white"] *,
+[data-theme="light"] .glassmorphic-card[style*="background: var(--primary-dark)"] {
+  color: #1e293b !important;
+}
+
+[data-theme="light"] .glassmorphic-card .card-title,
+[data-theme="light"] .glassmorphic-card .card-title *,
+[data-theme="light"] .glassmorphic-card h1,
+[data-theme="light"] .glassmorphic-card h2,
+[data-theme="light"] .glassmorphic-card h3,
+[data-theme="light"] .glassmorphic-card h4,
+[data-theme="light"] .glassmorphic-card p,
+[data-theme="light"] .glassmorphic-card span,
+[data-theme="light"] .glassmorphic-card div,
+[data-theme="light"] .glassmorphic-card .card-header,
+[data-theme="light"] .glassmorphic-card .card-header * {
+  color: #0f172a !important;
+}
+
+/* Fix sub-container backgrounds in light mode */
+[data-theme="light"] .glassmorphic-card .card-header {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.1) !important;
+  background: rgba(0, 0, 0, 0.02) !important;
+}
+
+/* Ensure metric values are readable in light mode */
+[data-theme="light"] .glassmorphic-card [id^="nerve-"],
+[data-theme="light"] .glassmorphic-card [id^="nerve-"] * {
+  color: #0f172a !important;
+}
+
+/* Fix theme toggle text in light mode */
+[data-theme="light"] .glassmorphic-card .theme-toggle,
+[data-theme="light"] .glassmorphic-card .theme-toggle * {
+  color: #0f172a !important;
 }
 
 /* ─── Behavioral Control CSS Fixes ─── */

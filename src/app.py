@@ -279,10 +279,10 @@ def _get_recent_logs(limit: int = 10, offset: int = 0, category_filter: str = ''
             
             # Ensure limit and offset are valid integers
             try:
-                limit = max(1, min(int(limit), 1000))  # Cap at 1000 to prevent excessive queries
+                limit = max(1, min(int(limit), 100))  # Cap at 100 per page as requested
                 offset = max(0, int(offset))
             except (ValueError, TypeError):
-                limit = 10
+                limit = 100
                 offset = 0
             
             query = "SELECT timestamp, client_ip, host, category, flagged FROM traffic_log WHERE 1=1"
@@ -919,14 +919,13 @@ def dashboard_summary():
                     row = conn.execute("SELECT COUNT(*) FROM network_devices WHERE policy = 'blacklist'").fetchone()
                     throttled_count = int(row[0] or 0) if row else 0
                     
-                    # Get DHCP allocations with simulated throughput
+                    # Get DHCP allocations (throughput removed per requirements)
                     device_rows = conn.execute("""
                         SELECT ip_address, mac_address, hostname, custom_name, last_seen
                         FROM network_devices
                         ORDER BY last_seen DESC
                     """).fetchall()
                     
-                    import random
                     for row in device_rows:
                         ip = row[0]
                         mac = row[1]
@@ -934,18 +933,12 @@ def dashboard_summary():
                         cname = row[3]
                         last = row[4]
                         
-                        # Simulate active throughput values for display
-                        base_rx = random.uniform(0.5, 5.0)
-                        base_tx = random.uniform(0.2, 2.0)
-                        
                         dhcp_allocations.append({
                             "ip_address": ip,
                             "mac_address": mac,
                             "hostname": host,
                             "custom_name": cname,
-                            "last_seen": last,
-                            "rx_mbps": round(base_rx, 2),
-                            "tx_mbps": round(base_tx, 2)
+                            "last_seen": last
                         })
         except sqlite3.Error as e:
             app.logger.warning(f"DB Error in summary: {e}")
@@ -1112,6 +1105,12 @@ def get_stats():
 
 
 
+@app.route('/api/reset', methods=["POST"])
+def api_reset_redirect():
+    """Redirect to config reset for backward compatibility"""
+    return api_config_reset()
+
+
 @app.route("/api/config/reset", methods=["POST"])
 def api_config_reset():
     """Reset configuration to factory defaults"""
@@ -1246,6 +1245,12 @@ def export_logs():
         return abort(500, description="Failed to generate CSV export")
 
 
+@app.route('/api/config/export')
+def export_config_redirect():
+    """Redirect to setup export for backward compatibility"""
+    return export_config()
+
+
 @app.route('/api/config/setup/export')
 def export_config():
     try:
@@ -1276,6 +1281,12 @@ def export_config():
     response.headers["Content-Disposition"] = "attachment; filename=vigilant_config.json"
     response.headers["Content-Type"] = "application/json"
     return response
+
+
+@app.route('/api/config/import', methods=['POST'])
+def import_config_redirect():
+    """Redirect to setup import for backward compatibility"""
+    return import_config()
 
 
 @app.route('/api/config/setup/import', methods=['POST'])

@@ -279,13 +279,7 @@ async function refreshStats() {
     });
     document.getElementById('recent-tbody').innerHTML = recentHtml || '<tr><td colspan="5" class="text-center" style="color: var(--text-secondary); padding: 2rem;">No traffic data yet</td></tr>';
 
-    // Update system metrics
-    const sysThroughput = document.getElementById('sys-throughput');
-    if (sysThroughput) {
-      const rx = systemMetrics.throughput_rx || 0.0;
-      const tx = systemMetrics.throughput_tx || 0.0;
-      sysThroughput.textContent = `${rx} / ${tx}`;
-    }
+    // Throughput display removed per requirements
 
     const sysCpu = document.getElementById('sys-cpu');
     if (sysCpu) {
@@ -831,8 +825,48 @@ async function deleteCategoryHint(hintId) {
       showToast(data.error || 'Failed to delete category mapping', 'danger');
     }
   } catch (error) {
+    console.error('Error deleting category hint:', error);
     showToast('Error deleting category mapping', 'danger');
   }
+}
+
+// ─── SNI Status Indicator Update ───
+function updateSNIStatusIndicator(checkbox) {
+  const statusText = document.getElementById('sni-status-text');
+  if (!statusText) return;
+  
+  if (checkbox.checked) {
+    statusText.textContent = 'ON';
+    statusText.style.color = '#1A938A';
+    statusText.style.fontWeight = 'bold';
+  } else {
+    statusText.textContent = 'OFF';
+    statusText.style.color = '#ff3860';
+    statusText.style.fontWeight = 'bold';
+  }
+}
+
+// ─── Toast Notification Helper ───
+function showToast(message, type = 'info') {
+  const toastContainer = document.querySelector('.toast-container');
+  if (!toastContainer) {
+    // Create toast container if it doesn't exist
+    const container = document.createElement('div');
+    container.className = 'toast-container';
+    document.body.appendChild(container);
+  }
+  
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.textContent = message;
+  
+  const container = document.querySelector('.toast-container');
+  container.appendChild(toast);
+  
+  // Remove toast after 3 seconds
+  setTimeout(() => {
+    toast.remove();
+  }, 3000);
 }
 
 async function loadTrafficLogs() {
@@ -1200,7 +1234,7 @@ function startDashboardPolling() {
       
       const networkLoad = document.getElementById('nerve-network-load');
       if (networkLoad) {
-        networkLoad.textContent = `${data.system.throughput_rx_mbps} / ${data.system.throughput_tx_mbps} Mbps`;
+        networkLoad.textContent = 'Network Active';
       }
       
       const shieldIntegrity = document.getElementById('nerve-shield-integrity');
@@ -1215,11 +1249,7 @@ function startDashboardPolling() {
         nlpStatus.textContent = data.active_config.nlp_enabled ? 'Active' : 'Idle';
       }
 
-      // 2. Update System Gauges
-      const sysThroughput = document.getElementById('sys-throughput');
-      if (sysThroughput) {
-        sysThroughput.textContent = `${data.system.throughput_rx_mbps} / ${data.system.throughput_tx_mbps}`;
-      }
+      // 2. Update System Gauges (throughput removed per requirements)
       const sysCpu = document.getElementById('sys-cpu');
       if (sysCpu) {
         sysCpu.textContent = `${data.system.cpu_usage}%`;

@@ -747,6 +747,39 @@ body {
   gap: 10px;
 }
 
+/* ─── Nerve Center Light Mode Fixes ─── */
+[data-theme="light"] .glassmorphic-card {
+  background: rgba(255, 255, 255, 0.95) !important;
+  border: 1px solid rgba(26, 147, 138, 0.3) !important;
+  color: #0f172a !important;
+}
+
+[data-theme="light"] .glassmorphic-card[style*="color: white"] {
+  color: #0f172a !important;
+}
+
+[data-theme="light"] .glassmorphic-card .card-title,
+[data-theme="light"] .glassmorphic-card .card-title *,
+[data-theme="light"] .glassmorphic-card h1,
+[data-theme="light"] .glassmorphic-card h2,
+[data-theme="light"] .glassmorphic-card h3,
+[data-theme="light"] .glassmorphic-card h4,
+[data-theme="light"] .glassmorphic-card p,
+[data-theme="light"] .glassmorphic-card span,
+[data-theme="light"] .glassmorphic-card div {
+  color: #0f172a !important;
+}
+
+[data-theme="light"] .glassmorphic-card .card-header {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.1) !important;
+  background: rgba(0, 0, 0, 0.02) !important;
+}
+
+[data-theme="light"] .glassmorphic-card [id^="nerve-"],
+[data-theme="light"] .glassmorphic-card [id^="nerve-"] * {
+  color: #0f172a !important;
+}
+
 .toast {
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
