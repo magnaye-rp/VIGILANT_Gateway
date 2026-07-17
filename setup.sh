@@ -130,7 +130,8 @@ stage_1_dependencies() {
     log_info "Installing system packages..."
     apt-get install -y \
         python3 python3-pip python3-venv \
-        dnsmasq iptables netfilter-persistent \
+        hostapd dnsmasq iptables iptables-persistent \
+        wireless-tools netfilter-persistent \
         git curl wget nano \
         > /dev/null 2>&1
     
@@ -314,6 +315,31 @@ EOF
     log_info "Applying iptables rules with dynamic interfaces..."
     WAN_INTERFACE="$WAN_INTERFACE" LAN_INTERFACE="$LAN_INTERFACE" bash "$VIGILANT_HOME/scripts/setup-iptables.sh"
     log_success "Firewall rules applied"
+    
+    # Enable IPv4 packet forwarding
+    log_info "Enabling IPv4 packet forwarding..."
+    sysctl -w net.ipv4.ip_forward=1
+    
+    # Make forwarding persistent
+    if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
+        echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+    fi
+    log_success "IPv4 forwarding enabled and persistent"
+    
+    # Apply clean NAT routing rules
+    log_info "Applying NAT routing rules..."
+    iptables -t nat -A POSTROUTING -o "$WAN_INTERFACE" -j MASQUERADE
+    iptables -A FORWARD -i "$LAN_INTERFACE" -o "$WAN_INTERFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
+    iptables -A FORWARD -i "$LAN_INTERFACE" -o "$WAN_INTERFACE" -j ACCEPT
+    
+    # Save rules persistently
+    log_info "Saving iptables rules persistently..."
+    if command -v netfilter-persistent &>/dev/null; then
+        netfilter-persistent save
+    else
+        iptables-save > /etc/iptables/rules.v4
+    fi
+    log_success "NAT routing rules applied and saved persistently"
 }
 
 stage_7_5_hostapd() {
@@ -322,7 +348,13 @@ stage_7_5_hostapd() {
     log_info "STAGE 7.5: HOSTAPD ACCESS POINT SETUP"
     log_info "═══════════════════════════════════════════"
     
-    log_info "Creating hostapd configuration file..."
+    log_info "Backing up existing hostapd configuration..."
+    if [ -f /etc/hostapd/hostapd.conf ]; then
+        cp /etc/hostapd/hostapd.conf /etc/hostapd/hostapd.conf.bak
+        log_success "Backup created at /etc/hostapd/hostapd.conf.bak"
+    fi
+    
+    log_info "Creating optimized hostapd configuration file..."
     cat << 'EOF' > /etc/hostapd/hostapd.conf
 interface=wlp1s0
 driver=nl80211
@@ -336,6 +368,9 @@ wpa=2
 wpa_key_mgmt=WPA-PSK
 rsn_pairwise=CCMP
 wpa_passphrase=VigilantGateway2026
+# Intel AP Stability Optimizations
+ap_max_inactivity=300
+skip_inactivity_poll=1
 EOF
 
     log_info "Updating system default hostapd daemon reference..."
@@ -351,7 +386,48 @@ EOF
     systemctl enable hostapd
     systemctl restart hostapd
     
-    log_success "Hostapd Access Point is live!"
+    log_success "Hostapd Access Point is live with Intel AP stability optimizations!"
+}
+
+# ─── Stage 7.6: Wi-Fi Power Saving Disable ────────────────────────────────────
+stage_7_6_wifi_power_save() {
+    echo ""
+    log_info "═══════════════════════════════════════════"
+    log_info "STAGE 7.6: WI-FI POWER SAVING DISABLE"
+    log_info "═══════════════════════════════════════════"
+    
+    WIFI_INTERFACE="wlp1s0"
+    
+    # Check if interface exists
+    if ! ip link show "$WIFI_INTERFACE" &>/dev/null; then
+        log_warn "Wi-Fi interface $WIFI_INTERFACE not found, skipping power save configuration"
+        return
+    fi
+    
+    log_info "Disabling power saving on $WIFI_INTERFACE immediately..."
+    iw dev "$WIFI_INTERFACE" set power_save off
+    log_success "Power saving disabled immediately"
+    
+    # Make permanent via systemd service
+    log_info "Creating systemd service for permanent power save disable..."
+    cat << EOF > /etc/systemd/system/vigilant-wifi-power-save.service
+[Unit]
+Description=Disable Wi-Fi Power Saving on $WIFI_INTERFACE
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/iw dev $WIFI_INTERFACE set power_save off
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    systemctl daemon-reload
+    systemctl enable vigilant-wifi-power-save.service
+    systemctl start vigilant-wifi-power-save.service
+    
+    log_success "Wi-Fi power saving permanently disabled via systemd service"
 }
 
 # ─── Stage 8: Certificates ──────────────────────────────────────────────────
@@ -471,6 +547,125 @@ EOF
 
     log_success "Services installed and enabled dynamically"
 }
+# ─── Stage 9.5: SQLite Database Initialization ───────────────────────────────
+stage_9_5_database_init() {
+    echo ""
+    log_info "═══════════════════════════════════════════"
+    log_info "STAGE 9.5: SQLITE DATABASE INITIALIZATION"
+    log_info "═══════════════════════════════════════════"
+    
+    log_info "Running Python bootstrap routine to initialize database..."
+    
+    # Create Python bootstrap script
+    cat << 'EOF' > "$VIGILANT_HOME/init_db.py"
+#!/usr/bin/env python3
+import sqlite3
+import os
+
+DB_PATH = os.path.join(os.path.dirname(__file__), 'logs', 'vigilant.db')
+
+def init_database():
+    """Initialize SQLite database with default configurations"""
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Create config_settings table if not exists
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS config_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT,
+            updated_at REAL
+        )
+    ''')
+    
+    # Default configuration values matching UI
+    default_configs = {
+        'nlp_enabled': 'true',
+        'keywords': 'tiktok, instagram, facebook, scroll, short',
+        'network_velocity_preset': 'Medium',
+        'network_velocity_custom': '150',
+        'physical_scroll_preset': 'Medium',
+        'physical_scroll_custom': '75',
+        'sni_filtering_enabled': 'true',
+        'upstream_interface': 'eth0',
+        'distribution_interface': 'wlan0',
+        'theme_mode': 'dark'
+    }
+    
+    # Insert defaults only if they don't exist
+    for key, value in default_configs.items():
+        cursor.execute('''
+            INSERT OR IGNORE INTO config_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+        ''', (key, value, 0))
+    
+    # Create keyword_blacklist table if not exists
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS keyword_blacklist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            keyword TEXT NOT NULL UNIQUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Initialize default keywords if table is empty
+    cursor.execute('SELECT COUNT(*) FROM keyword_blacklist')
+    if cursor.fetchone()[0] == 0:
+        default_keywords = ['tiktok', 'instagram', 'facebook']
+        for kw in default_keywords:
+            cursor.execute('INSERT OR IGNORE INTO keyword_blacklist (keyword) VALUES (?)', (kw,))
+    
+    # Create network_devices table if not exists
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS network_devices (
+            ip_address TEXT PRIMARY KEY,
+            mac_address TEXT,
+            hostname TEXT,
+            custom_name TEXT,
+            policy TEXT DEFAULT 'none',
+            first_seen REAL,
+            last_seen REAL,
+            updated_at REAL
+        )
+    ''')
+    
+    # Create traffic_log table if not exists
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS traffic_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp REAL,
+            client_ip TEXT,
+            host TEXT,
+            category TEXT,
+            flagged INTEGER DEFAULT 0
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+    
+    print("Database initialized successfully with default configurations")
+
+if __name__ == '__main__':
+    init_database()
+EOF
+    
+    chmod +x "$VIGILANT_HOME/init_db.py"
+    
+    # Run the bootstrap script in the virtual environment
+    sudo -u "$VIGILANT_USER" bash -c "
+        source $VIGILANT_HOME/venv/bin/activate
+        python3 $VIGILANT_HOME/init_db.py
+    "
+    
+    # Clean up bootstrap script
+    rm "$VIGILANT_HOME/init_db.py"
+    
+    log_success "SQLite database initialized with default configurations"
+}
+
 # ─── Stage 10: Verification ─────────────────────────────────────────────────
 stage_10_verify() {
     echo ""
@@ -577,8 +772,11 @@ main() {
     stage_5_network_config
     stage_6_dns_dhcp
     stage_7_firewall
+    stage_7_5_hostapd
+    stage_7_6_wifi_power_save
     stage_8_certificates
     stage_9_systemd_services
+    stage_9_5_database_init
     stage_10_verify
     stage_11_start_services
     stage_12_status

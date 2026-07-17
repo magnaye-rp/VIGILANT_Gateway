@@ -838,7 +838,7 @@
     .tooltip-text,
     .help-tooltip {
       pointer-events: none;
-      transition: opacity 0.2s ease-in-out;
+      transition: opacity 0.15s ease;
     }
 
     /* Grid layout for presets and custom inputs */
@@ -850,6 +850,61 @@
 
     .behavioral-preset-grid .form-group {
       margin-bottom: 0;
+    }
+
+    /* ─── VIGILANT NERVE CENTER Light Mode Visibility Fix ─── */
+    [data-theme="light"] .nerve-center-card,
+    [data-theme="light"] .glass-card,
+    [data-theme="light"] .glassmorphic-card {
+      background: rgba(255, 255, 255, 0.85) !important;
+      border: 1px solid rgba(26, 147, 138, 0.15) !important; /* Soft verdigris border */
+      box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.06) !important;
+    }
+
+    [data-theme="light"] .nerve-center-card .card-title,
+    [data-theme="light"] .glass-card .card-title,
+    [data-theme="light"] .glassmorphic-card .card-title,
+    [data-theme="light"] .nerve-center-card .metric-value,
+    [data-theme="light"] .glass-card .metric-value,
+    [data-theme="light"] .glassmorphic-card .metric-value,
+    [data-theme="light"] .nerve-center-card h2,
+    [data-theme="light"] .glass-card h2,
+    [data-theme="light"] .glassmorphic-card h2,
+    [data-theme="light"] .nerve-center-card h3,
+    [data-theme="light"] .glass-card h3,
+    [data-theme="light"] .glassmorphic-card h3,
+    [data-theme="light"] .nerve-center-card h4,
+    [data-theme="light"] .glass-card h4,
+    [data-theme="light"] .glassmorphic-card h4 {
+      color: #212529 !important; /* Charcoal Black */
+    }
+
+    [data-theme="light"] .nerve-center-card .stat-value,
+    [data-theme="light"] .glass-card .stat-value,
+    [data-theme="light"] .glassmorphic-card .stat-value {
+      color: #212529 !important;
+    }
+
+    /* ─── Behavioral Control Alignment Fix ─── */
+    .behavioral-setting-group {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px dashed rgba(128, 128, 128, 0.2);
+    }
+
+    .control-pair {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+    }
+
+    @media (max-width: 768px) {
+      .control-pair {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
@@ -1664,20 +1719,37 @@
   async function saveBehavioralSettings(event) {
     if (event) event.preventDefault();
     
-    const netPreset = document.getElementById('behavioral-network-preset').value;
-    const netCustom = document.getElementById('behavioral-network-custom').value;
-    const scrollPreset = document.getElementById('behavioral-scroll-preset').value;
-    const scrollCustom = document.getElementById('behavioral-scroll-custom').value;
-    const sniEnabled = document.getElementById('behavioral-sni-enabled').checked;
-
+    // Get all form elements
+    const netPreset = document.getElementById('behavioral-network-preset');
+    const netCustom = document.getElementById('behavioral-network-custom');
+    const scrollPreset = document.getElementById('behavioral-scroll-preset');
+    const scrollCustom = document.getElementById('behavioral-scroll-custom');
+    const sniEnabled = document.getElementById('behavioral-sni-enabled');
+    
+    // Validate elements exist
+    if (!netPreset || !netCustom || !scrollPreset || !scrollCustom || !sniEnabled) {
+      showToast('Error: Required form elements not found', 'danger');
+      return;
+    }
+    
+    // Compile values from BOTH presets and custom inputs
     const payload = {
-      network_velocity_preset: netPreset,
-      physical_scroll_preset: scrollPreset,
-      sni_filtering_enabled: sniEnabled
+      network_velocity_preset: netPreset.value,
+      network_velocity_custom: parseInt(netCustom.value, 10) || 150,
+      physical_scroll_preset: scrollPreset.value,
+      physical_scroll_custom: parseInt(scrollCustom.value, 10) || 75,
+      sni_filtering_enabled: sniEnabled.checked
     };
 
-    if (netPreset === 'Custom') payload.network_velocity_custom = parseInt(netCustom, 10);
-    if (scrollPreset === 'Custom') payload.physical_scroll_custom = parseInt(scrollCustom, 10);
+    // Validate numeric values
+    if (isNaN(payload.network_velocity_custom) || payload.network_velocity_custom < 0) {
+      showToast('Invalid network velocity value', 'danger');
+      return;
+    }
+    if (isNaN(payload.physical_scroll_custom) || payload.physical_scroll_custom < 0) {
+      showToast('Invalid scroll velocity value', 'danger');
+      return;
+    }
 
     try {
       const response = await fetch('/api/config/behavioral', {
@@ -1685,14 +1757,18 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
+      
       const data = await response.json();
+      
       if (response.ok) {
         showToast(data.message || 'Behavioral settings saved successfully!', 'success');
+        // Reload settings to confirm save
+        await loadBehavioralSettings();
       } else {
         showToast('Save failed: ' + (data.error || 'Unknown error'), 'danger');
       }
     } catch (e) {
-      console.error(e);
+      console.error('Error saving behavioral settings:', e);
       showToast('Network error saving behavioral settings.', 'danger');
     }
   }
