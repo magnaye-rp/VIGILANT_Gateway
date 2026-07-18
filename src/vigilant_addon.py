@@ -4,7 +4,7 @@ import sqlite3
 import threading
 import subprocess
 import urllib.parse
-from collections import defaultdict, deque
+from collections import defaultdict, deque, Counter
 from mitmproxy import http, tls
 import spacy
 
@@ -109,45 +109,38 @@ def load_proxy_config():
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        
-        # Load network velocity threshold (multiplier)
+
         cursor.execute("SELECT value FROM config_settings WHERE key = 'network_velocity_threshold'")
         row = cursor.fetchone()
         network_velocity_threshold = float(row[0]) if row else DEFAULT_VELOCITY_THRESHOLD
-        
-        # Load physical scroll threshold (absolute RPM)
+
         cursor.execute("SELECT value FROM config_settings WHERE key = 'physical_scroll_threshold'")
         row = cursor.fetchone()
         physical_scroll_threshold = int(row[0]) if row else 75
-        
-        # Load NLP enabled flag
+
         cursor.execute("SELECT value FROM config_settings WHERE key = 'nlp_enabled'")
         row = cursor.fetchone()
         nlp_enabled_str = row[0] if row else "true"
         nlp_enabled = nlp_enabled_str.lower() in ["true", "1", "yes"]
 
-        # Load throttle rate
         cursor.execute("SELECT value FROM config_settings WHERE key = 'proxy_throttle_rate'")
         row = cursor.fetchone()
         throttle_rate = row[0] if row else DEFAULT_THROTTLE_RATE
-        
-        # Load pinned domains
+
         cursor.execute("SELECT value FROM config_settings WHERE key = 'proxy_pinned_domains'")
         row = cursor.fetchone()
         pinned_domains_str = row[0] if row else DEFAULT_PINNED_DOMAINS
-        
-        # Parse pinned domains into a set
+
         pinned_domains = set()
         for domain in pinned_domains_str.split(','):
             domain = domain.strip()
             if domain:
                 pinned_domains.add(domain)
-                # Also add www. variant
                 if not domain.startswith('www.'):
                     pinned_domains.add(f'www.{domain}')
-        
+
         conn.close()
-        
+
         return {
             'network_velocity_threshold': network_velocity_threshold,
             'physical_scroll_threshold': physical_scroll_threshold,
@@ -171,23 +164,21 @@ def load_category_hints():
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        
-        # Check if table exists
+
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='category_hints'")
         if not cursor.fetchone():
             conn.close()
-            # Return empty dict if table doesn't exist
             return {}
-        
+
         cursor.execute("SELECT category, domain FROM category_hints")
         rows = cursor.fetchall()
-        
+
         category_hints = {}
         for category, domain in rows:
             if category not in category_hints:
                 category_hints[category] = set()
             category_hints[category].add(domain)
-        
+
         conn.close()
         return category_hints
     except Exception as e:
@@ -200,58 +191,46 @@ def load_social_domains():
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        
-        # Check if table exists
+
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='category_hints'")
         if not cursor.fetchone():
             conn.close()
             return DEFAULT_SOCIAL_DOMAINS
-        
-        # Load domains from Distracting category
+
         cursor.execute("SELECT domain FROM category_hints WHERE category = 'Distracting'")
         rows = cursor.fetchall()
-        
+
         social_domains = set()
         for (domain,) in rows:
             social_domains.add(domain)
-            # Also add www. variant
             if not domain.startswith('www.'):
                 social_domains.add(f'www.{domain}')
-        
+
         conn.close()
-        
-        # If no domains found, use defaults
+
         if not social_domains:
             return DEFAULT_SOCIAL_DOMAINS
-        
+
         return social_domains
     except Exception as e:
         print(f"[VIGILANT] Error loading social domains from database: {e}, using defaults")
         return DEFAULT_SOCIAL_DOMAINS
 
 # Categories that represent real, classified user web activity.
-# All other category strings (DNS noise, non-HTML assets, uncategorized) are silently dropped.
 _LOGGABLE_CATEGORIES = {"educational", "productive", "distracting", "harmful"}
 
-# Category strings that are explicitly considered noise / telemetry and must never
-# reach the database — checked case-insensitively to catch all variants.
 _NOISE_CATEGORIES = {"non-html", "dns_tracked", "dns", "dns_query", "mobile_bypass", "uncategorized"}
 
 
 def log_request(client_ip, host, path, method, category, flagged, entities):
-    # Normalise the category for comparison – catches mixed-case variants like
-    # 'Non-HTML', 'DNS_Tracked', 'Uncategorized', 'UNCATEGORIZED', etc.
     category_key = (category or "").strip().lower()
 
-    # 1. Immediately drop any known noise / telemetry category.
     if category_key in _NOISE_CATEGORIES:
-        return  # Silent pass: client gets internet, but we don't log the noise
+        return
 
-    # 2. Only write loggable (classified) categories to the database.
-    #    Anything not in the allow-set is treated as uncategorized noise.
     if category_key not in _LOGGABLE_CATEGORIES:
-        return  # Silent pass: client gets internet, but we don't log the noise
-    
+        return
+
     with db_lock:
         conn = sqlite3.connect(DB_PATH)
         conn.execute(
@@ -299,32 +278,171 @@ def should_throttle(client_ip, host):
     network_velocity_threshold = config['network_velocity_threshold']
     physical_scroll_threshold = config['physical_scroll_threshold']
     social_domains = load_social_domains()
-    
+
     base = ".".join(host.lstrip("www.").split(".")[-2:])
     if not any(base in d for d in social_domains):
         return False, 0, 0
     rpm_now, rpm_base = compute_velocity(client_ip)
     if session_totals[client_ip] < MIN_REQUESTS_BASELINE:
         return False, rpm_now, rpm_base
-        
-    # Flag if relative velocity (multiplier) OR absolute physical scroll (RPM limit) is violated
+
     flagged = (rpm_now > (rpm_base * network_velocity_threshold)) or (rpm_now > physical_scroll_threshold)
     return flagged, rpm_now, rpm_base
 
-# ─── Text Normalization Helper ──────────────────────────────────────
-def normalize_text(text):
+
+# ══════════════════════════════════════════════════════════════════
+# ─── FIX #1: Context-Aware Text Normalization & Keyword Engine ─────
+# ══════════════════════════════════════════════════════════════════
+#
+# The old normalize_text() stripped ALL whitespace and punctuation from
+# the entire text before matching, which silently glued adjacent words
+# together ("shows. Some" -> "showsome"). Any keyword that happened to
+# be a substring spanning that seam ("owso", etc.) or that simply
+# matched a longer fused word would trigger a false block.
+#
+# The fix splits normalization into two independent representations:
+#
+#   1. normalize_words()   -> preserves word boundaries (spaces are kept
+#                              as single separators). Used for real
+#                              whole-word / whole-phrase matching.
+#   2. collapse_stuffed()  -> targets ONLY the specific obfuscation
+#                              pattern of single characters chained by
+#                              one separator each (b.r.a.i.n.r.o.t,
+#                              b-r-a-i-n-r-o-t, b_r_a_i_n_r_o_t). Normal
+#                              prose essentially never contains 4+
+#                              consecutive one-letter "words", so this
+#                              pattern is a strong, low-false-positive
+#                              signal of deliberate obfuscation. It does
+#                              NOT touch ordinary multi-letter words, so
+#                              "shows. Some" stays as two separate words.
+
+def normalize_words(text: str) -> str:
     """
-    Normalize text by converting to lowercase and stripping common bypass characters.
-    This helps catch obfuscated keywords like "b.r.a.i.n.r.o.t" or "brain-rot" 
-    when blocking "brainrot".
+    Word-boundary-preserving normalization: lowercase, collapse all
+    punctuation/whitespace runs to a single space. Adjacent real words
+    remain distinct tokens (never fused), so keyword matching can use
+    \b...\b (whole word/phrase) checks safely.
     """
     if not text:
         return ""
-    # Convert to lowercase and remove common separator characters: _, -, ., +, spaces, and non-alphanumeric noise
-    return re.sub(r'[\s_\-\.\+\*\/\\~,;:!@#\$%\^&\(\)\[\]\{\}<>|]+', '', text.lower())
+    lowered = text.lower()
+    collapsed = re.sub(r'[^a-z0-9]+', ' ', lowered)
+    return re.sub(r'\s+', ' ', collapsed).strip()
 
 
-# ─── NLP Categorizer ──────────────────────────────────────────────
+_STUFFED_PATTERN = re.compile(r'(?:[a-z0-9][^a-z0-9\s]){3,}[a-z0-9]', re.IGNORECASE)
+
+def collapse_stuffed_segments(text: str):
+    """
+    Returns the list of joined tokens produced ONLY from character-stuffed
+    bypass runs (>=4 single characters each separated by exactly one
+    non-alphanumeric character), e.g. 'b.r.a.i.n.r.o.t' -> ['brainrot'].
+
+    Deliberately narrow scope: this pattern requires 4+ single-character
+    "words" chained in a row, which essentially never occurs in ordinary
+    prose, HTML, or JSON. Crucially, we return ONLY the matched/collapsed
+    segments (never the whole document glued together), so a later
+    substring check against these segments can't accidentally match a
+    short keyword that happens to appear inside an ordinary word (e.g.
+    keyword "ass" inside "class" never matches here, because "class"
+    isn't a stuffed run and so never enters this segment list).
+    """
+    if not text:
+        return []
+    lowered = text.lower()
+    segments = []
+    for match in _STUFFED_PATTERN.finditer(lowered):
+        segments.append(re.sub(r'[^a-z0-9]', '', match.group(0)))
+    return segments
+
+
+def find_keyword_hits(raw_text: str, keyword: str):
+    """
+    Returns (hit_count, via_stuffed_bypass: bool) for a single keyword
+    against a piece of raw (unnormalized) text.
+
+    - Whole-word/phrase matches are counted against normalize_words()
+      output using \b boundaries, so 'brainrot' does not match inside
+      'nobrainrotator' but does match 'BRAIN-ROT' after normalization.
+    - A separate check looks ONLY at segments produced by
+      collapse_stuffed_segments() - i.e. text already identified as a
+      deliberately obfuscated single-character-chained run - and checks
+      whether the glued keyword appears in one of those segments.
+      Restricting to actual stuffed segments (instead of the whole
+      document) prevents short keywords from matching as an incidental
+      substring of an unrelated, non-obfuscated word.
+    """
+    keyword_norm = normalize_words(keyword)
+    if not keyword_norm:
+        return 0, False
+
+    words_text = normalize_words(raw_text)
+    pattern = r'\b' + re.escape(keyword_norm).replace(r'\ ', r'\s+') + r'\b'
+    hits = len(re.findall(pattern, words_text))
+
+    keyword_glued = keyword_norm.replace(' ', '')
+    via_stuffed = False
+    if keyword_glued and hits == 0:
+        segments = collapse_stuffed_segments(raw_text)
+        via_stuffed = any(keyword_glued in seg for seg in segments)
+
+    return hits, via_stuffed
+
+
+# ══════════════════════════════════════════════════════════════════
+# ─── FIX #2: Separate URL vs. Body Keyword Scanning Strategies ─────
+# ══════════════════════════════════════════════════════════════════
+#
+# A keyword typed into a URL/query string is a deliberate, low-noise
+# signal (short string, user- or app-authored) -> a single hit is
+# sufficient to act on. A keyword buried once in a 2,000-word response
+# body is comparatively weak evidence and needs corroboration (repeat
+# occurrences, or a stuffed-bypass hit, which is inherently suspicious
+# regardless of count).
+
+def scan_url_keywords(url_text: str, path_text: str, keywords):
+    """
+    Strict scan for URL/path context: ANY whole-word hit, or ANY
+    stuffed-bypass hit, is sufficient to flag - URLs are short and
+    deliberately constructed, so a single match is meaningful evidence.
+    Returns the first matched keyword, or None.
+    """
+    for keyword in keywords:
+        hits, via_stuffed = find_keyword_hits(url_text, keyword)
+        if hits == 0:
+            hits, via_stuffed = find_keyword_hits(path_text, keyword)
+        if hits > 0 or via_stuffed:
+            return keyword
+    return None
+
+
+# Body keyword hits need corroboration before blocking outright, since
+# a single passive mention deep in a long article is weak evidence.
+BODY_MIN_OCCURRENCES = 2
+
+def scan_body_keywords(body_text: str, keywords):
+    """
+    Lenient scan for response-body context: requires either
+    BODY_MIN_OCCURRENCES+ whole-word hits, or any stuffed-bypass hit
+    (obfuscation is suspicious on its own regardless of frequency).
+    Returns the first matched keyword, or None.
+    """
+    for keyword in keywords:
+        hits, via_stuffed = find_keyword_hits(body_text, keyword)
+        if via_stuffed or hits >= BODY_MIN_OCCURRENCES:
+            return keyword
+    return None
+
+
+# ══════════════════════════════════════════════════════════════════
+# ─── FIX #3: Proportional Density Scoring + Override Guards ────────
+# ══════════════════════════════════════════════════════════════════
+MIN_DISTINCT_CATEGORY_KEYWORDS = 2   # need >=2 distinct keywords from a category...
+MIN_CATEGORY_DENSITY = 0.008          # ...AND >=0.8% of all content tokens, to shift category
+PROTECTED_HINT_HARMFUL_DISTINCT = 4  # stricter bar to override an Educational/Productive domain hint
+PROTECTED_HINT_HARMFUL_DENSITY = 0.02
+
+
 def get_domain_hint(host):
     category_hints = load_category_hints()
     clean = host.lstrip("www.")
@@ -333,76 +451,125 @@ def get_domain_hint(host):
             return category, 3
     return None, 0
 
+
 def categorize_content(text, host=""):
     if not text:
         text = ""
 
     hint_category, hint_score = get_domain_hint(host)
-    
+    protected_hint = hint_category in ("Educational", "Productive")
+
     config = load_proxy_config()
     nlp_enabled = config['nlp_enabled']
 
     if nlp_enabled:
         doc      = nlp(text[:10000]) if len(text) >= 20 else None
         entities = [(ent.text, ent.label_) for ent in doc.ents] if doc else []
-        tokens   = {t.lemma_.lower() for t in doc
-                    if not t.is_stop and t.is_alpha} if doc else set()
+        tokens   = [t.lemma_.lower() for t in doc
+                    if not t.is_stop and t.is_alpha] if doc else []
     else:
         doc = None
         entities = []
-        tokens = set(normalize_text(text).split()) if len(text) >= 20 else set()
+        tokens = normalize_words(text).split() if len(text) >= 20 else []
 
+    total_tokens = max(len(tokens), 1)
+    token_counts = Counter(tokens)
+
+    # Density-based scoring: score = (occurrences of category keywords) / (total tokens),
+    # rather than a naive set-intersection size, so a 2,000-word article that happens to
+    # contain one incidental "shocking" doesn't score the same as a page saturated with
+    # trigger words.
     scores = {}
+    distinct_matches = {}
     for category, keywords in CATEGORY_KEYWORDS.items():
-        scores[category] = len(tokens & keywords)
+        matched_keywords = set(token_counts) & keywords
+        occurrence_count = sum(token_counts[k] for k in matched_keywords)
+        scores[category] = occurrence_count / total_tokens
+        distinct_matches[category] = len(matched_keywords)
 
-    if hint_category:
-        scores[hint_category] = scores.get(hint_category, 0) + hint_score
-    
-    # NER count weighting - add weighted scores based on entity types
+    # NER weighting nudges density scores slightly rather than adding large flat integers,
+    # so a handful of named entities can't singlehandedly flip the category.
     if doc and doc.ents:
         for ent in doc.ents:
-            # Academic/professional entities boost Educational category
             if ent.label_ in ["LAW", "WORK_OF_ART", "EVENT", "ORG", "PERSON", "GPE"]:
-                scores["Educational"] = scores.get("Educational", 0) + 2
-            # Dates/numbers can indicate productive work
+                scores["Educational"] = scores.get("Educational", 0) + (1 / total_tokens)
             elif ent.label_ in ["DATE", "TIME", "CARDINAL", "ORDINAL"]:
-                scores["Productive"] = scores.get("Productive", 0) + 1
+                scores["Productive"] = scores.get("Productive", 0) + (1 / total_tokens)
 
-    if scores.get("Harmful", 0) > 0:
-        # Downgrade harmful if contains common utility terms
+    if hint_category:
+        # A confirmed domain hint is strong, deliberate admin input - give it a
+        # substantial density boost so it firmly anchors the category unless a
+        # LOT of contrary evidence shows up.
+        scores[hint_category] = scores.get(hint_category, 0) + (hint_score / total_tokens) + 0.05
+
+    # ── Minimum threshold gate ──
+    # A category (other than the hint category) may only "win" if it clears BOTH
+    # a minimum distinct-keyword count and a minimum density. This prevents 2-3
+    # rogue keyword tokens scattered through a long educational page from
+    # dragging the whole page into Distracting/Harmful.
+    def clears_threshold(category):
+        return (distinct_matches.get(category, 0) >= MIN_DISTINCT_CATEGORY_KEYWORDS
+                and scores.get(category, 0) >= MIN_CATEGORY_DENSITY)
+
+    harmful_score = scores.get("Harmful", 0)
+    if harmful_score > 0:
         utility_terms = {"git", "code", "dev", "assets", "static", "github", "google", "microsoft", "apple"}
-        if any(term in tokens for term in utility_terms):
-            return "Educational", entities
-        return "Harmful", entities
+        has_utility_context = any(term in token_counts for term in utility_terms)
 
-    best = max(scores, key=scores.get)
-    if scores[best] == 0:
-        return "Uncategorized", entities
+        if protected_hint:
+            # Strict override guard: an Educational/Productive domain hint can only be
+            # overridden by Harmful if the evidence is overwhelming (many distinct
+            # keywords AND high density) - a few rogue words are not enough.
+            overwhelming = (distinct_matches.get("Harmful", 0) >= PROTECTED_HINT_HARMFUL_DISTINCT
+                            and harmful_score >= PROTECTED_HINT_HARMFUL_DENSITY)
+            if not overwhelming:
+                return hint_category, entities
+            if has_utility_context:
+                return "Educational", entities
+            return "Harmful", entities
+
+        if not clears_threshold("Harmful"):
+            # Doesn't clear the minimum bar - fall through to normal scoring below
+            # instead of auto-flagging Harmful off a single stray keyword.
+            scores["Harmful"] = 0
+        elif has_utility_context:
+            return "Educational", entities
+        else:
+            return "Harmful", entities
+
+    # For non-Harmful categories, likewise require the minimum threshold before
+    # leaving Uncategorized/the hinted category.
+    eligible = {c: s for c, s in scores.items()
+                if c == hint_category or clears_threshold(c)}
+
+    if not eligible:
+        return (hint_category if hint_category else "Uncategorized"), entities
+
+    best = max(eligible, key=eligible.get)
+    if eligible[best] <= 0:
+        return (hint_category if hint_category else "Uncategorized"), entities
 
     return best, entities
+
 
 # ─── Traffic Control Throttling ───────────────────────────────────────
 def apply_throttle(client_ip):
     """Apply Linux tc traffic control to throttle client bandwidth"""
     config = load_proxy_config()
     throttle_rate = config['throttle_rate']
-    
+
     try:
-        # Create root qdisc if not exists
         subprocess.run(
             ["tc", "qdisc", "add", "dev", "eth0", "root", "handle", "1:", "htb"],
             check=False, capture_output=True
         )
-        
-        # Create class for throttled traffic
+
         subprocess.run(
             ["tc", "class", "add", "dev", "eth0", "parent", "1:", "classid", "1:10",
              "htb", "rate", throttle_rate, "ceil", throttle_rate],
             check=False, capture_output=True
         )
-        
-        # Create filter to mark traffic from client IP
+
         subprocess.run(
             ["tc", "filter", "add", "dev", "eth0", "protocol", "ip", "parent", "1:0",
              "prio", "1", "u32", "match", "ip", "src", client_ip, "flowid", "1:10"],
@@ -432,18 +599,17 @@ def remove_throttle(client_ip):
 def tail_dnsmasq_log():
     """Background thread to tail dnsmasq log for passive DNS tracking"""
     log_path = "/var/log/dnsmasq.log"
-    
+
     while True:
         try:
             with open(log_path, 'r') as f:
-                f.seek(0, 2)  # Start from end of file
+                f.seek(0, 2)
                 while True:
                     line = f.readline()
                     if not line:
                         time.sleep(0.1)
                         continue
-                    
-                    # Parse DNS query format: query[A] domain.com from 192.168.10.20
+
                     if "query[" in line and " from " in line:
                         parts = line.split()
                         for i, part in enumerate(parts):
@@ -451,8 +617,7 @@ def tail_dnsmasq_log():
                                 if i + 2 < len(parts):
                                     domain = parts[i + 1]
                                     client_ip = parts[i + 3]
-                                    
-                                    # Track velocity for DNS queries
+
                                     flagged, rpm_now, rpm_base = should_throttle(client_ip, domain)
                                     if flagged and client_ip not in throttled_clients:
                                         throttled_clients.add(client_ip)
@@ -460,8 +625,7 @@ def tail_dnsmasq_log():
                                         apply_throttle(client_ip)
                                         print(f"[VIGILANT] DNS DOOMSCROLL DETECTED {client_ip} @ {domain} "
                                               f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
-                                    
-                                    # Log DNS query for dashboard visibility
+
                                     log_request(client_ip, domain, "(DNS_QUERY)", "DNS", "DNS_Tracked", False, [])
                                     break
         except FileNotFoundError:
@@ -470,14 +634,54 @@ def tail_dnsmasq_log():
             print(f"[VIGILANT] DNS log tailing error: {e}")
             time.sleep(5)
 
+
+# ══════════════════════════════════════════════════════════════════
+# ─── FIX #4 (partial): Sampled Scanning for Oversized Payloads ─────
+# ══════════════════════════════════════════════════════════════════
+# Infinite-scroll / large JSON payloads used to blow past MAX_PAYLOAD_SIZE
+# and get a complete pass with zero inspection. Instead, we sample a
+# bounded prefix and suffix of the RAW BYTES (never touching the full
+# body, so memory stays bounded regardless of total payload size) and
+# run the same keyword + NLP pipeline against that sample. This is not
+# perfect coverage of a huge payload, but it means large dynamic
+# responses are never entirely unfiltered.
+MAX_PAYLOAD_SIZE = 5 * 1024 * 1024      # hard cap before we stop trying to fully decode
+SAMPLE_PREFIX_BYTES = 512 * 1024        # ~512KB from the start (headlines/titles/first posts)
+SAMPLE_SUFFIX_BYTES = 256 * 1024        # ~256KB from the end (catches trailing chunks)
+
+
+def get_scan_text(flow_response) -> (str, bool):
+    """
+    Returns (text_to_scan, was_sampled). For payloads under the cap,
+    returns the fully decoded text. For oversized payloads, decodes only
+    a bounded prefix+suffix slice of the raw bytes so we never hold or
+    regex-scan the entire multi-megabyte body in memory.
+    """
+    raw = flow_response.content or b""
+    if len(raw) <= MAX_PAYLOAD_SIZE:
+        return (flow_response.text or ""), False
+
+    charset = flow_response.charset or "utf-8"
+    prefix = raw[:SAMPLE_PREFIX_BYTES]
+    suffix = raw[-SAMPLE_SUFFIX_BYTES:] if len(raw) > SAMPLE_PREFIX_BYTES else b""
+
+    def _decode(chunk):
+        try:
+            return chunk.decode(charset, errors="ignore")
+        except (LookupError, Exception):
+            return chunk.decode("utf-8", errors="ignore")
+
+    sample_text = _decode(prefix) + " " + _decode(suffix)
+    return sample_text, True
+
+
 # ─── mitmproxy Addon ──────────────────────────────────────────────
 class VIGILANTAddon:
 
     def __init__(self):
         init_db()
         print("[VIGILANT] Addon loaded. DB initialised. NLP model ready.")
-        
-        # Start DNS log tailing thread
+
         dns_thread = threading.Thread(target=tail_dnsmasq_log, daemon=True)
         dns_thread.start()
         print("[VIGILANT] DNS log tailing thread started")
@@ -485,33 +689,27 @@ class VIGILANTAddon:
     def tls_clienthello(self, layer):
         """TLS ClientHello hook for mobile SNI fallback tracking"""
         try:
-            # In modern mitmproxy, ClientHelloData does not have direct .client_conn property
-            # Access client IP through the context block
             if hasattr(layer, "context") and hasattr(layer.context, "client_conn"):
                 client_ip = layer.context.client_conn.peername[0]
             else:
-                # Fallback for older mitmproxy versions or different contexts
                 print(f"[VIGILANT] TLS ClientHello: Unable to determine client IP, skipping SNI tracking")
                 return
-            
+
             sni = layer.client_hello.sni if hasattr(layer, "client_hello") else None
-            
+
             if sni:
-                # Check if SNI belongs to bypassed social domains
                 clean_sni = sni.lstrip("www.")
                 base = ".".join(clean_sni.split(".")[-2:])
-                
-                # Track velocity at TLS handshake phase
+
                 flagged, rpm_now, rpm_base = should_throttle(client_ip, sni)
-                
+
                 if flagged and client_ip not in throttled_clients:
                     throttled_clients.add(client_ip)
                     log_throttle(client_ip, sni, rpm_now, rpm_base, "TLS_THROTTLE_APPLIED")
                     apply_throttle(client_ip)
                     print(f"[VIGILANT] TLS DOOMSCROLL DETECTED {client_ip} @ {sni} "
                           f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
-                
-                # If SNI belongs to bypassed domains, log fallback request
+
                 social_domains = load_social_domains()
                 if any(base in d for d in social_domains):
                     log_request(client_ip, sni, "(TLS_SNI)", "TLS", "Mobile_Bypass", False, [])
@@ -520,45 +718,83 @@ class VIGILANTAddon:
             print(f"[VIGILANT] TLS ClientHello attribute error: {e}")
         except Exception as e:
             print(f"[VIGILANT] TLS ClientHello error: {e}")
-    
+
     def request(self, flow: http.HTTPFlow):
         client_ip = flow.client_conn.peername[0]
         host      = flow.request.pretty_host
-        
-        # Whitelist bypass: asset subdomains
+
+        # Whitelist bypass: asset subdomains (kept ahead of everything else - these
+        # are infrastructure/CDN domains, not user-navigable content).
         if is_whitelisted(host):
             log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Educational", False, [])
             print(f"[VIGILANT] WHITELIST BYPASS (request): {host} -> {client_ip}")
             return
-        
-        # TLS Passthrough: Check if host belongs to pinned SSL certificate domains
-        # These apps have hardcoded SSL pinning and must pass through without decryption
+
+        # ══════════════════════════════════════════════════════════════
+        # FIX #3 (bypass sealing): Strict keyword blacklist now runs BEFORE
+        # the pinned-domain TLS-passthrough check. Previously, any domain
+        # on the pinned list (e.g. instagram.com, tiktok.com) skipped ALL
+        # filtering unconditionally - which meant a blacklisted term could
+        # simply be routed through query params on those apps and sail
+        # through untouched. Now: if a blacklisted keyword is explicitly
+        # present in the raw URL/path, the request is dropped immediately,
+        # regardless of whether the domain is pinned.
+        # ══════════════════════════════════════════════════════════════
+        try:
+            with db_lock:
+                conn = sqlite3.connect(DB_PATH)
+                cursor = conn.execute("SELECT keyword FROM keyword_blacklist")
+                keywords = [row[0] for row in cursor.fetchall()]
+                conn.close()
+
+            if keywords:
+                try:
+                    decoded_url = urllib.parse.unquote(flow.request.pretty_url)
+                except Exception:
+                    decoded_url = flow.request.pretty_url
+
+                path_text = flow.request.path[:2000]
+
+                matched = scan_url_keywords(decoded_url, path_text, keywords)
+                if matched:
+                    print(f"[VIGILANT] KEYWORD BLOCKED (pre-passthrough): {matched} in {decoded_url[:60]} from {client_ip}")
+                    log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [])
+                    flow.response = http.Response.make(
+                        403,
+                        b"Blocked by Vigilant Gateway",
+                        {"Content-Type": "text/plain"}
+                    )
+                    return
+        except sqlite3.Error as e:
+            print(f"[VIGILANT] Keyword blacklist check failed: {e}")
+
+        # TLS Passthrough: Check if host belongs to pinned SSL certificate domains.
+        # This now only skips CATEGORY/NLP filtering - the explicit blacklist scan
+        # above has already run regardless of pin status.
         config = load_proxy_config()
         pinned_domains = config['pinned_domains']
-        
+
         clean_host = host.lstrip("www.")
         base_domain = ".".join(clean_host.split(".")[-2:])
         is_pinned = any(base_domain in d or clean_host == d or clean_host.endswith("." + d) for d in pinned_domains)
-        
+
         if is_pinned:
-            # Allow pinned domains to pass through cleanly without any filtering
-            print(f"[VIGILANT] TLS PASSTHROUGH: {host} from {client_ip} (pinned domain)")
+            print(f"[VIGILANT] TLS PASSTHROUGH: {host} from {client_ip} (pinned domain, blacklist already checked)")
             return
 
         # STEP 1: Exact Domain Evaluation - Check category hints for strict override
-        # This takes precedence over all heuristic/keyword rules
         category_hints = load_category_hints()
         domain_category = None
-        
+
         for category, domains in category_hints.items():
             if any(clean_host == d or clean_host.endswith("." + d) for d in domains):
                 domain_category = category
                 print(f"[VIGILANT] DOMAIN OVERRIDE: {host} -> {category} (category hint match)")
                 break
-        
-        # STEP 2: Strict Keyword Scan - Only if domain is unmapped
-        # Fully decode URL parameters and enforce clear context boundary checks
-        # Using advanced text normalization to catch obfuscated keywords
+
+        # Optional secondary check: scan request BODY (POST payloads) with the more
+        # lenient body-context rules, since body text is closer to passive content
+        # than a deliberately-typed URL.
         if domain_category is None:
             try:
                 with db_lock:
@@ -568,42 +804,23 @@ class VIGILANTAddon:
                     conn.close()
 
                 if keywords:
-                    # Decode URL to handle percent-encoding (e.g., %20 for spaces)
-                    try:
-                        decoded_url = urllib.parse.unquote(flow.request.pretty_url)
-                    except Exception:
-                        decoded_url = flow.request.pretty_url
-                    
-                    # Extract raw request body text if available
                     try:
                         request_body = flow.request.get_text(strict=False) if flow.request.content else ""
                     except Exception:
                         request_body = ""
 
-                    # Normalize URL and body for comparison
-                    normalized_url = normalize_text(decoded_url)
-                    normalized_body = normalize_text(request_body)
-
-                    for keyword in keywords:
-                        # Normalize keyword using the same function
-                        normalized_keyword = normalize_text(keyword)
-                        
-                        # Skip empty normalized keywords
-                        if not normalized_keyword:
-                            continue
-                        
-                        # Check if normalized keyword found in normalized URL or body
-                        if normalized_keyword in normalized_url or normalized_keyword in normalized_body:
-                            print(f"[VIGILANT] KEYWORD BLOCKED: {keyword} (normalized: {normalized_keyword}) in {decoded_url[:60]} from {client_ip}")
-                            log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [])
-                            flow.response = http.Response.make(
-                                403,
-                                b"Blocked by Vigilant Gateway",
-                                {"Content-Type": "text/plain"}
-                            )
-                            return
+                    matched = scan_body_keywords(request_body, keywords)
+                    if matched:
+                        print(f"[VIGILANT] KEYWORD BLOCKED (request body): {matched} from {client_ip}")
+                        log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [])
+                        flow.response = http.Response.make(
+                            403,
+                            b"Blocked by Vigilant Gateway",
+                            {"Content-Type": "text/plain"}
+                        )
+                        return
             except sqlite3.Error as e:
-                print(f"[VIGILANT] Keyword blacklist check failed: {e}")
+                print(f"[VIGILANT] Request body keyword blacklist check failed: {e}")
 
         flagged, rpm_now, rpm_base = should_throttle(client_ip, host)
         if flagged and client_ip not in throttled_clients:
@@ -619,68 +836,56 @@ class VIGILANTAddon:
         path         = flow.request.path[:120]
         method       = flow.request.method
         content_type = flow.response.headers.get("content-type", "")
-        
-        # Whitelist bypass: asset subdomains
+
         if is_whitelisted(host):
             log_request(client_ip, host, path, method, "Educational", False, [])
             print(f"[VIGILANT] WHITELIST BYPASS (response): {host} -> {client_ip}")
             return
-        
-        # TLS Passthrough: Skip response filtering for pinned domains
+
         config = load_proxy_config()
         pinned_domains = config['pinned_domains']
-        
+
         clean_host = host.lstrip("www.")
         base_domain = ".".join(clean_host.split(".")[-2:])
         is_pinned = any(base_domain in d or clean_host == d or clean_host.endswith("." + d) for d in pinned_domains)
-        
+
         if is_pinned:
-            # Allow pinned domains to pass through without response analysis
+            # Response bodies for pinned (cert-pinned social) apps are still skipped -
+            # the request-side blacklist scan is the enforcement point for these, since
+            # response bodies for these apps are frequently binary/protobuf rather than
+            # readable text anyway.
             return
 
-        # STEP 1: Exact Domain Evaluation - Check category hints for strict override
-        # This takes precedence over all heuristic/keyword rules
         category_hints = load_category_hints()
         domain_category = None
-        
+
         for category, domains in category_hints.items():
             if any(clean_host == d or clean_host.endswith("." + d) for d in domains):
                 domain_category = category
                 break
 
-        # Handle both HTML and JSON responses for keyword filtering
-        # Skip binary content types to avoid wasting CPU cycles on image/video/audio data
         TEXT_CONTENT_TYPES = {"text/html", "application/json", "text/plain", "text/javascript", "application/javascript", "text/css", "application/xml", "text/xml"}
-        
+
         if not any(ct in content_type for ct in TEXT_CONTENT_TYPES):
-            # Use domain category if available, otherwise categorize as Non-HTML
             final_category = domain_category if domain_category else "Non-HTML"
             log_request(client_ip, host, path, method, final_category, False, [])
             return
 
-        # Error handling for large packet payloads (e.g. > 5MB)
-        MAX_PAYLOAD_SIZE = 5 * 1024 * 1024
+        # ── Sampled scanning for oversized payloads (see get_scan_text) ──
         try:
-            if flow.response.content and len(flow.response.content) > MAX_PAYLOAD_SIZE:
-                print(f"[VIGILANT] Payload too large ({len(flow.response.content)} bytes) for {host}, skipping NLP")
-                final_category = domain_category if domain_category else "Uncategorized"
-                log_request(client_ip, host, path, method, final_category, False, [])
-                return
-                
-            # Safely decode the full content payload with decompression automatically handled
-            body = flow.response.text or ""
-            
+            body, was_sampled = get_scan_text(flow.response)
+            if was_sampled:
+                print(f"[VIGILANT] Large payload for {host} ({len(flow.response.content)} bytes) - "
+                      f"scanning sampled prefix/suffix instead of skipping analysis entirely")
+
             if "text/html" in content_type:
-                # Strip out scripts and styles before removing other HTML tags
                 clean = re.sub(r'<(script|style)[^>]*>.*?</\1>', ' ', body, flags=re.IGNORECASE | re.DOTALL)
                 clean = re.sub(r"<[^>]+>", " ", clean)
                 clean = re.sub(r"\s+", " ", clean).strip()
             elif "application/json" in content_type:
-                # For JSON responses, extract text content by removing structural characters
                 clean = re.sub(r'[{}\[\]",:]', ' ', body)
                 clean = re.sub(r"\s+", " ", clean).strip()
             else:
-                # For other text types, just normalize whitespace
                 clean = re.sub(r"\s+", " ", body).strip()
         except ValueError:
             print(f"[VIGILANT] Failed to decode text payload for {host}")
@@ -689,18 +894,17 @@ class VIGILANTAddon:
             print(f"[VIGILANT] Error processing response payload for {host}: {e}")
             clean = ""
 
-        # STEP 2: Use domain category if available, otherwise use NLP categorization
         if domain_category:
             category = domain_category
             entities = []
         else:
             category, entities = categorize_content(clean, host)
-        
+
         flagged = category == "Harmful"
 
-        # STEP 3: Additional keyword blacklist check on response content for text-based responses
-        # Only if domain is unmapped (no category hint) and content is text-based
-        # Using advanced text normalization to catch obfuscated keywords
+        # Additional keyword blacklist check on response content, using the lenient
+        # body-context rules (repeat occurrences or stuffed-bypass required - see
+        # FIX #2), only when the domain isn't already explicitly categorized.
         if domain_category is None and any(ct in content_type for ct in TEXT_CONTENT_TYPES):
             try:
                 with db_lock:
@@ -710,27 +914,16 @@ class VIGILANTAddon:
                     conn.close()
 
                 if keywords:
-                    # Normalize the cleaned response content
-                    normalized_content = normalize_text(clean)
-                    
-                    for keyword in keywords:
-                        # Normalize keyword using the same function
-                        normalized_keyword = normalize_text(keyword)
-                        
-                        # Skip empty normalized keywords
-                        if not normalized_keyword:
-                            continue
-                        
-                        # Check if normalized keyword found in normalized content
-                        if normalized_keyword in normalized_content:
-                            print(f"[VIGILANT] RESPONSE KEYWORD BLOCKED: {keyword} (normalized: {normalized_keyword}) in {content_type} response from {host}")
-                            log_request(client_ip, host, path, method, "Harmful", True, [])
-                            flow.response = http.Response.make(
-                                403,
-                                b"Blocked by Vigilant Gateway",
-                                {"Content-Type": "text/plain"}
-                            )
-                            return
+                    matched = scan_body_keywords(clean, keywords)
+                    if matched:
+                        print(f"[VIGILANT] RESPONSE KEYWORD BLOCKED: {matched} in {content_type} response from {host}")
+                        log_request(client_ip, host, path, method, "Harmful", True, [])
+                        flow.response = http.Response.make(
+                            403,
+                            b"Blocked by Vigilant Gateway",
+                            {"Content-Type": "text/plain"}
+                        )
+                        return
             except sqlite3.Error as e:
                 print(f"[VIGILANT] Response keyword blacklist check failed: {e}")
 
