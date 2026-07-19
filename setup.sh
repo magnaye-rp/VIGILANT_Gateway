@@ -329,10 +329,15 @@ EOF
     # Apply clean NAT routing rules
     log_info "Applying NAT routing rules..."
     iptables -t nat -A POSTROUTING -o "$WAN_INTERFACE" -j MASQUERADE
-    iptables -A FORWARD -i "$LAN_INTERFACE" -o "$WAN_INTERFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
-    iptables -A FORWARD -i "$LAN_INTERFACE" -o "$WAN_INTERFACE" -j ACCEPT
+    
+    # 1. BLOCK UDP 443/80 FIRST (Stops the traffic before it can be allowed out)
     iptables -A FORWARD -i "$LAN_INTERFACE" -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable
     iptables -A FORWARD -i "$LAN_INTERFACE" -p udp --dport 80 -j REJECT --reject-with icmp-port-unreachable
+    iptables -A OUTPUT -p udp --dport 443 -j DROP
+    
+    # 2. ALLOW EVERYTHING ELSE NEXT (Safe to allow now that UDP 443 is blocked)
+    iptables -A FORWARD -i "$LAN_INTERFACE" -o "$WAN_INTERFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
+    iptables -A FORWARD -i "$LAN_INTERFACE" -o "$WAN_INTERFACE" -j ACCEPT
     
     # Save rules persistently
     log_info "Saving iptables rules persistently..."
@@ -373,6 +378,7 @@ wpa_passphrase=VigilantGateway2026
 # Intel AP Stability Optimizations
 ap_max_inactivity=300
 skip_inactivity_poll=1
+
 EOF
 
     log_info "Updating system default hostapd daemon reference..."

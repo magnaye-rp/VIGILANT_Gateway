@@ -21,7 +21,7 @@ DEFAULT_PINNED_DOMAINS = "instagram.com,facebook.com,tiktok.com,x.com,twitter.co
 # Global asset whitelist
 GLOBAL_WHITELIST = {
     "github.com", "githubassets.com", "githubusercontent.com", "git-scm.com",
-    "gstatic.com", "googleapis.com", "googleusercontent.com", # Removed "google.com"
+    "gstatic.com", "googleapis.com", "googleusercontent.com",
     "microsoft.com", "windows.net", "live.com", "office.com", "apple.com",
     "mzstatic.com", "icloud.com", "aws.amazon.com", "cloudfront.net", "cdnjs.cloudflare.com"
 }
@@ -41,7 +41,7 @@ DEFAULT_SOCIAL_DOMAINS = {
     "tiktok.com", "www.tiktok.com",
     "instagram.com", "www.instagram.com",
     "reddit.com", "www.reddit.com",
-    "youtube.com", "www.youtube.com",
+    # "youtube.com", "www.youtube.com",
 }
 
 CATEGORY_KEYWORDS = {
