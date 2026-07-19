@@ -21,7 +21,7 @@ DEFAULT_PINNED_DOMAINS = "instagram.com,facebook.com,tiktok.com,x.com,twitter.co
 # Global asset whitelist
 GLOBAL_WHITELIST = {
     "github.com", "githubassets.com", "githubusercontent.com", "git-scm.com",
-    "google.com", "gstatic.com", "googleapis.com", "googleusercontent.com",
+    "gstatic.com", "googleapis.com", "googleusercontent.com", # Removed "google.com"
     "microsoft.com", "windows.net", "live.com", "office.com", "apple.com",
     "mzstatic.com", "icloud.com", "aws.amazon.com", "cloudfront.net", "cdnjs.cloudflare.com"
 }
@@ -997,7 +997,14 @@ class VIGILANTAddon:
                     conn.close()
 
                 if keywords:
-                    matched = scan_body_keywords(clean, keywords)
+                    try:
+                        request_body = flow.request.get_text(strict=False) if flow.request.content else ""
+                    except Exception:
+                        request_body = ""
+                    if "google.com" in host:
+                        matched = scan_url_keywords(request_body, "", keywords)
+                    else:
+                        matched = scan_body_keywords(request_body, keywords)
                     if matched:
                         print(f"[VIGILANT] RESPONSE KEYWORD BLOCKED: {matched} in {content_type} response from {host}")
                         log_request(client_ip, host, path, method, "Harmful", True, [])
