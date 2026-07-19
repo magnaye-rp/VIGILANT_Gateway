@@ -804,43 +804,48 @@ class VIGILANTAddon:
         print("[VIGILANT] DNS log tailing thread started")
 
     def tls_clienthello(self, data):
-        """TLS ClientHello hook for transparent SNI domain logging with native passthrough"""
-        try:
-            if data.sni and any(domain in data.sni for domain in ["apple.com", "icloud.com"]):
-                data.ignore_connection = True
-                return
-            # Use standard mitmproxy peername extraction
-            client_ip = data.context.client_conn.peername[0]
+    """TLS ClientHello hook for transparent SNI domain logging with full decryption capability"""
+    try:
+        # 1. Direct attribute access for modern mitmproxy
+        sni = data.sni
+
+        # 2. Safely bypass internal Apple ecosystem traffic to prevent device lockups
+        if sni and any(domain in sni for domain in ["apple.com", "icloud.com"]):
+            data.ignore_connection = True
+            return
+
+        # 3. Use the verified modern mitmproxy peername path
+        client_ip = data.context.client_conn.peername[0]
+
+        if sni:
+            # Log ALL SNI domains immediately to dashboard database
+            self.log_to_dashboard(client_ip, sni)
             
-            sni = data.client_hello.sni if hasattr(data, "client_hello") else None
+            # NOTE: Removed `data.ignore_connection = True` from here.
+            # This allows mitmproxy to step forward and complete the TLS handshake 
+            # using the trusted certificate you installed via AirDrop.
 
-            if sni:
-                # Log ALL SNI domains immediately to dashboard database
-                self.log_to_dashboard(client_ip, sni)
+            clean_sni = sni.lstrip("www.")
+            base = ".".join(clean_sni.split(".")[-2:])
+
+            flagged, rpm_now, rpm_base = should_throttle(client_ip, sni)
+
+            if flagged and client_ip not in throttled_clients:
+                throttled_clients.add(client_ip)
+                log_throttle(client_ip, sni, rpm_now, rpm_base, "TLS_THROTTLE_APPLIED")
+                apply_throttle(client_ip)
+                print(f"[VIGILANT] TLS DOOMSCROLL DETECTED {client_ip} @ {sni} "
+                      f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
+
+            social_domains = load_social_domains()
+            if any(base in d for d in social_domains):
+                log_request(client_ip, sni, "(TLS_SNI)", "TLS", "Mobile_Bypass", False, [])
+                print(f"[VIGILANT] TLS SNI bypass logged: {client_ip} -> {sni}")
                 
-                # Ignore connection to allow native TLS handshake continuation
-                data.ignore_connection = True
-                
-                clean_sni = sni.lstrip("www.")
-                base = ".".join(clean_sni.split(".")[-2:])
-
-                flagged, rpm_now, rpm_base = should_throttle(client_ip, sni)
-
-                if flagged and client_ip not in throttled_clients:
-                    throttled_clients.add(client_ip)
-                    log_throttle(client_ip, sni, rpm_now, rpm_base, "TLS_THROTTLE_APPLIED")
-                    apply_throttle(client_ip)
-                    print(f"[VIGILANT] TLS DOOMSCROLL DETECTED {client_ip} @ {sni} "
-                          f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
-
-                social_domains = load_social_domains()
-                if any(base in d for d in social_domains):
-                    log_request(client_ip, sni, "(TLS_SNI)", "TLS", "Mobile_Bypass", False, [])
-                    print(f"[VIGILANT] TLS SNI bypass logged: {client_ip} -> {sni}")
-        except (AttributeError, IndexError, TypeError) as e:
-            print(f"[VIGILANT] TLS ClientHello: Failed to extract client IP: {e}")
-        except Exception as e:
-            print(f"[VIGILANT] TLS ClientHello error: {e}")
+    except (AttributeError, IndexError, TypeError) as e:
+        print(f"[VIGILANT] TLS ClientHello: Failed to extract client IP or data structures: {e}")
+    except Exception as e:
+        print(f"[VIGILANT] TLS ClientHello global framework error: {e}")
 
     def log_to_dashboard(self, client_ip: str, sni: str):
         """Log SNI domain to dashboard database for transparent passthrough tracking"""
