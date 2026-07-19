@@ -135,7 +135,7 @@
               <span id="metrics-toolkit-toggle">▼</span> Metrics Toolkit
             </button>
             <div id="metrics-toolkit-content" style="display: none; margin-top: 1rem; padding: 1rem; background: var(--surface-lighter); border-radius: 8px; font-size: 0.85rem; color: var(--text-secondary);">
-              <strong>RX/TX Calculations:</strong> Throughput is calculated by reading byte differences from /proc/net/dev over 1-second intervals for active interfaces (e.g., wlp1s0 and enp0s31f6). Values are converted to Mbps using the formula: (bytes × 8) / (1,048,576 × time_diff).<br><br>
+              <strong>RX/TX Calculations:</strong> Throughput is calculated by reading byte differences from /proc/net/dev over 1-second intervals for active Ethernet interfaces (e.g., eth0 and eth1). Values are converted to Mbps using the formula: (bytes × 8) / (1,048,576 × time_diff).<br><br>
               <strong>Bandwidth Throttling:</strong> Thresholds are measured in requests per minute for network velocity and scroll events per minute for physical scroll telemetry. Custom values can be set when the preset is set to "Custom".
             </div>
           </div>
@@ -166,10 +166,6 @@
             <div>
               <div style="font-size: 0.9rem; margin-bottom: 0.5rem;">MITM Proxy</div>
               <span id="status-mitmproxy" class="category-badge success">Active</span>
-            </div>
-            <div>
-              <div style="font-size: 0.9rem; margin-bottom: 0.5rem;">Hostapd (AP)</div>
-              <span id="status-hostapd" class="category-badge success">Active</span>
             </div>
             <div>
               <div style="font-size: 0.9rem; margin-bottom: 0.5rem;">Dnsmasq (DHCP/DNS)</div>

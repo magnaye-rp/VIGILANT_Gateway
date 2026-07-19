@@ -298,7 +298,7 @@ async function refreshStats() {
 
     // Update service statuses
     const services = data.statuses || {};
-    ['mitmproxy', 'hostapd', 'dnsmasq'].forEach(svc => {
+    ['mitmproxy', 'dnsmasq'].forEach(svc => {
       const badge = document.getElementById(`status-${svc}`);
       if (badge) {
         const isActive = services[svc] === 'active' || services[svc] === 'running';
@@ -1030,8 +1030,7 @@ async function executeSystemControl(action, buttonElement) {
     'restart_proxy': '🔄 Restarting proxy...',
     'reload_config': '🔄 Restarting dashboard...',
     'reload_firewall': '🔄 Reloading firewall...',
-    'restart_dnsmasq': '🔄 Reloading DNS...',
-    'restart_hostapd': '🔄 Reloading WiFi...'
+    'restart_dnsmasq': '🔄 Reloading DNS...'
   };
   
   // Disable button and show loading state
@@ -1272,7 +1271,7 @@ function startDashboardPolling() {
         sysDisk.textContent = `${data.system.disk_usage}%`;
       }
       
-      ['mitmproxy', 'hostapd', 'dnsmasq'].forEach(svc => {
+      ['mitmproxy', 'dnsmasq'].forEach(svc => {
         const badge = document.getElementById(`status-${svc}`);
         if (badge) {
           const isActive = data.system.services[svc] === 'active' || data.system.services[svc] === 'running';

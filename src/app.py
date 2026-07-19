@@ -47,10 +47,10 @@ app = Flask(
     static_folder=str(STATIC_DIR),
     template_folder=str(TEMPLATE_DIR),
 )
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+CORS(app, resources={r"/*": {"origins": "*"}})
 app.secret_key = "super_secret_vigilant_key"
 
-SERVER_IP = "192.168.10.1"
+SERVER_IP = "192.168.100.88"
 PRODUCTION_DB_PATH = Path("/home/vigilant_admin/vigilant/logs/vigilant.db")
 LOCAL_DB_PATH = BASE_DIR / "logs" / "vigilant.db"
 
@@ -62,9 +62,9 @@ else:
 DEFAULT_CONFIG = {
     "upstream_interface": "eth0",
     "distribution_interface": "eth1",
-    "gateway_ip": "192.168.10.1",
-    "dhcp_start": "192.168.10.10",
-    "dhcp_end": "192.168.10.50",
+    "gateway_ip": "192.168.100.88",
+    "dhcp_start": "192.168.100.10",
+    "dhcp_end": "192.168.100.50",
     "upstream_dns": "8.8.8.8\n8.8.4.4",
     "nlp_enabled": "true",
     "nlp_accuracy": "balanced",
@@ -259,9 +259,9 @@ def _parse_dnsmasq_config() -> dict:
     
     settings = {
         "interface": "eth1",
-        "listen_address": "192.168.10.1",
-        "dhcp_start": "192.168.10.10",
-        "dhcp_end": "192.168.10.50",
+        "listen_address": "192.168.100.88",
+        "dhcp_start": "192.168.100.10",
+        "dhcp_end": "192.168.100.50",
         "dns_servers": ["8.8.8.8", "8.8.4.4"]
     }
     
@@ -298,7 +298,7 @@ def _parse_netplan_config() -> dict:
     settings = {
         "upstream_interface": "eth0",
         "distribution_interface": "eth1",
-        "lan_address": "192.168.10.1/24"
+        "lan_address": "192.168.100.88/24"
     }
     
     if yaml is None or not config_path.exists():
@@ -346,10 +346,10 @@ def _write_dnsmasq_config(config: dict) -> bool:
         
         new_config.append(f"# VIGILANT Gateway dnsmasq configuration\n")
         new_config.append(f"interface={config.get('distribution_interface', 'eth1')}\n")
-        new_config.append(f"dhcp-range={config.get('dhcp_start', '192.168.10.10')},{config.get('dhcp_end', '192.168.10.50')},12h\n")
-        new_config.append(f"dhcp-option=3,{config.get('gateway_ip', '192.168.10.1')}\n")
-        new_config.append(f"dhcp-option=6,{config.get('gateway_ip', '192.168.10.1')}\n")
-        new_config.append(f"listen-address={config.get('gateway_ip', '192.168.10.1')}\n")
+        new_config.append(f"dhcp-range={config.get('dhcp_start', '192.168.100.10')},{config.get('dhcp_end', '192.168.100.50')},12h\n")
+        new_config.append(f"dhcp-option=3,{config.get('gateway_ip', '192.168.100.88')}\n")
+        new_config.append(f"dhcp-option=6,{config.get('gateway_ip', '192.168.100.88')}\n")
+        new_config.append(f"listen-address={config.get('gateway_ip', '192.168.100.88')}\n")
         for dns in dns_servers:
             new_config.append(f"server={dns.strip()}\n")
         new_config.append(f"cache-size=1000\n")
@@ -377,7 +377,7 @@ def _write_netplan_config(config: dict) -> bool:
                 "version": 2,
                 "ethernets": {
                     config.get("upstream_interface", "eth0"): {"dhcp4": True, "dhcp4-overrides": {"use-dns": False}},
-                    config.get("distribution_interface", "eth1"): {"addresses": [f"{config.get('gateway_ip', '192.168.10.1')}/24"], "dhcp4": False}
+                    config.get("distribution_interface", "eth1"): {"addresses": [f"{config.get('gateway_ip', '192.168.100.88')}/24"], "dhcp4": False}
                 }
             }
         }
