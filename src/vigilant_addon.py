@@ -675,6 +675,89 @@ def get_scan_text(flow_response) -> (str, bool):
     return sample_text, True
 
 
+# ══════════════════════════════════════════════════════════════════
+# ─── Flagged / Blocked Page ─────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+# Self-contained HTML (no external CSS/font/CDN dependencies, since this
+# is served directly by the proxy to arbitrary devices) shown whenever
+# a request or response is blocked. Grey background, verdigris shield
+# icon, white text, plus a plain-language explanation of why the page
+# was flagged so it doesn't just look like a dead end.
+
+_CATEGORY_EXPLANATIONS = {
+    "Harmful": (
+        "This page was flagged because it matched language patterns associated "
+        "with harmful, violent, or exploitative content. Flagging is based on "
+        "automated keyword and category analysis, not a manual review, so if you "
+        "think this was blocked by mistake, ask whoever manages this network to "
+        "take a look."
+    ),
+    "Distracting": (
+        "This page was flagged as a high-distraction destination based on its "
+        "content and recent browsing activity (endless-scroll feeds, viral or "
+        "trending content). This is a network-level filter, not a judgment about "
+        "you - ask whoever manages this network if you think the rules need "
+        "adjusting."
+    ),
+}
+_DEFAULT_EXPLANATION = (
+    "This page matched a rule configured for this network's content filter. "
+    "If you think this was blocked by mistake, ask whoever manages this "
+    "network to take a look."
+)
+
+_BLOCK_PAGE_TEMPLATE = """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Blocked - Vigilant Gateway</title>
+<style>
+  body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+       background:#4b4f54;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+       color:#ffffff;}}
+  .card{{max-width:420px;text-align:center;padding:2.5rem 2rem;}}
+  .shield{{width:64px;height:64px;color:#43B3AE;margin-bottom:1.25rem;}}
+  h1{{font-size:22px;font-weight:600;margin:0 0 .5rem;}}
+  .meta{{font-size:14px;color:#c7cacd;margin-bottom:1.25rem;word-break:break-all;}}
+  .category-badge{{display:inline-block;background:rgba(67,179,174,0.15);color:#43B3AE;
+                   font-size:12px;font-weight:600;padding:4px 10px;border-radius:12px;margin-bottom:1.25rem;
+                   letter-spacing:.02em;}}
+  .explain{{font-size:14px;line-height:1.6;color:#e3e5e7;border-top:1px solid rgba(255,255,255,0.15);
+           padding-top:1.25rem;text-align:left;}}
+  .brand{{font-size:12px;font-weight:600;color:#43B3AE;letter-spacing:.08em;margin-bottom:1.5rem;
+         text-transform:uppercase;}}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="brand">V.I.G.I.LA.N.T Gateway</div>
+  <svg class="shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+    <path d="M12 2l8 3v6c0 5-3.5 9-8 11-4.5-2-8-6-8-11V5l8-3z" stroke-linejoin="round"/>
+    <path d="M9 12l2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+  <h1>Access blocked</h1>
+  <div class="meta">{host}</div>
+  <div class="category-badge">{category}</div>
+  <div class="explain">{explanation}</div>
+</div>
+</body>
+</html>"""
+
+
+def render_block_page(host: str, category: str = "Harmful") -> bytes:
+    """
+    Builds the styled block/flagged page shown to the user. Returns
+    UTF-8 encoded bytes ready to hand to http.Response.make().
+    """
+    explanation = _CATEGORY_EXPLANATIONS.get(category, _DEFAULT_EXPLANATION)
+    html = _BLOCK_PAGE_TEMPLATE.format(
+        host=host or "this page",
+        category=category or "Flagged",
+        explanation=explanation,
+    )
+    return html.encode("utf-8")
+
+
 # ─── mitmproxy Addon ──────────────────────────────────────────────
 class VIGILANTAddon:
 
@@ -761,8 +844,8 @@ class VIGILANTAddon:
                     log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [])
                     flow.response = http.Response.make(
                         403,
-                        b"Blocked by Vigilant Gateway",
-                        {"Content-Type": "text/plain"}
+                        render_block_page(host, "Harmful"),
+                        {"Content-Type": "text/html"}
                     )
                     return
         except sqlite3.Error as e:
@@ -815,8 +898,8 @@ class VIGILANTAddon:
                         log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [])
                         flow.response = http.Response.make(
                             403,
-                            b"Blocked by Vigilant Gateway",
-                            {"Content-Type": "text/plain"}
+                            render_block_page(host, "Harmful"),
+                            {"Content-Type": "text/html"}
                         )
                         return
             except sqlite3.Error as e:
@@ -920,8 +1003,8 @@ class VIGILANTAddon:
                         log_request(client_ip, host, path, method, "Harmful", True, [])
                         flow.response = http.Response.make(
                             403,
-                            b"Blocked by Vigilant Gateway",
-                            {"Content-Type": "text/plain"}
+                            render_block_page(host, "Harmful"),
+                            {"Content-Type": "text/html"}
                         )
                         return
             except sqlite3.Error as e:
@@ -934,9 +1017,7 @@ class VIGILANTAddon:
         if flagged:
             flow.response = http.Response.make(
                 403,
-                f"<html><body><h2>VIGILANT Gateway</h2>"
-                f"<p>Access to <b>{host}</b> was blocked.<br>"
-                f"Category: {category}</p></body></html>",
+                render_block_page(host, category),
                 {"Content-Type": "text/html"}
             )
 
