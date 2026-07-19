@@ -806,8 +806,11 @@ class VIGILANTAddon:
     def tls_clienthello(self, data):
         """TLS ClientHello hook for transparent SNI domain logging with native passthrough"""
         try:
+            if data.sni and any(domain in data.sni for domain in ["apple.com", "icloud.com"]):
+                data.ignore_connection = True
+                return
             # Use standard mitmproxy peername extraction
-            client_ip = data.client_conn.peername[0]
+            client_ip = data.context.client_conn.peername[0]
             
             sni = data.client_hello.sni if hasattr(data, "client_hello") else None
 
