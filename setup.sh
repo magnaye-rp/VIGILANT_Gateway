@@ -206,7 +206,18 @@ stage_4_copy_files() {
     log_info "═══════════════════════════════════════════"
     log_info "STAGE 4: COPYING APPLICATION FILES"
     log_info "═══════════════════════════════════════════"
-    
+
+    log_info "Wiping old Python bytecode cache to force code reload..."
+    find "$VIGILANT_HOME" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+    find "$REPO_DIR" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+
+    log_info "Forcing symlink replacement for the addon engine..."
+    # Force remove (-f) the old symlink before creating the new one
+    sudo rm -f "$VIGILANT_HOME/addons/vigilant_addon.py"
+    sudo ln -sf "$SRC_ADDON" "$VIGILANT_HOME/addons/vigilant_addon.py"
+
+
+
     log_info "Copying Python files..."
     cp "$REPO_DIR/src/app.py" "$VIGILANT_HOME/"
     
@@ -665,7 +676,18 @@ stage_11_start_services() {
     log_info "═══════════════════════════════════════════"
     log_info "STAGE 11: STARTING SERVICES"
     log_info "═══════════════════════════════════════════"
-    
+
+    log_info "Force-killing old ghost proxy and dashboard instances..."
+    # This ensures any hanging zombie python/mitm processes are entirely wiped from memory
+    sudo killall mitmdump python3 2>/dev/null || true
+    sleep 1
+
+    log_info "Reloading systemd and restarting updated engines..."
+    sudo systemctl daemon-reload
+    sudo systemctl restart vigilant-firewall
+    sudo systemctl restart vigilant-proxy
+    sudo systemctl restart vigilant-dashboard
+        
     log_info "Starting firewall service..."
     systemctl start vigilant-firewall
     sleep 1
