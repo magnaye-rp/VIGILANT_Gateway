@@ -9,7 +9,18 @@ from mitmproxy import http, tls
 import spacy
 
 # ─── Configuration ────────────────────────────────────────────────
-DB_PATH            = "/home/vigilant_admin/vigilant/logs/vigilant.db"
+import os
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+PRODUCTION_DB_PATH = Path("/home/vigilant_admin/vigilant/logs/vigilant.db")
+LOCAL_DB_PATH = BASE_DIR / "logs" / "vigilant.db"
+
+if PRODUCTION_DB_PATH.exists() and os.access(PRODUCTION_DB_PATH.parent, os.W_OK):
+    DB_PATH = str(PRODUCTION_DB_PATH)
+else:
+    DB_PATH = str(LOCAL_DB_PATH)
+
 VELOCITY_WINDOW    = 60
 MIN_REQUESTS_BASELINE = 10
 
@@ -231,25 +242,35 @@ def log_request(client_ip, host, path, method, category, flagged, entities):
     if category_key not in _LOGGABLE_CATEGORIES:
         return
 
-    with db_lock:
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute(
-            "INSERT INTO traffic_log VALUES (NULL,?,?,?,?,?,?,?,?)",
-            (time.time(), client_ip, host, path, method,
-             category, int(flagged), str(entities))
-        )
-        conn.commit()
-        conn.close()
+    try:
+        with db_lock:
+            conn = sqlite3.connect(DB_PATH)
+            conn.execute(
+                "INSERT INTO traffic_log VALUES (NULL,?,?,?,?,?,?,?,?)",
+                (time.time(), client_ip, host, path, method,
+                 category, int(flagged), str(entities))
+            )
+            conn.commit()
+            conn.close()
+    except sqlite3.Error as e:
+        print(f"[VIGILANT] Database error in log_request: {e}")
+    except Exception as e:
+        print(f"[VIGILANT] Unexpected error in log_request: {e}")
 
 def log_throttle(client_ip, host, rpm_now, rpm_base, action):
-    with db_lock:
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute(
-            "INSERT INTO throttle_events VALUES (NULL,?,?,?,?,?,?)",
-            (time.time(), client_ip, host, rpm_now, rpm_base, action)
-        )
-        conn.commit()
-        conn.close()
+    try:
+        with db_lock:
+            conn = sqlite3.connect(DB_PATH)
+            conn.execute(
+                "INSERT INTO throttle_events VALUES (NULL,?,?,?,?,?,?)",
+                (time.time(), client_ip, host, rpm_now, rpm_base, action)
+            )
+            conn.commit()
+            conn.close()
+    except sqlite3.Error as e:
+        print(f"[VIGILANT] Database error in log_throttle: {e}")
+    except Exception as e:
+        print(f"[VIGILANT] Unexpected error in log_throttle: {e}")
 
 # ─── Velocity Monitor ─────────────────────────────────────────────
 request_history   = defaultdict(lambda: deque())
@@ -786,7 +807,11 @@ class VIGILANTAddon:
         """TLS ClientHello hook for mobile SNI fallback tracking"""
         try:
             if hasattr(layer, "context") and hasattr(layer.context, "client_conn"):
-                client_ip = layer.context.client_conn.peername[0]
+                try:
+                    client_ip = layer.context.client_conn.peername[0]
+                except (AttributeError, IndexError, TypeError) as e:
+                    print(f"[VIGILANT] TLS ClientHello: Failed to extract client IP from peername: {e}")
+                    return
             else:
                 print(f"[VIGILANT] TLS ClientHello: Unable to determine client IP, skipping SNI tracking")
                 return
@@ -816,7 +841,11 @@ class VIGILANTAddon:
             print(f"[VIGILANT] TLS ClientHello error: {e}")
 
     def request(self, flow: http.HTTPFlow):
-        client_ip = flow.client_conn.peername[0]
+        try:
+            client_ip = flow.client_conn.peername[0]
+        except (AttributeError, IndexError, TypeError) as e:
+            print(f"[VIGILANT] Request: Failed to extract client IP from peername: {e}")
+            return
         host      = flow.request.pretty_host
 
         # Whitelist bypass: asset subdomains (kept ahead of everything else - these
@@ -929,7 +958,11 @@ class VIGILANTAddon:
                   f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
 
     def response(self, flow: http.HTTPFlow):
-        client_ip    = flow.client_conn.peername[0]
+        try:
+            client_ip = flow.client_conn.peername[0]
+        except (AttributeError, IndexError, TypeError) as e:
+            print(f"[VIGILANT] Response: Failed to extract client IP from peername: {e}")
+            return
         host         = flow.request.pretty_host
         path         = flow.request.path[:120]
         method       = flow.request.method
