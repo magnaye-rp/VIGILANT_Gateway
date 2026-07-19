@@ -913,17 +913,68 @@ def delete_keyword(keyword_id):
     return jsonify({"status": "success"}) if cursor.rowcount > 0 else (jsonify({"error": "Not found"}), 404)
 
 
-@app.route("/api/config/filtering", methods=["GET", "POST"])
-def handle_filtering_config():
-    if request.method == "GET":
-        config = load_config()
-        keywords = [r['keyword'] for r in (query_db("SELECT keyword FROM keyword_blacklist") or [])]
-        return jsonify({"nlp_enabled": config.get("nlp_enabled", "true"), "nlp_accuracy": config.get("nlp_accuracy", "balanced"), "keywords": keywords})
-        
-    payload = request.get_json(silent=True) or {}
-    save_config({"nlp_enabled": payload.get("nlp_enabled"), "nlp_accuracy": payload.get("nlp_accuracy")})
-    return jsonify({"status": "success"})
+# ─── CATEGORY HINTS API ENDPOINTS ───────────────────────────────────
 
+@app.route("/api/categories/hints", methods=["GET", "POST"])
+def manage_category_hints():
+    import sqlite3
+    db_path = "/home/vigilant-admin/vigilant_gateway/src/logs/vigilant.db"
+    
+    if request.method == "GET":
+        try:
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            # Verify table exists or fall back cleanly
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='category_hints'")
+            if not cursor.fetchone():
+                return jsonify([]) # Return clean empty array if table isn't built yet
+                
+            cursor.execute("SELECT id, category, domain, action FROM category_hints")
+            hints = [{"id": row[0], "category": row[1], "domain": row[2], "action": row[3]} for row in cursor.fetchall()]
+            conn.close()
+            return jsonify(hints)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    elif request.method == "POST":
+        try:
+            data = request.json or {}
+            category = data.get("category")
+            domain = data.get("domain")
+            action = data.get("action", "throttle")
+            
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            # Ensure table structure exists
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS category_hints (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category TEXT,
+                    domain TEXT,
+                    action TEXT
+                )
+            """)
+            cursor.execute("INSERT INTO category_hints (category, domain, action) VALUES (?, ?, ?)", (category, domain, action))
+            conn.commit()
+            new_id = cursor.lastrowid
+            conn.close()
+            return jsonify({"id": new_id, "category": category, "domain": domain, "action": action}), 201
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+@app.route("/api/categories/hints/<int:hint_id>", methods=["DELETE"])
+def delete_category_hint(hint_id):
+    import sqlite3
+    db_path = "/home/vigilant-admin/vigilant_gateway/src/logs/vigilant.db"
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM category_hints WHERE id = ?", (hint_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({"success": True}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/config/behavioral", methods=["GET", "POST"])
 def handle_behavioral_config():
