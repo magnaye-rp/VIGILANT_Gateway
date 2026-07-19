@@ -804,7 +804,7 @@ class VIGILANTAddon:
         print("[VIGILANT] DNS log tailing thread started")
 
     def tls_clienthello(self, layer):
-        """TLS ClientHello hook for mobile SNI fallback tracking"""
+        """TLS ClientHello hook for transparent SNI domain logging"""
         try:
             if hasattr(layer, "context") and hasattr(layer.context, "client_conn"):
                 try:
@@ -819,6 +819,9 @@ class VIGILANTAddon:
             sni = layer.client_hello.sni if hasattr(layer, "client_hello") else None
 
             if sni:
+                # Log ALL SNI domains immediately to dashboard database
+                self.log_to_dashboard(client_ip, sni)
+                
                 clean_sni = sni.lstrip("www.")
                 base = ".".join(clean_sni.split(".")[-2:])
 
@@ -839,6 +842,21 @@ class VIGILANTAddon:
             print(f"[VIGILANT] TLS ClientHello attribute error: {e}")
         except Exception as e:
             print(f"[VIGILANT] TLS ClientHello error: {e}")
+
+    def log_to_dashboard(self, client_ip: str, sni: str):
+        """Log SNI domain to dashboard database for transparent passthrough tracking"""
+        try:
+            # Get domain hint for categorization
+            hint_category, _ = get_domain_hint(sni)
+            
+            # Use domain hint category, or default to Uncategorized
+            category = hint_category if hint_category else "Uncategorized"
+            
+            # Log the SNI domain request
+            log_request(client_ip, sni, "(TLS_SNI)", "TLS", category, False, [])
+            print(f"[VIGILANT] SNI logged to dashboard: {client_ip} -> {sni} [{category}]")
+        except Exception as e:
+            print(f"[VIGILANT] Failed to log SNI to dashboard: {e}")
 
     def request(self, flow: http.HTTPFlow):
         try:
