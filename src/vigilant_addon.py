@@ -803,24 +803,20 @@ class VIGILANTAddon:
         dns_thread.start()
         print("[VIGILANT] DNS log tailing thread started")
 
-    def tls_clienthello(self, layer):
-        """TLS ClientHello hook for transparent SNI domain logging"""
+    def tls_clienthello(self, data):
+        """TLS ClientHello hook for transparent SNI domain logging with native passthrough"""
         try:
-            if hasattr(layer, "context") and hasattr(layer.context, "client_conn"):
-                try:
-                    client_ip = layer.context.client_conn.peername[0]
-                except (AttributeError, IndexError, TypeError) as e:
-                    print(f"[VIGILANT] TLS ClientHello: Failed to extract client IP from peername: {e}")
-                    return
-            else:
-                print(f"[VIGILANT] TLS ClientHello: Unable to determine client IP, skipping SNI tracking")
-                return
-
-            sni = layer.client_hello.sni if hasattr(layer, "client_hello") else None
+            # Use standard mitmproxy peername extraction
+            client_ip = data.client_conn.peername[0]
+            
+            sni = data.client_hello.sni if hasattr(data, "client_hello") else None
 
             if sni:
                 # Log ALL SNI domains immediately to dashboard database
                 self.log_to_dashboard(client_ip, sni)
+                
+                # Ignore connection to allow native TLS handshake continuation
+                data.ignore_connection = True
                 
                 clean_sni = sni.lstrip("www.")
                 base = ".".join(clean_sni.split(".")[-2:])
@@ -838,8 +834,8 @@ class VIGILANTAddon:
                 if any(base in d for d in social_domains):
                     log_request(client_ip, sni, "(TLS_SNI)", "TLS", "Mobile_Bypass", False, [])
                     print(f"[VIGILANT] TLS SNI bypass logged: {client_ip} -> {sni}")
-        except AttributeError as e:
-            print(f"[VIGILANT] TLS ClientHello attribute error: {e}")
+        except (AttributeError, IndexError, TypeError) as e:
+            print(f"[VIGILANT] TLS ClientHello: Failed to extract client IP: {e}")
         except Exception as e:
             print(f"[VIGILANT] TLS ClientHello error: {e}")
 
@@ -849,8 +845,12 @@ class VIGILANTAddon:
             # Get domain hint for categorization
             hint_category, _ = get_domain_hint(sni)
             
-            # Use domain hint category, or default to Uncategorized
-            category = hint_category if hint_category else "Uncategorized"
+            # Use domain hint category if it's loggable, otherwise default to Productive
+            # This ensures SNI logs are saved to database (Uncategorized is filtered out)
+            if hint_category and hint_category.lower() in _LOGGABLE_CATEGORIES:
+                category = hint_category
+            else:
+                category = "Productive"  # Default category for SNI logs to ensure database logging
             
             # Log the SNI domain request
             log_request(client_ip, sni, "(TLS_SNI)", "TLS", category, False, [])
