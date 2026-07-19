@@ -891,11 +891,13 @@ class VIGILANTAddon:
                         request_body = flow.request.get_text(strict=False) if flow.request.content else ""
                     except Exception:
                         request_body = ""
-
-                    matched = scan_body_keywords(request_body, keywords)
+                    if any(domain in host for domain in ["youtube.com", "googlevideo.com", "tiktok.com", "tiktokv.com", "instagram.com"]):
+       matched = scan_url_keywords(request_body, "", keywords)
+                    else:
+                        matched = scan_body_keywords(request_body, keywords)
                     if matched:
-                        print(f"[VIGILANT] KEYWORD BLOCKED (request body): {matched} from {client_ip}")
-                        log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [])
+                        print(f"[VIGILANT] RESPONSE KEYWORD BLOCKED: {matched} in {content_type} response from {host}")
+                        log_request(client_ip, host, path, method, "Harmful", True, [])
                         flow.response = http.Response.make(
                             403,
                             render_block_page(host, "Harmful"),
