@@ -326,18 +326,32 @@ EOF
     fi
     log_success "IPv4 forwarding enabled and persistent"
     
-    # Apply clean NAT routing rules
+    # ─── NAT & Interception Rules ──────────────────────────────────────────
     log_info "Applying NAT routing rules..."
     iptables -t nat -A POSTROUTING -o "$WAN_INTERFACE" -j MASQUERADE
-    
-    # 1. BLOCK UDP 443/80 FIRST (Stops the traffic before it can be allowed out)
+
+    # Force external DNS traffic directly to your local dnsmasq instance
+    iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p udp --dport 53 -j REDIRECT --to-ports 53
+    iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 53 -j REDIRECT --to-ports 53
+
+    # **CRITICAL** - Ensure your original transparent proxy interceptions are still here!
+    # Without these, your clients will connect directly over TCP instead of routing to mitmproxy.
+    iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 80 -j REDIRECT --to-ports 8080
+    iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 443 -j REDIRECT --to-ports 8080
+
+    # ─── Forwarding Rule Tree ──────────────────────────────────────────────
+    # 1. BLOCK UNWANTED PORTS FIRST
     iptables -A FORWARD -i "$LAN_INTERFACE" -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable
     iptables -A FORWARD -i "$LAN_INTERFACE" -p udp --dport 80 -j REJECT --reject-with icmp-port-unreachable
+    iptables -A FORWARD -i "$LAN_INTERFACE" -p tcp --dport 853 -j REJECT
+    iptables -A FORWARD -i "$LAN_INTERFACE" -p udp --dport 853 -j REJECT
     iptables -A OUTPUT -p udp --dport 443 -j DROP
-    
-    # 2. ALLOW EVERYTHING ELSE NEXT (Safe to allow now that UDP 443 is blocked)
+    ip6tables -P FORWARD DROP
+
+    # 2. ALLOW CLEAN SYSTEM TRAFFIC
     iptables -A FORWARD -i "$LAN_INTERFACE" -o "$WAN_INTERFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
     iptables -A FORWARD -i "$LAN_INTERFACE" -o "$WAN_INTERFACE" -j ACCEPT
+
     
     # Save rules persistently
     log_info "Saving iptables rules persistently..."

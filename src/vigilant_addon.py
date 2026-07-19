@@ -892,7 +892,7 @@ class VIGILANTAddon:
                     except Exception:
                         request_body = ""
                     if any(domain in host for domain in ["youtube.com", "googlevideo.com", "tiktok.com", "tiktokv.com", "instagram.com"]):
-       matched = scan_url_keywords(request_body, "", keywords)
+                        matched = scan_url_keywords(request_body, "", keywords)
                     else:
                         matched = scan_body_keywords(request_body, keywords)
                     if matched:
