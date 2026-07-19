@@ -331,6 +331,8 @@ EOF
     iptables -t nat -A POSTROUTING -o "$WAN_INTERFACE" -j MASQUERADE
     iptables -A FORWARD -i "$LAN_INTERFACE" -o "$WAN_INTERFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
     iptables -A FORWARD -i "$LAN_INTERFACE" -o "$WAN_INTERFACE" -j ACCEPT
+    iptables -A FORWARD -i "$LAN_INTERFACE" -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable
+    iptables -A FORWARD -i "$LAN_INTERFACE" -p udp --dport 80 -j REJECT --reject-with icmp-port-unreachable
     
     # Save rules persistently
     log_info "Saving iptables rules persistently..."
