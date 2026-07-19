@@ -210,14 +210,21 @@ stage_4_copy_files() {
     log_info "Wiping old Python bytecode cache to force code reload..."
     find "$VIGILANT_HOME" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
     find "$REPO_DIR" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-
     log_info "Forcing symlink replacement for the addon engine..."
-    # Force remove (-f) the old symlink before creating the new one
-    sudo rm -f "$VIGILANT_HOME/addons/vigilant_addon.py"
-    sudo ln -sf "$SRC_ADDON" "$VIGILANT_HOME/addons/vigilant_addon.py"
+    # Explicitly define the source path relative to the active repository directory
+    SRC_ADDON="$REPO_DIR/src/vigilant_addon.py"
 
+    # Double check that the file actually exists before symlinking
+    if [ ! -f "$SRC_ADDON" ]; then
+        log_error "Source addon file not found at $SRC_ADDON!"
+        exit 1
+    fi
 
-
+    # Force remove the old link and cleanly attach the new one
+    rm -f "$VIGILANT_HOME/addons/vigilant_addon.py"
+    ln -sf "$SRC_ADDON" "$VIGILANT_HOME/addons/vigilant_addon.py"
+    log_success "Symlink successfully mapped!"
+    
     log_info "Copying Python files..."
     cp "$REPO_DIR/src/app.py" "$VIGILANT_HOME/"
     
