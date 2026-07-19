@@ -553,29 +553,41 @@ def categorize_content(text, host=""):
 
 
 # ─── Traffic Control Throttling ───────────────────────────────────────
+def get_distribution_interface():
+    """Get the distribution interface from database config or use default"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.execute("SELECT value FROM config_settings WHERE key = 'distribution_interface'")
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else "eth1"
+    except Exception:
+        return "eth1"
+
 def apply_throttle(client_ip):
     """Apply Linux tc traffic control to throttle client bandwidth"""
     config = load_proxy_config()
     throttle_rate = config['throttle_rate']
+    interface = get_distribution_interface()
 
     try:
         subprocess.run(
-            ["tc", "qdisc", "add", "dev", "eth0", "root", "handle", "1:", "htb"],
+            ["tc", "qdisc", "add", "dev", interface, "root", "handle", "1:", "htb"],
             check=False, capture_output=True
         )
 
         subprocess.run(
-            ["tc", "class", "add", "dev", "eth0", "parent", "1:", "classid", "1:10",
+            ["tc", "class", "add", "dev", interface, "parent", "1:", "classid", "1:10",
              "htb", "rate", throttle_rate, "ceil", throttle_rate],
             check=False, capture_output=True
         )
 
         subprocess.run(
-            ["tc", "filter", "add", "dev", "eth0", "protocol", "ip", "parent", "1:0",
+            ["tc", "filter", "add", "dev", interface, "protocol", "ip", "parent", "1:0",
              "prio", "1", "u32", "match", "ip", "src", client_ip, "flowid", "1:10"],
             check=False, capture_output=True
         )
-        print(f"[VIGILANT] Throttling applied to {client_ip} at {throttle_rate}")
+        print(f"[VIGILANT] Throttling applied to {client_ip} on {interface} at {throttle_rate}")
         return True
     except Exception as e:
         print(f"[VIGILANT] Throttling failed for {client_ip}: {e}")
@@ -583,13 +595,14 @@ def apply_throttle(client_ip):
 
 def remove_throttle(client_ip):
     """Remove traffic control throttling for client IP"""
+    interface = get_distribution_interface()
     try:
         subprocess.run(
-            ["tc", "filter", "del", "dev", "eth0", "protocol", "ip", "parent", "1:0",
+            ["tc", "filter", "del", "dev", interface, "protocol", "ip", "parent", "1:0",
              "prio", "1", "u32", "match", "ip", "src", client_ip, "flowid", "1:10"],
             check=False, capture_output=True
         )
-        print(f"[VIGILANT] Throttling removed for {client_ip}")
+        print(f"[VIGILANT] Throttling removed for {client_ip} on {interface}")
         return True
     except Exception as e:
         print(f"[VIGILANT] Throttle removal failed for {client_ip}: {e}")
@@ -999,14 +1012,10 @@ class VIGILANTAddon:
                     conn.close()
 
                 if keywords:
-                    try:
-                        request_body = flow.request.get_text(strict=False) if flow.request.content else ""
-                    except Exception:
-                        request_body = ""
-                    if "google.com" in host:
-                        matched = scan_url_keywords(request_body, "", keywords)
+                    if clean:
+                        matched = scan_body_keywords(clean, keywords)
                     else:
-                        matched = scan_body_keywords(request_body, keywords)
+                        matched = None
                     if matched:
                         print(f"[VIGILANT] RESPONSE KEYWORD BLOCKED: {matched} in {content_type} response from {host}")
                         log_request(client_ip, host, path, method, "Harmful", True, [])

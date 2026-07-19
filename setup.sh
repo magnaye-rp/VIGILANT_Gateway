@@ -73,7 +73,7 @@ detect_network_interfaces() {
         exit 1
     fi
     
-    log_info "Select the LAN/Client-facing interface (hosts DHCP clients/hostapd):"
+    log_info "Select the LAN/Client-facing interface (PCIe Ethernet for clients):"
     read -p "Enter interface number or name: " lan_selection
     
     if [[ "$lan_selection" =~ ^[0-9]+$ ]] && [ "$lan_selection" -ge 0 ] && [ "$lan_selection" -lt ${#INTERFACES[@]} ]; then
@@ -130,8 +130,8 @@ stage_1_dependencies() {
     log_info "Installing system packages..."
     apt-get install -y \
         python3 python3-pip python3-venv \
-        hostapd dnsmasq iptables iw iptables-persistent \
-        wireless-tools netfilter-persistent \
+        dnsmasq iptables iptables-persistent \
+        netfilter-persistent \
         git curl wget nano \
         > /dev/null 2>&1
     
@@ -363,110 +363,8 @@ EOF
     log_success "NAT routing rules applied and saved persistently"
 }
 
-stage_7_5_hostapd() {
-    echo ""
-    log_info "═══════════════════════════════════════════"
-    log_info "STAGE 7.5: HOSTAPD ACCESS POINT SETUP"
-    log_info "═══════════════════════════════════════════"
-    
-    log_info "Backing up existing hostapd configuration..."
-    if [ -f /etc/hostapd/hostapd.conf ]; then
-        cp /etc/hostapd/hostapd.conf /etc/hostapd/hostapd.conf.bak
-        log_success "Backup created at /etc/hostapd/hostapd.conf.bak"
-    fi
-    
-    log_info "Creating optimized hostapd configuration file..."
-    cat << 'EOF' > /etc/hostapd/hostapd.conf
-interface=wlp1s0
-driver=nl80211
-ssid=VIGILANT_GATEWAY
-hw_mode=g
-channel=6
-wmm_enabled=1
-macaddr_acl=0
-auth_algs=1
-wpa=2
-wpa_key_mgmt=WPA-PSK
-rsn_pairwise=CCMP
-wpa_passphrase=VigilantGateway2026
-# Intel AP Stability Optimizations
-ap_max_inactivity=300
-skip_inactivity_poll=1
-
-EOF
-
-    log_info "Updating system default hostapd daemon reference..."
-    if [ -f /etc/default/hostapd ]; then
-        sed -i 's|^#\?DAEMON_CONF=.*|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd
-    else
-        echo 'DAEMON_CONF="/etc/hostapd/hostapd.conf"' > /etc/default/hostapd
-    fi
-
-    log_info "Unmasking, enabling, and kickstarting hostapd broadcast..."
-    systemctl unmask hostapd >/dev/null 2>&1
-    systemctl daemon-reload
-    systemctl enable hostapd
-    systemctl restart hostapd
-    
-    log_success "Hostapd Access Point is live with Intel AP stability optimizations!"
-
-    # =====================================================================
-# CONFIGURE PASSWORDLESS SUDO FOR NETWORK SERVICE MANAGEMENT
-# =====================================================================
-echo "Configuring passwordless sudo for dnsmasq and hostapd..."
-
-# 1. Dynamically find the user running the vigilant systemd service
-# If it's not a service yet, it defaults to the user who owns the git repo directory
-WEB_USER=$(systemctl show -p User vigilant-dashboard.service | cut -d= -f2)
-
-if [ -z "$WEB_USER" ] || [ "$WEB_USER" = "root" ] || [ "$WEB_USER" = "" ]; then
-    WEB_USER=$(stat -c '%U' .)
-fi
-
-echo "Detected application execution user: $WEB_USER"
-
-# 2. Write the absolute paths for both systemctl and service commands to cover all bases
-cat << EOF | sudo tee /etc/sudoers.d/vigilant-services > /dev/null
-# Targeted ruleset for network card recycling
-$WEB_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart dnsmasq, /usr/bin/systemctl restart hostapd, /bin/systemctl restart dnsmasq, /bin/systemctl restart hostapd
-EOF
-
-# 3. Secure the file permissions strictly (Linux rejects sudoer files that are too open)
-sudo chmod 0440 /etc/sudoers.d/vigilant-services
-
-echo "Sudoers rules successfully injected for $WEB_USER!"
-}
 
 
-
-# ─── Stage 7.6: Wi-Fi Power Saving Disable ────────────────────────────────────
-stage_7_6_wifi_power_save() {
-    echo ""
-    log_info "═══════════════════════════════════════════"
-    log_info "STAGE 7.6: WI-FI POWER SAVING DISABLE"
-    log_info "═══════════════════════════════════════════"
-    
-    WIFI_INTERFACE="wlp1s0"
-    
-    # Check if interface exists
-    if ! ip link show "$WIFI_INTERFACE" &>/dev/null; then
-        log_warn "Wi-Fi interface $WIFI_INTERFACE not found, skipping power save configuration"
-        return
-    fi
-    
-    echo "[INFO] Disabling power saving on wlp1s0..."
-    if ! sudo iw dev wlp1s0 set power_save off 2>/dev/null; then
-        echo "[WARN] Direct iw power control is unsupported on this driver. Applying persistent module options instead..."
-        
-        # Write persistent kernel parameters to force-disable power saving for iwlwifi
-        echo "options iwlwifi power_save=0 uapsd_disable=1" | sudo tee /etc/modprobe.d/iwlwifi.conf > /dev/null
-        
-        echo "[✓] Kernel module configuration written to /etc/modprobe.d/iwlwifi.conf"
-        echo "[INFO] System reboot is recommended to apply permanent driver power-saving changes."
-    else
-        echo "[✓] Power saving successfully disabled via iw tool."
-    fi
-}
 
 # ─── Stage 8: Certificates ──────────────────────────────────────────────────
 stage_8_certificates() {
@@ -810,8 +708,6 @@ main() {
     stage_5_network_config
     stage_6_dns_dhcp
     stage_7_firewall
-    stage_7_5_hostapd
-    stage_7_6_wifi_power_save
     stage_8_certificates
     stage_9_systemd_services
     stage_9_5_database_init

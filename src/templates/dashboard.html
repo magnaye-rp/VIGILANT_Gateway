@@ -1039,8 +1039,12 @@
               </div>
             </div>
             <div>
-              <div style="font-size: 0.85rem; opacity: 0.8; margin-bottom: 0.25rem;">Active Network Load</div>
-              <div style="font-size: 1.25rem; font-weight: 600;" id="nerve-network-load">0.0 / 0.0 Mbps</div>
+              <div style="font-size: 0.85rem; opacity: 0.8; margin-bottom: 0.25rem;">Interface Mode</div>
+              <div style="font-size: 1.1rem; font-weight: 600;" id="nerve-interface-mode">Physical Access Point (PCIe-Ethernet)</div>
+            </div>
+            <div>
+              <div style="font-size: 0.85rem; opacity: 0.8; margin-bottom: 0.25rem;">Interface Throughput</div>
+              <div style="font-size: 1.25rem; font-weight: 600;" id="nerve-interface-throughput">Rx: 0.0 Mbps / Tx: 0.0 Mbps</div>
             </div>
             <div>
               <div style="font-size: 0.85rem; opacity: 0.8; margin-bottom: 0.25rem;">Shield Integrity</div>
@@ -1087,16 +1091,6 @@
               <div style="display: flex; gap: 0.5rem; align-items: center;">
                 <span class="category-badge success" id="status-mitmproxy">Active</span>
                 <button id="btn-restart-proxy" class="btn-secondary" style="padding: 0.5rem 1rem;" onclick="executeSystemControl('restart_proxy', this)">Restart</button>
-              </div>
-            </div>
-            <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem; background: var(--surface); border-radius: 8px;">
-              <div>
-                <div style="font-weight: 600;">hostapd</div>
-                <div style="font-size: 0.85rem; color: var(--text-secondary);">Wireless access point daemon</div>
-              </div>
-              <div style="display: flex; gap: 0.5rem; align-items: center;">
-                <span class="category-badge success" id="status-hostapd">Active</span>
-                <button id="btn-restart-hostapd" class="btn-secondary" style="padding: 0.5rem 1rem;" onclick="executeSystemControl('restart_hostapd', this)">Reload</button>
               </div>
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem; background: var(--surface); border-radius: 8px;">
@@ -1442,7 +1436,7 @@
 
       // Update service statuses
       const services = data.statuses || {};
-      ['mitmproxy', 'hostapd', 'dnsmasq'].forEach(svc => {
+      ['mitmproxy', 'dnsmasq'].forEach(svc => {
         const badge = document.getElementById(`status-${svc}`);
         if (badge) {
           const isActive = services[svc] === 'active' || services[svc] === 'running';
@@ -2153,8 +2147,7 @@
       'restart_proxy': '🔄 Restarting proxy...',
       'reload_config': '🔄 Restarting dashboard...',
       'reload_firewall': '🔄 Reloading firewall...',
-      'restart_dnsmasq': '🔄 Reloading DNS...',
-      'restart_hostapd': '🔄 Reloading WiFi...'
+      'restart_dnsmasq': '🔄 Reloading DNS...'
     };
     
     // Disable button and show loading state
@@ -2366,9 +2359,9 @@
           healthText.textContent = isOptimal ? 'Optimal' : 'Degraded';
         }
         
-        const networkLoad = document.getElementById('nerve-network-load');
-        if (networkLoad) {
-          networkLoad.textContent = `${data.system.throughput_rx_mbps} / ${data.system.throughput_tx_mbps} Mbps`;
+        const interfaceThroughput = document.getElementById('nerve-interface-throughput');
+        if (interfaceThroughput) {
+          interfaceThroughput.textContent = `Rx: ${data.system.throughput_rx_mbps} Mbps / Tx: ${data.system.throughput_tx_mbps} Mbps`;
         }
         
         const shieldIntegrity = document.getElementById('nerve-shield-integrity');
@@ -2400,7 +2393,7 @@
           sysDisk.textContent = `${data.system.disk_usage}%`;
         }
         
-        ['mitmproxy', 'hostapd', 'dnsmasq'].forEach(svc => {
+        ['mitmproxy', 'dnsmasq'].forEach(svc => {
           const badge = document.getElementById(`status-${svc}`);
           if (badge) {
             const isActive = data.system.services[svc] === 'active' || data.system.services[svc] === 'running';
