@@ -218,8 +218,22 @@ class VigilantTFIDFClassifier:
 tfidf_classifier = VigilantTFIDFClassifier(CATEGORY_KEYWORDS)
 
 # ─── Database Setup ───────────────────────────────────────────────
+DB_TIMEOUT = 30.0
+CACHE_REFRESH_INTERVAL = 60.0
+RULE_CACHE_RELOAD_FILE = Path(DB_PATH).parent / ".rule_cache_reload"
+
+_active_addon = None
+
+
+def _connect_db() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    return conn
+
+
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect_db()
     c = conn.cursor()
     c.execute("""
         CREATE TABLE IF NOT EXISTS traffic_log (
@@ -260,7 +274,7 @@ db_lock = threading.Lock()
 def load_proxy_config():
     """Load proxy and behavioral configuration from database"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _connect_db()
         cursor = conn.cursor()
 
         cursor.execute("SELECT value FROM config_settings WHERE key = 'network_velocity_threshold'")
@@ -313,9 +327,14 @@ def load_proxy_config():
 
 
 def load_category_hints():
-    """Load category hints from database"""
+    """Load category hints from database or in-memory cache when available."""
+    if _active_addon is not None:
+        with _active_addon._cache_lock:
+            if _active_addon._last_cache_refresh > 0:
+                return {k: set(v) for k, v in _active_addon.cached_hints.items()}
+
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _connect_db()
         cursor = conn.cursor()
 
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='category_hints'")
@@ -339,10 +358,39 @@ def load_category_hints():
         return {}
 
 
+def get_blacklisted_keywords():
+    """Return blacklisted keywords from in-memory cache or database."""
+    if _active_addon is not None:
+        with _active_addon._cache_lock:
+            if _active_addon._last_cache_refresh > 0:
+                return list(_active_addon.cached_keywords)
+
+    try:
+        conn = _connect_db()
+        cursor = conn.execute("SELECT keyword FROM keyword_blacklist")
+        keywords = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        return keywords
+    except Exception as e:
+        print(f"[VIGILANT] Error loading keyword blacklist from database: {e}")
+        return []
+
+
 def load_social_domains():
     """Load social domains from category_hints (Distracting category)"""
+    category_hints = load_category_hints()
+    if category_hints:
+        distracting = category_hints.get("Distracting", set())
+        if distracting:
+            social_domains = set()
+            for domain in distracting:
+                social_domains.add(domain)
+                if not domain.startswith("www."):
+                    social_domains.add(f"www.{domain}")
+            return social_domains
+
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _connect_db()
         cursor = conn.cursor()
 
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='category_hints'")
@@ -386,7 +434,7 @@ def log_request(client_ip, host, path, method, category, flagged, entities):
 
     try:
         with db_lock:
-            conn = sqlite3.connect(DB_PATH)
+            conn = _connect_db()
             conn.execute(
                 "INSERT INTO traffic_log VALUES (NULL,?,?,?,?,?,?,?,?)",
                 (time.time(), client_ip, host, path, method,
@@ -402,7 +450,7 @@ def log_request(client_ip, host, path, method, category, flagged, entities):
 def log_throttle(client_ip, host, rpm_now, rpm_base, action):
     try:
         with db_lock:
-            conn = sqlite3.connect(DB_PATH)
+            conn = _connect_db()
             conn.execute(
                 "INSERT INTO throttle_events VALUES (NULL,?,?,?,?,?,?)",
                 (time.time(), client_ip, host, rpm_now, rpm_base, action)
@@ -469,12 +517,7 @@ def websocket_message(self, flow: http.HTTPFlow):
     # Extract textual content from web-socket frame payload
     payload_text = message.text if message.is_text else message.content.decode("utf-8", errors="ignore")
     
-    with db_lock:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.execute("SELECT keyword FROM keyword_blacklist")
-        keywords = [row[0] for row in cursor.fetchall()]
-        conn.close()
-
+    keywords = get_blacklisted_keywords()
     matched = scan_text_for_keywords(payload_text, keywords)
     if matched:
         print(f"[VIGILANT] WEBSOCKET KEYWORD BLOCKED: {matched} from {client_ip}")
@@ -596,7 +639,7 @@ def categorize_content(text, host=""):
 def get_distribution_interface():
     """Get the distribution interface from database config or use default"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _connect_db()
         cursor = conn.execute("SELECT value FROM config_settings WHERE key = 'distribution_interface'")
         row = cursor.fetchone()
         conn.close()
@@ -815,12 +858,65 @@ def render_block_page(host: str, category: str = "Harmful") -> bytes:
 class VIGILANTAddon:
 
     def __init__(self):
+        global _active_addon
         init_db()
+        self.cached_keywords = []
+        self.cached_hints = {}
+        self._cache_lock = threading.Lock()
+        self._last_cache_refresh = 0.0
+        _active_addon = self
+        self._refresh_rule_cache()
         print("[VIGILANT] Addon loaded. DB initialised. NLP model ready.")
+
+        cache_thread = threading.Thread(target=self._cache_refresh_loop, daemon=True)
+        cache_thread.start()
+        print("[VIGILANT] Rule cache refresh thread started (interval=%ss)" % CACHE_REFRESH_INTERVAL)
 
         dns_thread = threading.Thread(target=tail_dnsmasq_log, daemon=True)
         dns_thread.start()
         print("[VIGILANT] DNS log tailing thread started")
+
+    def _refresh_rule_cache(self):
+        """Fetch blacklisted keywords and category hints from the database."""
+        try:
+            conn = _connect_db()
+            cursor = conn.execute("SELECT keyword FROM keyword_blacklist")
+            keywords = [row[0] for row in cursor.fetchall()]
+
+            hints = {}
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='category_hints'"
+            )
+            if cursor.fetchone():
+                cursor = conn.execute("SELECT category, domain FROM category_hints")
+                for category, domain in cursor.fetchall():
+                    hints.setdefault(category, set()).add(domain)
+            conn.close()
+
+            with self._cache_lock:
+                self.cached_keywords = keywords
+                self.cached_hints = hints
+                self._last_cache_refresh = time.time()
+        except Exception as e:
+            print(f"[VIGILANT] Error refreshing rule cache: {e}")
+
+    def _cache_refresh_loop(self):
+        """Periodically refresh cached rules or reload immediately on API trigger."""
+        while True:
+            time.sleep(1.0)
+            reload_requested = False
+            try:
+                if RULE_CACHE_RELOAD_FILE.exists():
+                    RULE_CACHE_RELOAD_FILE.unlink(missing_ok=True)
+                    reload_requested = True
+            except OSError:
+                pass
+
+            with self._cache_lock:
+                stale = (time.time() - self._last_cache_refresh) >= CACHE_REFRESH_INTERVAL
+
+            if reload_requested or stale:
+                self._refresh_rule_cache()
 
     def tls_clienthello(self, data):
         """TLS ClientHello hook for transparent SNI domain logging with full decryption capability"""
@@ -919,12 +1015,7 @@ class VIGILANTAddon:
             return
 
         try:
-            with db_lock:
-                conn = sqlite3.connect(DB_PATH)
-                cursor = conn.execute("SELECT keyword FROM keyword_blacklist")
-                keywords = [row[0] for row in cursor.fetchall()]
-                conn.close()
-
+            keywords = get_blacklisted_keywords()
             if keywords:
                 decoded_url = urllib.parse.unquote(flow.request.pretty_url)
                 req_body = ""
@@ -978,12 +1069,7 @@ class VIGILANTAddon:
         # than a deliberately-typed URL.
         if domain_category is None:
             try:
-                with db_lock:
-                    conn = sqlite3.connect(DB_PATH)
-                    cursor = conn.execute("SELECT keyword FROM keyword_blacklist")
-                    keywords = [row[0] for row in cursor.fetchall()]
-                    conn.close()
-
+                keywords = get_blacklisted_keywords()
                 if keywords:
                     try:
                         request_body = flow.request.get_text(strict=False) if flow.request.content else ""
@@ -1092,12 +1178,7 @@ class VIGILANTAddon:
         # FIX #2), only when the domain isn't already explicitly categorized.
         if domain_category is None and any(ct in content_type for ct in TEXT_CONTENT_TYPES):
             try:
-                with db_lock:
-                    conn = sqlite3.connect(DB_PATH)
-                    cursor = conn.execute("SELECT keyword FROM keyword_blacklist")
-                    keywords = [row[0] for row in cursor.fetchall()]
-                    conn.close()
-
+                keywords = get_blacklisted_keywords()
                 if keywords:
                     if clean:
                         # Use efficient token intersection for keyword detection

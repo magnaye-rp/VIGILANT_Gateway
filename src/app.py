@@ -9,6 +9,7 @@ import importlib.util
 import csv
 import io
 import socket
+from contextlib import contextmanager
 from pathlib import Path
 import platform
 from collections import deque
@@ -61,6 +62,7 @@ app.secret_key = "super_secret_vigilant_key"
 SERVER_IP = "192.168.100.88"
 PRODUCTION_DB_PATH = Path("/home/vigilant_admin/vigilant/logs/vigilant.db")
 LOCAL_DB_PATH = BASE_DIR / "logs" / "vigilant.db"
+DB_TIMEOUT = 30.0
 
 # Select database path with permission-aware fallback logic
 DB_PATH = LOCAL_DB_PATH  # Default to local path
@@ -128,11 +130,59 @@ def _ensure_directory(path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
 
 
+def _signal_rule_cache_reload() -> None:
+    """Signal the mitmproxy addon to refresh its in-memory rule cache."""
+    try:
+        reload_file = Path(DB_PATH).parent / ".rule_cache_reload"
+        _ensure_directory(reload_file)
+        reload_file.write_text(str(time.time()))
+    except OSError as exc:
+        app.logger.warning("Failed to signal proxy rule cache reload: %s", exc)
+
+
 def _open_db() -> sqlite3.Connection:
     _ensure_directory(DB_PATH)
-    connection = sqlite3.connect(DB_PATH)
+    connection = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA journal_mode=WAL;")
+    connection.execute("PRAGMA synchronous=NORMAL;")
     return connection
+
+
+@contextmanager
+def get_db_connection():
+    connection = _open_db()
+    try:
+        yield connection
+    finally:
+        connection.close()
+
+
+def init_db() -> None:
+    """Initialize database tables and enable WAL mode for concurrent access."""
+    try:
+        with get_db_connection() as connection:
+            connection.execute("PRAGMA journal_mode=WAL;")
+            connection.execute("PRAGMA synchronous=NORMAL;")
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS traffic_log ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp REAL, client_ip TEXT, "
+                "host TEXT, path TEXT, method TEXT, category TEXT, flagged INTEGER DEFAULT 0, entities TEXT)"
+            )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS config_settings (key TEXT PRIMARY KEY, value TEXT, updated_at REAL)"
+            )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS network_devices ("
+                "ip_address TEXT PRIMARY KEY, mac_address TEXT, hostname TEXT, custom_name TEXT, "
+                "policy TEXT DEFAULT 'none', first_seen REAL, last_seen REAL, updated_at REAL)"
+            )
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_timestamp ON traffic_log(timestamp DESC)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_category ON traffic_log(category)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_flagged ON traffic_log(flagged)")
+            connection.commit()
+    except sqlite3.Error as exc:
+        app.logger.debug("Database initialization encountered locking: %s", exc)
 
 
 def _table_exists(connection: sqlite3.Connection, table_name: str) -> bool:
@@ -148,8 +198,10 @@ def query_db(query: str, args=(), one: bool = False):
         return {} if one else []
 
     try:
-        with sqlite3.connect(DB_PATH) as connection:
+        with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT) as connection:
             connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA journal_mode=WAL;")
+            connection.execute("PRAGMA synchronous=NORMAL;")
             cursor = connection.execute(query, args)
             rows = cursor.fetchall()
             if one:
@@ -1210,6 +1262,7 @@ def import_config():
                 for k, v in config_data["settings"].items():
                     connection.execute("INSERT INTO config_settings (key, value, updated_at) VALUES (?, ?, ?)", (k, str(v), now_ts))
             connection.commit()
+        _signal_rule_cache_reload()
         flash("Import successful", "success")
     except json.JSONDecodeError as e:
         app.logger.error(f"Failed to parse config file: {e}")
@@ -1269,7 +1322,8 @@ def handle_keywords():
             conn.execute("CREATE TABLE IF NOT EXISTS keyword_blacklist (id INTEGER PRIMARY KEY AUTOINCREMENT, keyword TEXT NOT NULL UNIQUE)")
             cursor = conn.execute("INSERT INTO keyword_blacklist (keyword) VALUES (?)", (kw,))
             conn.commit()
-            return jsonify({"id": cursor.lastrowid, "keyword": kw}), 201
+        _signal_rule_cache_reload()
+        return jsonify({"id": cursor.lastrowid, "keyword": kw}), 201
     except sqlite3.IntegrityError:
         return jsonify({"error": "Duplicate entry"}), 409
 
@@ -1282,7 +1336,8 @@ def delete_keyword(keyword_id):
                 return jsonify({"error": "Not found"}), 404
             cursor = connection.execute("DELETE FROM keyword_blacklist WHERE id = ?", (keyword_id,))
             connection.commit()
-            return jsonify({"status": "success"}) if cursor.rowcount > 0 else (jsonify({"error": "Not found"}), 404)
+        _signal_rule_cache_reload()
+        return jsonify({"status": "success"}) if cursor.rowcount > 0 else (jsonify({"error": "Not found"}), 404)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1336,7 +1391,8 @@ def manage_category_hints():
                     cursor = conn.execute("INSERT INTO category_hints (category, domain) VALUES (?, ?)", (category, domain))
                 conn.commit()
                 new_id = cursor.lastrowid
-                return jsonify({"id": new_id, "category": category, "domain": domain, "action": action}), 201
+            _signal_rule_cache_reload()
+            return jsonify({"id": new_id, "category": category, "domain": domain, "action": action}), 201
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
@@ -1350,6 +1406,7 @@ def delete_category_hint(hint_id):
             cursor = conn.execute("DELETE FROM category_hints WHERE id = ?", (hint_id,))
             conn.commit()
             if cursor.rowcount > 0:
+                _signal_rule_cache_reload()
                 return jsonify({"success": True}), 200
             return jsonify({"error": "Not found"}), 404
     except Exception as e:
@@ -1615,55 +1672,31 @@ def get_throttled_devices():
 
 @app.route("/api/devices/policy", methods=["POST"])
 def set_device_policy():
-    """Set device filtering policy (whitelist/blacklist/none)"""
+    data = request.json or {}
+    ip_address = data.get("ip_address")
+    mac_address = data.get("mac_address", "")
+    policy = data.get("policy", "standard")
+    custom_name = data.get("custom_name", "")
+
+    if not ip_address:
+        return jsonify({"error": "ip_address is required"}), 400
+
     try:
-        payload = request.get_json(silent=True) or {}
-        mac_address = payload.get("mac_address")
-        ip_address = payload.get("ip_address")
-        policy = payload.get("policy", "none")
-        custom_name = payload.get("custom_name")
-        
-        if not mac_address and not ip_address:
-            return jsonify({"error": "Either mac_address or ip_address required"}), 400
-        
-        if policy not in ("whitelist", "blacklist", "none"):
-            return jsonify({"error": "Invalid policy. Must be whitelist, blacklist, or none"}), 400
-        
-        with _open_db() as connection:
-            # Ensure network_devices table exists
-            connection.execute("CREATE TABLE IF NOT EXISTS network_devices (ip_address TEXT PRIMARY KEY, mac_address TEXT, hostname TEXT, custom_name TEXT, policy TEXT DEFAULT 'none', first_seen REAL, last_seen REAL, updated_at REAL)")
-            
-            if mac_address:
-                # Update by MAC address
-                cursor = connection.execute(
-                    "UPDATE network_devices SET policy = ?, custom_name = COALESCE(?, custom_name), updated_at = ? WHERE mac_address = ?",
-                    (policy, custom_name, time.time(), mac_address)
-                )
-                if cursor.rowcount == 0:
-                    # Device doesn't exist, insert it
-                    connection.execute(
-                        "INSERT INTO network_devices (ip_address, mac_address, policy, custom_name, first_seen, last_seen, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (ip_address or "", mac_address, policy, custom_name, time.time(), time.time(), time.time())
-                    )
-            else:
-                # Update by IP address
-                cursor = connection.execute(
-                    "UPDATE network_devices SET policy = ?, custom_name = COALESCE(?, custom_name), updated_at = ? WHERE ip_address = ?",
-                    (policy, custom_name, time.time(), ip_address)
-                )
-                if cursor.rowcount == 0:
-                    # Device doesn't exist, insert it
-                    connection.execute(
-                        "INSERT INTO network_devices (ip_address, mac_address, policy, custom_name, first_seen, last_seen, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (ip_address, mac_address or "", policy, custom_name, time.time(), time.time(), time.time())
-                    )
-            
-            connection.commit()
-        
-        return jsonify({"status": "success", "policy": policy})
-    except Exception as exc:
-        app.logger.error(f"Error setting device policy: {exc}")
-        return jsonify({"error": str(exc)}), 500
+        with get_db_connection() as conn:
+            conn.execute('''
+                INSERT INTO network_devices (ip_address, mac_address, policy, custom_name, first_seen, last_seen, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(ip_address) DO UPDATE SET
+                    policy=excluded.policy,
+                    custom_name=COALESCE(NULLIF(excluded.custom_name, ''), network_devices.custom_name),
+                    mac_address=COALESCE(NULLIF(excluded.mac_address, ''), network_devices.mac_address),
+                    updated_at=excluded.updated_at
+            ''', (ip_address, mac_address, policy, custom_name, time.time(), time.time(), time.time()))
+            conn.commit()
+        return jsonify({"status": "success", "message": "Device policy updated successfully"})
+    except Exception as e:
+        app.logger.error("Error setting device policy: %s", e)
+        return jsonify({"error": "Failed to update device policy", "details": str(e)}), 500
 
 
 @app.route("/api/system/control", methods=["POST"])
@@ -1722,7 +1755,7 @@ def system_control():
                     result["message"] = f"Failed to reload DNS: {str(e2)}"
         
         elif action == "reload_config":
-            # Reload dashboard configuration (no-op for now, just acknowledge)
+            _signal_rule_cache_reload()
             result["message"] = "Configuration reloaded successfully"
         
         elif action == "reload_firewall":
@@ -1987,22 +2020,7 @@ def _discover_network_devices() -> list:
     return list(discovered_devices.values())
 
 
-def _init_traffic_db() -> None:
-    """Creates database structures along with highly critical target column indexes."""
-    try:
-        with _open_db() as connection:
-            connection.execute("CREATE TABLE IF NOT EXISTS traffic_log (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp REAL, client_ip TEXT, host TEXT, path TEXT, method TEXT, category TEXT, flagged INTEGER DEFAULT 0, entities TEXT)")
-            connection.execute("CREATE TABLE IF NOT EXISTS config_settings (key TEXT PRIMARY KEY, value TEXT, updated_at REAL)")
-            
-            connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_timestamp ON traffic_log(timestamp DESC)")
-            connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_category ON traffic_log(category)")
-            connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_flagged ON traffic_log(flagged)")
-            connection.commit()
-    except sqlite3.Error as exc:
-        app.logger.debug("Database initialization encountered index locking: %s", exc)
-
-
 if __name__ == "__main__":
-    _init_traffic_db()
+    init_db()
     init_config_db()
     app.run(host='0.0.0.0', port=5000, debug=False)
