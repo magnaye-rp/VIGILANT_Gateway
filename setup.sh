@@ -209,26 +209,16 @@ stage_4_copy_files() {
     log_info "Wiping old Python bytecode cache to force code reload..."
     find "$VIGILANT_HOME" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
     find "$REPO_DIR" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-    log_info "Forcing symlink replacement for the addon engine..."
-    # Explicitly define the source path relative to the active repository directory
-    SRC_ADDON="$REPO_DIR/src/vigilant_addon.py"
-
-    # Double check that the file actually exists before symlinking
-    if [ ! -f "$SRC_ADDON" ]; then
-        log_error "Source addon file not found at $SRC_ADDON!"
-        exit 1
-    fi
-
-    # Force remove the old link and cleanly attach the new one
-    rm -f "$VIGILANT_HOME/addons/vigilant_addon.py"
-    ln -sf "$SRC_ADDON" "$VIGILANT_HOME/addons/vigilant_addon.py"
-    log_success "Symlink successfully mapped!"
     
     log_info "Copying Python files..."
     cp "$REPO_DIR/src/app.py" "$VIGILANT_HOME/"
     
     # Establish operational symlink from active work tree
     SRC_ADDON="$REPO_DIR/src/vigilant_addon.py"
+    if [ ! -f "$SRC_ADDON" ]; then
+        log_error "Source addon file not found at $SRC_ADDON!"
+        exit 1
+    fi
     chmod 644 "$SRC_ADDON"
     rm -f "$VIGILANT_HOME/addons/vigilant_addon.py"
     ln -s "$SRC_ADDON" "$VIGILANT_HOME/addons/vigilant_addon.py"
@@ -263,13 +253,46 @@ stage_5_network_config() {
     cp /etc/netplan/00-installer-config.yaml \
        /etc/netplan/00-installer-config.yaml.bak 2>/dev/null || true
     
-    log_info "Applying netplan configuration..."
-    cp "$REPO_DIR/src/config/netplan-config.yaml" /etc/netplan/00-installer-config.yaml
+    log_info "Generating netplan configuration with dynamic interface..."
+    # Check if LAN interface is wireless
+    if [[ "$LAN_INTERFACE" == wl* ]]; then
+        log_info "Detected wireless LAN interface, configuring AP mode..."
+        cat > /etc/netplan/00-installer-config.yaml << EOF
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    $WAN_INTERFACE:
+      dhcp4: true
+  wifis:
+    $LAN_INTERFACE:
+      dhcp4: no
+      access-points:
+        "VIGILANT-Gateway":
+          password: "vigilantsecure"
+      addresses:
+        - 192.168.100.88/24
+EOF
+    else
+        log_info "Detected wired LAN interface, configuring static IP..."
+        cat > /etc/netplan/00-installer-config.yaml << EOF
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    $WAN_INTERFACE:
+      dhcp4: true
+    $LAN_INTERFACE:
+      dhcp4: no
+      addresses:
+        - 192.168.100.88/24
+EOF
+    fi
     
     log_info "Applying netplan changes..."
     netplan generate > /dev/null 2>&1
     netplan apply > /dev/null 2>&1
-    log_success "Network configured"
+    log_success "Network configured with $WAN_INTERFACE (WAN) and $LAN_INTERFACE (LAN)"
 }
 
 # ─── Stage 6: DNS/DHCP Setup ────────────────────────────────────────────────
@@ -421,6 +444,7 @@ EOF
 
     log_info "Creating vigilant-proxy.service..."
     # FIX: Configured to ignore common search engines and core apple traffic structures to completely bypass HSTS constraints
+    # Added capabilities for non-root transparent proxying
     cat << 'EOF' > /etc/systemd/system/vigilant-proxy.service
 [Unit]
 Description=VIGILANT Transparent Proxy (mitmproxy)
@@ -431,6 +455,8 @@ Type=simple
 User=vigilant_admin
 WorkingDirectory=/home/vigilant_admin/vigilant
 Environment=PYTHONUNBUFFERED=1
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 ExecStart=/home/vigilant_admin/vigilant/venv/bin/mitmdump \
     --mode transparent \
     --showhost \
