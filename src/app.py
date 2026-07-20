@@ -1124,6 +1124,33 @@ def handle_behavioral_config():
             "physical_scroll_custom": int(config.get("physical_scroll_custom", 75))
         })
     payload = request.get_json(silent=True) or {}
+    
+    # When preset changes, update the corresponding threshold value
+    if "network_velocity_preset" in payload:
+        preset = payload["network_velocity_preset"]
+        if preset == "High":
+            payload["network_velocity_threshold"] = "2.0"
+        elif preset == "Medium":
+            payload["network_velocity_threshold"] = "1.5"
+        else:  # Low
+            payload["network_velocity_threshold"] = "1.0"
+    
+    if "physical_scroll_preset" in payload:
+        preset = payload["physical_scroll_preset"]
+        if preset == "High":
+            payload["physical_scroll_threshold"] = "120"
+        elif preset == "Medium":
+            payload["physical_scroll_threshold"] = "75"
+        else:  # Low
+            payload["physical_scroll_threshold"] = "50"
+    
+    # When custom value changes, update the threshold
+    if "network_velocity_custom" in payload:
+        payload["network_velocity_threshold"] = str(payload["network_velocity_custom"])
+    
+    if "physical_scroll_custom" in payload:
+        payload["physical_scroll_threshold"] = str(payload["physical_scroll_custom"])
+    
     save_config(payload)
     return jsonify({"status": "success"})
 
