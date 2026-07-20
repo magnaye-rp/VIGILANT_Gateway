@@ -1706,10 +1706,13 @@
   // ─── Keyword Filtering ───
   window.loadKeywords = async function() {
     const tableBody = document.getElementById('keywords-table-body');
+    console.log('loadKeywords called, tableBody:', tableBody);
 
     try {
       const response = await fetch('/api/keywords');
+      console.log('Keywords response status:', response.status);
       const keywords = await response.json();
+      console.log('Keywords data:', keywords);
 
       if (!keywords || keywords.length === 0) {
         tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No constraints active</td></tr>';
@@ -1725,6 +1728,7 @@
         </tr>
       `).join('');
     } catch (error) {
+      console.error('Error loading keywords:', error);
       tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading keywords</td></tr>';
     }
   }
