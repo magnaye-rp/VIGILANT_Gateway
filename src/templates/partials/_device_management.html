@@ -2,31 +2,57 @@
       <div id="tab-device-management" class="tab-content">
         <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Device Management</h2>
 
-        <div class="card glassmorphic-card">
-          <div class="card-header">
-            <div>
-              <div class="card-title">Network Devices</div>
-              <div class="card-subtitle">Track active clients and manage network restrictions</div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem;">
+          <!-- Throttled Devices -->
+          <div class="card glassmorphic-card">
+            <div class="card-header">
+              <div>
+                <div class="card-title">Throttled Devices</div>
+                <div class="card-subtitle">Currently bandwidth-limited clients</div>
+              </div>
+              <button class="btn-secondary" onclick="loadThrottledDevices()" style="padding: 0.5rem 1rem;">Refresh</button>
             </div>
-            <button class="btn-secondary" onclick="loadDevices()" style="padding: 0.5rem 1rem;">Refresh</button>
+            <div style="overflow-x: auto; max-height: 400px;">
+              <table class="traffic-table">
+                <thead>
+                  <tr>
+                    <th>Hostname</th>
+                    <th>IP Address</th>
+                  </tr>
+                </thead>
+                <tbody id="throttled-tbody">
+                  <tr>
+                    <td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Loading throttled devices...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
 
-          <div style="overflow-x: auto;">
-            <table class="traffic-table">
-              <thead>
-                <tr>
-                  <th>Hostname</th>
-                  <th>IP Address</th>
-                  <th>MAC Address</th>
-                  <th>Filter Policy</th>
-                </tr>
-              </thead>
-              <tbody id="devices-tbody">
-                <tr>
-                  <td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Loading devices...</td>
-                </tr>
-              </tbody>
-            </table>
+          <!-- Active Devices -->
+          <div class="card glassmorphic-card">
+            <div class="card-header">
+              <div>
+                <div class="card-title">Active Devices</div>
+                <div class="card-subtitle">Currently connected clients</div>
+              </div>
+              <button class="btn-secondary" onclick="loadDevices()" style="padding: 0.5rem 1rem;">Refresh</button>
+            </div>
+            <div style="overflow-x: auto; max-height: 400px;">
+              <table class="traffic-table">
+                <thead>
+                  <tr>
+                    <th>Hostname</th>
+                    <th>IP Address</th>
+                  </tr>
+                </thead>
+                <tbody id="devices-tbody">
+                  <tr>
+                    <td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Loading devices...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>

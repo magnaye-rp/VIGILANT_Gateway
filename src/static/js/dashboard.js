@@ -56,6 +56,7 @@ function switchTab(tabId) {
   
   if (tabId === 'device-management') {
     loadDevices();
+    loadThrottledDevices();
   }
   if (tabId === 'traffic-logs') {
     loadTrafficLogs();
@@ -73,6 +74,35 @@ function switchTab(tabId) {
 }
 
 // ─── Device Management ───
+async function loadThrottledDevices() {
+  const tableBody = document.getElementById('throttled-tbody');
+
+  try {
+    const response = await fetch('/api/devices/throttled');
+    const data = await response.json();
+    const throttledDevices = data.throttled_devices || [];
+
+    if (throttledDevices.length === 0) {
+      tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No throttled devices</td></tr>';
+      return;
+    }
+
+    tableBody.innerHTML = throttledDevices.map(device => {
+      const hostname = device.hostname || device.custom_name || 'Unknown Device';
+      const ip = device.client_ip || device.ip_address || '—';
+      
+      return `
+        <tr>
+          <td style="font-weight: 500;">${hostname}</td>
+          <td style="font-family: monospace; font-size: 0.9rem;">${ip}</td>
+        </tr>
+      `;
+    }).join('');
+  } catch (error) {
+    tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading throttled devices</td></tr>';
+  }
+}
+
 async function loadDevices() {
   const tableBody = document.getElementById('devices-tbody');
 
@@ -81,34 +111,30 @@ async function loadDevices() {
     const data = await response.json();
     const devices = data.devices || [];
 
-    if (devices.length === 0) {
-      tableBody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No devices detected</td></tr>';
+    // Filter out devices in 192.168.100.0 network
+    const filteredDevices = devices.filter(device => {
+      const ip = device.ip_address || '';
+      return !ip.startsWith('192.168.100.');
+    });
+
+    if (filteredDevices.length === 0) {
+      tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No active devices</td></tr>';
       return;
     }
 
-    tableBody.innerHTML = devices.map(device => {
-      const policy = device.policy || 'none';
-      const stateClass = policy === 'blacklist' ? 'danger' : (policy === 'whitelist' ? 'success' : 'secondary');
-      const stateLabel = policy === 'blacklist' ? 'Blacklisted' : (policy === 'whitelist' ? 'Whitelisted' : 'Default');
+    tableBody.innerHTML = filteredDevices.map(device => {
+      const hostname = device.hostname || device.custom_name || 'Unknown Device';
+      const ip = device.ip_address || '—';
       
       return `
         <tr>
-          <td style="font-weight: 500;">${device.hostname || device.custom_name || 'Unknown Device'}</td>
-          <td style="font-family: monospace; font-size: 0.9rem;">${device.ip_address || '—'}</td>
-          <td style="font-family: monospace; font-size: 0.9rem;">${device.mac_address || '—'}</td>
-          <td><span class="category-badge ${stateClass}">${stateLabel}</span></td>
-          <td>
-            <div class="device-filter-pills">
-              <button class="filter-pill whitelist ${policy === 'whitelist' ? 'active' : ''}" onclick="setDeviceFilter('${device.mac_address}', 'whitelist', this)">Whitelist</button>
-              <button class="filter-pill blacklist ${policy === 'blacklist' ? 'active' : ''}" onclick="setDeviceFilter('${device.mac_address}', 'blacklist', this)">Blacklist</button>
-              <button class="filter-pill none ${policy === 'none' ? 'active' : ''}" onclick="setDeviceFilter('${device.mac_address}', 'none', this)">Default</button>
-            </div>
-          </td>
+          <td style="font-weight: 500;">${hostname}</td>
+          <td style="font-family: monospace; font-size: 0.9rem;">${ip}</td>
         </tr>
       `;
     }).join('');
   } catch (error) {
-    tableBody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading devices</td></tr>';
+    tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading devices</td></tr>';
   }
 }
 
