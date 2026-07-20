@@ -75,7 +75,7 @@ function switchTab(tabId) {
 }
 
 // ─── Device Management ───
-async function loadThrottledDevices() {
+window.loadThrottledDevices = async function() {
   const tableBody = document.getElementById('throttled-tbody');
 
   try {
@@ -103,9 +103,9 @@ async function loadThrottledDevices() {
     console.error('Error loading throttled devices:', error);
     tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading throttled devices</td></tr>';
   }
-}
+};
 
-async function loadActiveDevices() {
+window.loadActiveDevices = async function() {
   const tableBody = document.getElementById('active-tbody');
 
   try {
@@ -142,9 +142,9 @@ async function loadActiveDevices() {
     console.error('Error loading active devices:', error);
     tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading active devices</td></tr>';
   }
-}
+};
 
-async function loadLeasedDevices() {
+window.loadLeasedDevices = async function() {
   const tableBody = document.getElementById('leased-tbody');
 
   try {
@@ -188,9 +188,9 @@ async function loadLeasedDevices() {
     console.error('Error loading leased devices:', error);
     tableBody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading leased devices</td></tr>';
   }
-}
+};
 
-async function setDeviceFilter(macAddress, action, buttonElement) {
+window.setDeviceFilter = async function(macAddress, action, buttonElement) {
   try {
     const response = await fetch('/api/devices/filter', {
       method: 'POST',
@@ -216,7 +216,7 @@ async function setDeviceFilter(macAddress, action, buttonElement) {
           statusBadge.textContent = action === 'blacklist' ? 'Blacklisted' : action === 'whitelist' ? 'Whitelisted' : 'Default';
         }
         
-        loadDevices(); // Refresh to ensure consistency
+        loadLeasedDevices(); // Refresh to ensure consistency
       } else {
         showToast('Failed to update device filter: ' + (data.message || 'Unknown error'), 'danger');
       }
@@ -226,7 +226,7 @@ async function setDeviceFilter(macAddress, action, buttonElement) {
   } catch (error) {
     showToast('Error updating device filter', 'danger');
   }
-}
+};
 
 // ─── Active Restraints Registry ───
 async function loadRestraintsRegistry() {

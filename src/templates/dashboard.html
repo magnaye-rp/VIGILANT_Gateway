@@ -1216,7 +1216,9 @@
     currentTab = tabId;
     
     if (tabId === 'device-management') {
-      loadDevices();
+      loadThrottledDevices();
+      loadActiveDevices();
+      loadLeasedDevices();
     }
     if (tabId === 'traffic-logs') {
       loadTrafficLogs();
@@ -1228,113 +1230,6 @@
     }
     if (tabId === 'behavioral-control') {
       loadBehavioralSettings();
-    }
-  }
-
-  // ─── Device Management ───
-  async function loadDevices() {
-    const tableBody = document.getElementById('devices-tbody');
-
-    try {
-      const response = await fetch('/api/devices');
-      const data = await response.json();
-      const devices = data.devices || [];
-
-      if (devices.length === 0) {
-        tableBody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No devices detected</td></tr>';
-        return;
-      }
-
-      tableBody.innerHTML = devices.map(device => {
-        const currentPolicy = device.policy || 'none';
-        
-        return `
-          <tr>
-            <td style="font-weight: 500;">${device.hostname || device.custom_name || 'Unknown Device'}</td>
-            <td style="font-family: monospace; font-size: 0.9rem;">${device.ip_address || '—'}</td>
-            <td style="font-family: monospace; font-size: 0.9rem;">${device.mac_address || '—'}</td>
-            <td>
-              <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                <button class="btn-whitelist" onclick="setFilter('${device.mac_address}', 'whitelist')" style="padding: 0.25rem 0.5rem; font-size: 0.8rem; background: var(--success); color: white; border: none; border-radius: 4px; cursor: pointer;">Whitelist</button>
-                <button class="btn-blacklist" onclick="setFilter('${device.mac_address}', 'blacklist')" style="padding: 0.25rem 0.5rem; font-size: 0.8rem; background: var(--danger); color: white; border: none; border-radius: 4px; cursor: pointer;">Blacklist</button>
-                <button class="btn-reset" onclick="setFilter('${device.mac_address}', 'none')" style="padding: 0.25rem 0.5rem; font-size: 0.8rem; background: var(--surface-lighter); color: var(--text); border: 1px solid var(--border); border-radius: 4px; cursor: pointer;">Reset</button>
-              </div>
-            </td>
-          </tr>
-        `;
-      }).join('');
-    } catch (error) {
-      tableBody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading devices</td></tr>';
-    }
-  }
-
-  async function setFilter(macAddress, policy) {
-    try {
-      const response = await fetch('/api/devices/policy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mac_address: macAddress, policy: policy })
-      });
-      if (response.ok) {
-        showToast(`Device policy set to ${policy}`, 'success');
-        loadDevices();
-      } else {
-        showToast('Failed to update device policy', 'danger');
-      }
-    } catch (error) {
-      showToast('Error updating device policy', 'danger');
-    }
-  }
-
-  async function updateDeviceName(ipAddress, customName) {
-    try {
-      // First get current device data to preserve policy
-      const devicesResponse = await fetch('/api/devices');
-      const devicesData = await devicesResponse.json();
-      const device = devicesData.devices?.find(d => d.ip_address === ipAddress);
-      const currentPolicy = device?.policy || 'none';
-
-      const response = await fetch('/api/devices/policy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          ip_address: ipAddress, 
-          custom_name: customName,
-          policy: currentPolicy // Preserve existing policy
-        })
-      });
-
-      const data = await response.json();
-      if (response.ok) {
-        showToast('Device name updated', 'success');
-      } else {
-        showToast(data.error || 'Failed to update device name', 'danger');
-      }
-    } catch (error) {
-      showToast('Error updating device name', 'danger');
-    }
-  }
-
-  async function updateDevicePolicy(ipAddress, policy) {
-    try {
-      const response = await fetch('/api/devices/policy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          ip_address: ipAddress, 
-          policy: policy 
-        })
-      });
-
-      const data = await response.json();
-      if (response.ok) {
-        showToast(`Device policy set to ${policy}`, 'success');
-        loadDevices(); // Refresh to show updated policy
-      } else {
-        showToast(data.error || 'Failed to update device policy', 'danger');
-      }
-    } catch (error) {
-      showToast('Error updating device policy', 'danger');
     }
   }
 
@@ -2411,27 +2306,8 @@
 
         // 3. Update active tab specifics without flickering
         if (currentTab === 'device-management' && data.dhcp_allocations) {
-          const tableBody = document.getElementById('devices-tbody');
-          if (tableBody && data.dhcp_allocations.length > 0) {
-            tableBody.innerHTML = data.dhcp_allocations.map(device => {
-              const throughput = `${device.rx_mbps || 0} / ${device.tx_mbps || 0} Mbps`;
-              const stateClass = 'success';
-              const stateLabel = 'Active';
-              
-              return `
-                <tr>
-                  <td style="font-weight: 500;">${device.hostname || device.custom_name || 'Unknown Device'}</td>
-                  <td style="font-family: monospace; font-size: 0.9rem;">${device.ip_address || '—'}</td>
-                  <td style="font-family: monospace; font-size: 0.9rem;">${device.mac_address || '—'}</td>
-                  <td>
-                    <button class="btn btn-sm btn-success" onclick="setFilter('${device.mac_address}', 'whitelist')">Whitelist</button>
-                    <button class="btn btn-sm btn-danger" onclick="setFilter('${device.mac_address}', 'blacklist')">Blacklist</button>
-                    <button class="btn btn-sm btn-secondary" onclick="setFilter('${device.mac_address}', 'none')">Reset</button>
-                  </td>
-                </tr>
-              `;
-            }).join('');
-          }
+          // Device management is now handled by external dashboard.js functions
+          // No need to update here as it's handled by loadLeasedDevices()
         }
         
       } catch (error) {
