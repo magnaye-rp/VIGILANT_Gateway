@@ -944,6 +944,10 @@ class VIGILANTAddon:
                         {"Content-Type": "text/html"}
                     )
                     return
+        except sqlite3.Error as e:
+            print(f"[VIGILANT] Database error during keyword blacklist check: {e}")
+        except Exception as e:
+            print(f"[VIGILANT] Error during keyword blacklist check: {e}")
 
         # TLS Passthrough: Check if host belongs to pinned SSL certificate domains.
         # This now only skips CATEGORY/NLP filtering - the explicit blacklist scan
