@@ -113,13 +113,13 @@ window.loadActiveDevices = async function() {
     const data = await response.json();
     const devices = data.devices || [];
 
-    // Filter for currently active devices (recently seen) and exclude gateway network
+    // Filter for currently active devices (recently seen) and only include 192.168.10.0 network
     const now = Date.now() / 1000;
     const activeDevices = devices.filter(device => {
       const ip = device.ip_address || '';
       const lastSeen = device.last_seen || 0;
-      // Consider device active if seen in last 5 minutes and not in gateway network
-      return !ip.startsWith('192.168.100.') && (now - lastSeen) < 300;
+      // Consider device active if seen in last 5 minutes and in 192.168.10.0 network
+      return ip.startsWith('192.168.10.') && (now - lastSeen) < 300;
     });
 
     if (activeDevices.length === 0) {
@@ -152,10 +152,10 @@ window.loadLeasedDevices = async function() {
     const data = await response.json();
     const devices = data.devices || [];
 
-    // Filter out gateway network devices for leased list
+    // Filter to only include 192.168.10.0 network devices
     const leasedDevices = devices.filter(device => {
       const ip = device.ip_address || '';
-      return !ip.startsWith('192.168.100.');
+      return ip.startsWith('192.168.10.');
     });
 
     if (leasedDevices.length === 0) {
@@ -792,7 +792,7 @@ function toggleMetricsToolkit() {
 
 async function updateGlobalThroughput() {
   try {
-    const response = await fetch('/api/network/throughput');
+    const response = await fetch('/api/interface/throughput');
     const data = await response.json();
     
     const rxElement = document.getElementById('global-rx-mbps');
