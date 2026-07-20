@@ -783,7 +783,7 @@ def dashboard_summary():
             with _open_db() as conn:
                 window_start = int(time.time()) - 86400
                 if _table_exists(conn, "traffic_log"):
-                    row = conn.execute("SELECT COUNT(DISTINCT client_ip) FROM traffic_log WHERE timestamp > ?", (window_start,)).fetchone()
+                    row = conn.execute("SELECT COUNT(DISTINCT client_ip) FROM traffic_log WHERE timestamp > ? AND client_ip LIKE '192.168.10.%'", (window_start,)).fetchone()
                     total_connected = int(row[0] or 0) if row else 0
                     
                     row = conn.execute("SELECT COUNT(*) FROM traffic_log WHERE flagged = 1 AND timestamp > ?", (window_start,)).fetchone()
@@ -793,10 +793,10 @@ def dashboard_summary():
                     recent_entries = [_format_recent_log_entry(dict(r)) for r in rows]
                 
                 if _table_exists(conn, "network_devices"):
-                    row = conn.execute("SELECT COUNT(*) FROM network_devices WHERE policy = 'blacklist'").fetchone()
+                    row = conn.execute("SELECT COUNT(*) FROM network_devices WHERE policy = 'blacklist' AND ip_address LIKE '192.168.10.%'").fetchone()
                     throttled_count = int(row[0] or 0) if row else 0
                     
-                    device_rows = conn.execute("SELECT ip_address, mac_address, hostname, custom_name, last_seen FROM network_devices ORDER BY last_seen DESC").fetchall()
+                    device_rows = conn.execute("SELECT ip_address, mac_address, hostname, custom_name, last_seen FROM network_devices WHERE ip_address LIKE '192.168.10.%' ORDER BY last_seen DESC").fetchall()
                     for row in device_rows:
                         dhcp_allocations.append({
                             "ip_address": row[0], "mac_address": row[1],

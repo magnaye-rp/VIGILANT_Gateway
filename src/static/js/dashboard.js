@@ -1322,13 +1322,6 @@ function startDashboardPolling() {
         networkLoad.textContent = 'Network Active';
       }
       
-      const shieldIntegrity = document.getElementById('nerve-shield-integrity');
-      if (shieldIntegrity) {
-        const activeCount = data.devices?.total_connected || data.clients || 0;
-        const throttledCount = data.devices?.throttled_count || data.throttles?.length || 0;
-        shieldIntegrity.textContent = `${activeCount} Active / ${throttledCount} Throttled`;
-      }
-      
       // Fetch accurate nerve center metrics
       try {
         const nerveResponse = await fetch('/api/nerve-center/metrics');
