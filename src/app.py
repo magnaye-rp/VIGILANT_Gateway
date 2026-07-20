@@ -879,41 +879,277 @@ def clear_logs():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route('/api/logs/traffic', methods=["GET"])
+def get_traffic_logs():
+    """Fetch traffic logs with optional filtering and pagination support."""
+    try:
+        # Parse query parameters
+        limit = request.args.get('limit', 100, type=int)
+        offset = request.args.get('offset', 0, type=int)
+        client_ip = request.args.get('client_ip', '').strip()
+        status = request.args.get('status', '').strip()  # 'flagged' or 'allowed'
+        since_id = request.args.get('since_id', type=int)  # Get logs newer than this ID
+        since_timestamp = request.args.get('since_timestamp', type=float)  # Get logs newer than this timestamp
+        
+        # Validate and sanitize parameters
+        limit = max(1, min(limit, 1000))  # Cap at 1000 to prevent excessive loads
+        offset = max(0, offset)
+        
+        where_clauses = ["1=1"]
+        params = []
+        
+        # Add filters
+        if client_ip:
+            where_clauses.append("client_ip = ?")
+            params.append(client_ip)
+        
+        if status.lower() == 'flagged':
+            where_clauses.append("flagged = 1")
+        elif status.lower() == 'allowed':
+            where_clauses.append("flagged = 0")
+        
+        if since_id:
+            where_clauses.append("id > ?")
+            params.append(since_id)
+        
+        if since_timestamp:
+            where_clauses.append("timestamp > ?")
+            params.append(since_timestamp)
+        
+        where_sql = " AND ".join(where_clauses)
+        
+        logs = []
+        total_count = 0
+        
+        if DB_PATH.exists():
+            with _open_db() as connection:
+                if _table_exists(connection, "traffic_log"):
+                    # Get total count for pagination
+                    count_query = f"SELECT COUNT(*) FROM traffic_log WHERE {where_sql}"
+                    total_count = connection.execute(count_query, tuple(params)).fetchone()[0] or 0
+                    
+                    # Fetch logs with pagination
+                    log_query = f"""
+                        SELECT id, timestamp, client_ip, host, path, method, category, flagged, entities
+                        FROM traffic_log
+                        WHERE {where_sql}
+                        ORDER BY timestamp DESC
+                        LIMIT ? OFFSET ?
+                    """
+                    log_params = params + [limit, offset]
+                    
+                    rows = connection.execute(log_query, tuple(log_params)).fetchall()
+                    
+                    for row in rows:
+                        log_dict = {
+                            "id": row[0],
+                            "timestamp": row[1],
+                            "client_ip": row[2],
+                            "host": row[3],
+                            "path": row[4],
+                            "method": row[5],
+                            "category": row[6],
+                            "flagged": bool(row[7]),
+                            "entities": row[8]
+                        }
+                        
+                        # Format timestamp for display
+                        if isinstance(log_dict["timestamp"], (int, float)):
+                            log_dict["formatted_time"] = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log_dict["timestamp"]))
+                            log_dict["iso_timestamp"] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(log_dict["timestamp"]))
+                        else:
+                            log_dict["formatted_time"] = str(log_dict["timestamp"] or "N/A")
+                            log_dict["iso_timestamp"] = log_dict["formatted_time"]
+                        
+                        logs.append(log_dict)
+        
+        return jsonify({
+            "status": "success",
+            "logs": logs,
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "total_count": total_count,
+                "has_more": (offset + limit) < total_count
+            }
+        })
+    except sqlite3.Error as e:
+        app.logger.error("Database error in get_traffic_logs: %s", e, exc_info=True)
+        return jsonify({"error": "Database error", "details": str(e)}), 500
+    except Exception as e:
+        app.logger.error("Error in get_traffic_logs: %s", e, exc_info=True)
+        return jsonify({"error": "Internal server error", "details": str(e)}), 500
+
+
+@app.route('/api/logs/traffic/refresh', methods=["GET"])
+def refresh_traffic_logs():
+    """Lightweight endpoint for real-time log refresh using since_id or since_timestamp."""
+    try:
+        since_id = request.args.get('since_id', type=int)
+        since_timestamp = request.args.get('since_timestamp', type=float)
+        limit = request.args.get('limit', 50, type=int)
+        
+        limit = max(1, min(limit, 500))  # Cap at 500 for refresh endpoint
+        
+        where_clauses = ["1=1"]
+        params = []
+        
+        if since_id:
+            where_clauses.append("id > ?")
+            params.append(since_id)
+        elif since_timestamp:
+            where_clauses.append("timestamp > ?")
+            params.append(since_timestamp)
+        else:
+            # If no filter provided default to last 5 minutes
+            where_clauses.append("timestamp > ?")
+            params.append(time.time() - 300)
+        
+        where_sql = " AND ".join(where_clauses)
+        
+        logs = []
+        
+        if DB_PATH.exists():
+            with _open_db() as connection:
+                if _table_exists(connection, "traffic_log"):
+                    log_query = f"""
+                        SELECT id, timestamp, client_ip, host, path, method, category, flagged, entities
+                        FROM traffic_log
+                        WHERE {where_sql}
+                        ORDER BY timestamp DESC
+                        LIMIT ?
+                    """
+                    log_params = params + [limit]
+                    
+                    rows = connection.execute(log_query, tuple(log_params)).fetchall()
+                    
+                    for row in rows:
+                        log_dict = {
+                            "id": row[0],
+                            "timestamp": row[1],
+                            "client_ip": row[2],
+                            "host": row[3],
+                            "path": row[4],
+                            "method": row[5],
+                            "category": row[6],
+                            "flagged": bool(row[7]),
+                            "entities": row[8]
+                        }
+                        
+                        # Format timestamp for display
+                        if isinstance(log_dict["timestamp"], (int, float)):
+                            log_dict["formatted_time"] = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log_dict["timestamp"]))
+                            log_dict["iso_timestamp"] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(log_dict["timestamp"]))
+                        else:
+                            log_dict["formatted_time"] = str(log_dict["timestamp"] or "N/A")
+                            log_dict["iso_timestamp"] = log_dict["formatted_time"]
+                        
+                        logs.append(log_dict)
+        
+        return jsonify({
+            "status": "success",
+            "logs": logs,
+            "count": len(logs),
+            "refresh_timestamp": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+        })
+    except sqlite3.Error as e:
+        app.logger.error("Database error in refresh_traffic_logs: %s", e, exc_info=True)
+        return jsonify({"error": "Database error", "details": str(e)}), 500
+    except Exception as e:
+        app.logger.error("Error in refresh_traffic_logs: %s", e, exc_info=True)
+        return jsonify({"error": "Internal server error", "details": str(e)}), 500
+
+
 @app.route('/api/logs/export')
 def export_logs():
+    """Export traffic logs to CSV with proper data formatting and error handling."""
     try:
-        logs = query_db("SELECT timestamp, client_ip, host, category, flagged FROM traffic_log WHERE category NOT IN ('DNS_TRACKED', 'NON-HTML') ORDER BY timestamp DESC")
+        # Query all relevant fields from traffic_log
+        logs = query_db("SELECT id, timestamp, client_ip, host, path, method, category, flagged, entities FROM traffic_log WHERE category NOT IN ('DNS_TRACKED', 'NON-HTML') ORDER BY timestamp DESC")
         if not isinstance(logs, list):
             logs = []
             
         text_stream = io.StringIO()
         cw = csv.writer(text_stream)
-        cw.writerow(['Time', 'Client IP', 'Domain', 'Category', 'Status'])
+        # Write CSV header
+        cw.writerow(['ID', 'Time', 'Client IP', 'Domain', 'Path', 'Method', 'Category', 'Status', 'Entities'])
         
         for log in logs:
+            # Safely extract and format each field
+            log_id = log.get('id', '')
+            if log_id is None:
+                log_id = ''
+            
             ts = log.get('timestamp')
             try:
-                if isinstance(ts, (int, float)):
+                if isinstance(ts, (int, float)) and ts > 0:
                     formatted_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(ts))
                 else:
-                    formatted_time = str(ts or "N/A")
+                    formatted_time = 'N/A'
             except Exception:
-                formatted_time = "N/A"
-                
+                formatted_time = 'N/A'
+            
+            client_ip = log.get('client_ip')
+            if client_ip is None:
+                client_ip = '0.0.0.0'
+            
+            host = log.get('host')
+            if host is None:
+                host = 'unknown'
+            
+            path = log.get('path')
+            if path is None:
+                path = ''
+            
+            method = log.get('method')
+            if method is None:
+                method = ''
+            
+            category = log.get('category')
+            if category is None:
+                category = 'Unclassified'
+            
+            flagged = log.get('flagged', 0)
+            status = 'Blocked' if flagged else 'Allowed'
+            
+            # Handle entities field (may be JSON string or None)
+            entities = log.get('entities')
+            if entities is None:
+                entities = ''
+            else:
+                entities_str = str(entities)
+                # Remove newlines and quotes to keep CSV clean
+                entities_str = entities_str.replace('\n', ' ').replace('"', "'")
+                entities = entities_str
+            
             cw.writerow([
-                formatted_time, 
-                log.get('client_ip', '0.0.0.0'), 
-                log.get('host', 'unknown'), 
-                log.get('category', 'Unclassified'), 
-                'Blocked' if log.get('flagged') else 'Allowed'
+                str(log_id),
+                formatted_time,
+                str(client_ip),
+                str(host),
+                str(path),
+                str(method),
+                str(category),
+                status,
+                entities
             ])
         
+        # Convert to bytes and send as file
         byte_stream = io.BytesIO(text_stream.getvalue().encode('utf-8'))
         text_stream.close()
-        return send_file(byte_stream, as_attachment=True, download_name='traffic_logs.csv', mimetype='text/csv')
+        
+        return send_file(
+            byte_stream,
+            as_attachment=True,
+            download_name='traffic_logs_export.csv',
+            mimetype='text/csv'
+        )
+    except sqlite3.Error as e:
+        app.logger.error("Database error during CSV export: %s", e, exc_info=True)
+        return jsonify({"error": "Database error during export", "details": str(e)}), 500
     except Exception as e:
         app.logger.error("Failed to export logs: %s", e, exc_info=True)
-        return abort(500, description="Failed to export logs")
+        return jsonify({"error": "Failed to export logs", "details": str(e)}), 500
 
 
 @app.route('/api/config/setup/export')
@@ -1158,6 +1394,125 @@ def handle_behavioral_config():
 @app.route("/api/devices", methods=["GET"])
 def get_devices():
     return jsonify({"devices": _discover_network_devices()})
+
+
+@app.route("/api/devices/throttled", methods=["GET"])
+def get_throttled_devices():
+    """Get list of currently throttled devices with their metrics."""
+    try:
+        throttled_devices = []
+        
+        if DB_PATH.exists():
+            with _open_db() as connection:
+                # Check for throttle_events table
+                if not _table_exists(connection, "throttle_events"):
+                    return jsonify({
+                        "status": "success",
+                        "throttled_devices": []
+                    })
+                
+                # Get recent throttle events (last 5 minutes)
+                window_start = time.time() - 300
+                rows = connection.execute(
+                    """
+                    SELECT client_ip, host, rpm_current, rpm_baseline, action, timestamp
+                    FROM throttle_events
+                    WHERE timestamp > ?
+                    ORDER BY timestamp DESC
+                    """,
+                    (window_start,)
+                ).fetchall()
+                
+                # Also check traffic_log for flagged requests from same window
+                flagged_rows = connection.execute(
+                    """
+                    SELECT client_ip, host, COUNT(*) as flagged_count, MAX(timestamp) as last_flagged
+                    FROM traffic_log
+                    WHERE flagged = 1 AND timestamp > ?
+                    GROUP BY client_ip, host
+                    """,
+                    (window_start,)
+                ).fetchall()
+                
+                # Build a map of client IPs with their latest throttle metrics
+                device_metrics = {}
+                for row in rows:
+                    client_ip = row[0]
+                    if client_ip not in device_metrics:
+                        device_metrics[client_ip] = {
+                            "client_ip": client_ip,
+                            "current_rpm": row[2],
+                            "baseline_rpm": row[3],
+                            "is_throttled": True,
+                            "last_active_domain": row[1],
+                            "timestamp": row[5],
+                            "throttle_action": row[4]
+                        }
+                    else:
+                        # Keep the most recent entry
+                        if row[5] > device_metrics[client_ip]["timestamp"]:
+                            device_metrics[client_ip].update({
+                                "current_rpm": row[2],
+                                "baseline_rpm": row[3],
+                                "last_active_domain": row[1],
+                                "timestamp": row[5],
+                                "throttle_action": row[4]
+                            })
+                
+                # Add flagged count info from traffic_log
+                for row in flagged_rows:
+                    client_ip = row[0]
+                    if client_ip in device_metrics:
+                        device_metrics[client_ip]["flagged_count"] = row[2]
+                        device_metrics[client_ip]["last_flagged"] = row[3]
+                
+                # Also check network_devices table for policy-based throttling
+                if _table_exists(connection, "network_devices"):
+                    policy_rows = connection.execute(
+                        """
+                        SELECT ip_address, mac_address, hostname, custom_name, policy
+                        FROM network_devices
+                        WHERE policy = 'blacklist'
+                        """
+                    ).fetchall()
+                    
+                    for row in policy_rows:
+                        ip_address = row[0]
+                        if ip_address not in device_metrics:
+                            device_metrics[ip_address] = {
+                                "client_ip": ip_address,
+                                "mac_address": row[1],
+                                "hostname": row[2] or "Unknown",
+                                "custom_name": row[3],
+                                "current_rpm": 0,
+                                "baseline_rpm": 0,
+                                "is_throttled": True,
+                                "last_active_domain": "N/A",
+                                "timestamp": time.time(),
+                                "throttle_action": "POLICY_BLACKLIST",
+                                "policy": "blacklist"
+                            }
+                
+                throttled_devices = list(device_metrics.values())
+                
+                # Format timestamps
+                for device in throttled_devices:
+                    ts = device.get("timestamp")
+                    if isinstance(ts, (int, float)):
+                        device["timestamp"] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(ts))
+                    else:
+                        device["timestamp"] = str(ts)
+        
+        return jsonify({
+            "status": "success",
+            "throttled_devices": throttled_devices
+        })
+    except sqlite3.Error as e:
+        app.logger.error("Database error in get_throttled_devices: %s", e, exc_info=True)
+        return jsonify({"error": "Database error", "details": str(e)}), 500
+    except Exception as e:
+        app.logger.error("Error in get_throttled_devices: %s", e, exc_info=True)
+        return jsonify({"error": "Internal server error", "details": str(e)}), 500
 
 
 @app.route("/api/devices/policy", methods=["POST"])
