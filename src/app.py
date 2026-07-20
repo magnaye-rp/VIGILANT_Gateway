@@ -730,7 +730,7 @@ def get_stats():
 @app.route('/index.html')
 def dashboard():
     proxy_active = _service_statuses().get("vigilant_proxy") == "active"
-    return render_template("dashboard.html", proxy_active=proxy_active)
+    return render_template("dashboard.html", proxy_active=proxy_active, time=time)
 
 
 @app.route("/api/dashboard/summary")

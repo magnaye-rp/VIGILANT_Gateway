@@ -375,6 +375,6 @@
   </div>
 </div>
 
-<script src="{{ url_for('static', filename='js/dashboard.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/dashboard.js') }}?v={{ time.time() }}" defer></script>
 </body>
 </html>
