@@ -77,37 +77,29 @@
       <!-- System Tab -->
       <div id="tab-system" class="tab-content active">
         <!-- VIGILANT Nerve Center Quick View -->
-        <div class="card glassmorphic-card" style="margin-bottom: 2rem; background: var(--primary-dark); color: white;">
-          <div class="card-header" style="border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 1rem; display: flex; justify-content: space-between;">
-            <div class="card-title" style="color: white; font-size: 1.5rem;"><i class="fa-solid fa-network-wired" style="margin-right: 0.5rem;"></i> VIGILANT Nerve Center</div>
-            <div class="theme-toggle" style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
-              <span>Light</span>
-              <label class="toggle-switch-container">
-                <input type="checkbox" id="theme-toggle-switch" onchange="toggleThemeMode(this.checked)" class="d-none">
-                <div class="toggle-slider" onclick="this.previousElementSibling.click(); this.classList.toggle('active')"></div>
-              </label>
-              <span>Dark</span>
-            </div>
+        <div class="card glassmorphic-card" style="margin-bottom: 2rem; background: var(--primary-dark); color: var(--text);">
+          <div class="card-header" style="border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 1rem;">
+            <div class="card-title" style="color: var(--text); font-size: 1.5rem;"><i class="fa-solid fa-network-wired" style="margin-right: 0.5rem;"></i> VIGILANT Nerve Center</div>
           </div>
           <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem; margin-top: 1.5rem;">
             <div>
-              <div style="font-size: 0.85rem; opacity: 0.8; margin-bottom: 0.25rem;">System Health Status</div>
-              <div style="font-size: 1.25rem; font-weight: 600; display: flex; align-items: center; gap: 0.5rem;">
+              <div style="font-size: 0.85rem; opacity: 0.8; margin-bottom: 0.25rem; color: var(--text);">System Health Status</div>
+              <div style="font-size: 1.25rem; font-weight: 600; display: flex; align-items: center; gap: 0.5rem; color: var(--text);">
                 <span id="nerve-health-icon" style="color: #1A938A;">●</span>
                 <span id="nerve-health-text">Optimal</span>
               </div>
             </div>
             <div>
-              <div style="font-size: 0.85rem; opacity: 0.8; margin-bottom: 0.25rem;">Active Network Load</div>
-              <div style="font-size: 1.25rem; font-weight: 600;" id="nerve-network-load">0.0 / 0.0 Mbps</div>
+              <div style="font-size: 0.85rem; opacity: 0.8; margin-bottom: 0.25rem; color: var(--text);">Active Network Load</div>
+              <div style="font-size: 1.25rem; font-weight: 600; color: var(--text);" id="nerve-network-load">0.0 / 0.0 Mbps</div>
             </div>
             <div>
-              <div style="font-size: 0.85rem; opacity: 0.8; margin-bottom: 0.25rem;">Shield Integrity</div>
-              <div style="font-size: 1.25rem; font-weight: 600;" id="nerve-shield-integrity">0 Active / 0 Throttled</div>
+              <div style="font-size: 0.85rem; opacity: 0.8; margin-bottom: 0.25rem; color: var(--text);">Shield Integrity</div>
+              <div style="font-size: 1.25rem; font-weight: 600; color: var(--text);" id="nerve-shield-integrity">0 Active / 0 Throttled</div>
             </div>
             <div>
-              <div style="font-size: 0.85rem; opacity: 0.8; margin-bottom: 0.25rem;">NLP & Guard Status</div>
-              <div style="font-size: 1.25rem; font-weight: 600;" id="nerve-nlp-status">Active</div>
+              <div style="font-size: 0.85rem; opacity: 0.8; margin-bottom: 0.25rem; color: var(--text);">NLP & Guard Status</div>
+              <div style="font-size: 1.25rem; font-weight: 600; color: var(--text);" id="nerve-nlp-status">Active</div>
             </div>
           </div>
         </div>

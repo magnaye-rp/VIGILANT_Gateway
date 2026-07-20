@@ -1431,6 +1431,9 @@ def get_throttled_devices():
                     
                     for row in policy_rows:
                         ip_address = row[0]
+                        # Filter out gateway network devices (192.168.100.0)
+                        if ip_address.startswith('192.168.100.'):
+                            continue
                         throttled_devices.append({
                             "client_ip": ip_address,
                             "mac_address": row[1],
@@ -1477,6 +1480,9 @@ def get_throttled_devices():
             device_metrics = {}
             for row in rows:
                 client_ip = row[0]
+                # Filter out gateway network devices (192.168.100.0)
+                if client_ip.startswith('192.168.100.'):
+                    continue
                 if client_ip not in device_metrics:
                     device_metrics[client_ip] = {
                         "client_ip": client_ip,
@@ -1517,6 +1523,9 @@ def get_throttled_devices():
                 
                 for row in policy_rows:
                     ip_address = row[0]
+                    # Filter out gateway network devices (192.168.100.0)
+                    if ip_address.startswith('192.168.100.'):
+                        continue
                     if ip_address not in device_metrics:
                         device_metrics[ip_address] = {
                             "client_ip": ip_address,
