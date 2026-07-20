@@ -30,7 +30,7 @@ MIN_REQUESTS_BASELINE = 10
 # Default values (will be overridden by database config)
 DEFAULT_VELOCITY_THRESHOLD = 1.5
 DEFAULT_THROTTLE_RATE = "512kbit"
-DEFAULT_PINNED_DOMAINS = "facebook.com,tiktok.com,x.com,twitter.com"
+DEFAULT_PINNED_DOMAINS = "instagram.com, facebook.com,tiktok.com,x.com,twitter.co, youtube.com"
 
 # Global asset whitelist
 GLOBAL_WHITELIST = {
@@ -436,15 +436,25 @@ def compute_velocity(client_ip):
         session_avg = session_totals[client_ip] / elapsed_min
         return current_rpm, session_avg
 
-def should_throttle(client_ip, host):
+def should_throttle(client_ip, host, path=""):
     config = load_proxy_config()
     network_velocity_threshold = config['network_velocity_threshold']
     physical_scroll_threshold = config['physical_scroll_threshold']
     social_domains = load_social_domains()
 
-    base = ".".join(host.lstrip("www.").split(".")[-2:])
+    # Include youtube.com back into social_domains in DB or default set
+    clean_host = host.lstrip("www.")
+    base = ".".join(clean_host.split(".")[-2:])
+    
     if not any(base in d for d in social_domains):
         return False, 0, 0
+
+    # Optional: Short-form video detection filter for YouTube / IG
+    is_youtube = "youtube.com" in clean_host or "googlevideo.com" in clean_host
+    if is_youtube and not ("/shorts/" in path or "shorts" in path):
+        # Allow standard long-form videos without aggressive throttling
+        return False, 0, 0
+
     rpm_now, rpm_base = compute_velocity(client_ip)
     if session_totals[client_ip] < MIN_REQUESTS_BASELINE:
         return False, rpm_now, rpm_base
@@ -452,21 +462,25 @@ def should_throttle(client_ip, host):
     flagged = (rpm_now > (rpm_base * network_velocity_threshold)) or (rpm_now > physical_scroll_threshold)
     return flagged, rpm_now, rpm_base
 
+def websocket_message(self, flow: http.HTTPFlow):
+    message = flow.websocket.messages[-1]
+    client_ip = flow.client_conn.peername[0]
+    
+    # Extract textual content from web-socket frame payload
+    payload_text = message.text if message.is_text else message.content.decode("utf-8", errors="ignore")
+    
+    with db_lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.execute("SELECT keyword FROM keyword_blacklist")
+        keywords = [row[0] for row in cursor.fetchall()]
+        conn.close()
 
-# ══════════════════════════════════════════════════════════════════
-# ─── Legacy Methods Removed ─────────────────────────────────────────
-# ══════════════════════════════════════════════════════════════════
-# The following legacy regex word-stripping and string-splitting methods
-# have been removed and replaced with TF-IDF vectorization and cosine
-# similarity scoring via VigilantTFIDFClassifier:
-# - normalize_words()
-# - collapse_stuffed_segments()
-# - find_keyword_hits()
-# - scan_url_keywords()
-# - scan_body_keywords()
-# ══════════════════════════════════════════════════════════════════
+    matched = scan_text_for_keywords(payload_text, keywords)
+    if matched:
+        print(f"[VIGILANT] WEBSOCKET KEYWORD BLOCKED: {matched} from {client_ip}")
+        # Drop the websocket frame / close connection
+        flow.websocket.close(1008, "Blocked keyword detected")
 
-# ─── Efficient Keyword Detection Helpers ─────────────────────────────
 def normalize_text_simple(text: str) -> str:
     """
     Simple text normalization for keyword matching.
@@ -904,16 +918,6 @@ class VIGILANTAddon:
             print(f"[VIGILANT] WHITELIST BYPASS (request): {host} -> {client_ip}")
             return
 
-        # ══════════════════════════════════════════════════════════════
-        # FIX #3 (bypass sealing): Strict keyword blacklist now runs BEFORE
-        # the pinned-domain TLS-passthrough check. Previously, any domain
-        # on the pinned list (e.g. instagram.com, tiktok.com) skipped ALL
-        # filtering unconditionally - which meant a blacklisted term could
-        # simply be routed through query params on those apps and sail
-        # through untouched. Now: if a blacklisted keyword is explicitly
-        # present in the raw URL/path, the request is dropped immediately,
-        # regardless of whether the domain is pinned.
-        # ══════════════════════════════════════════════════════════════
         try:
             with db_lock:
                 conn = sqlite3.connect(DB_PATH)
@@ -922,18 +926,17 @@ class VIGILANTAddon:
                 conn.close()
 
             if keywords:
-                try:
-                    decoded_url = urllib.parse.unquote(flow.request.pretty_url)
-                except Exception:
-                    decoded_url = flow.request.pretty_url
+                decoded_url = urllib.parse.unquote(flow.request.pretty_url)
+                req_body = ""
 
-                path_text = flow.request.path[:2000]
+                if flow.request.content:
+                    req_body = urllib.parse.unquote(flow.request.get_text(strict=False))
 
-                # Use efficient token intersection for keyword detection
-                url_text = decoded_url + " " + path_text
-                matched = scan_text_for_keywords(url_text, keywords)
+                combined_search_text = f"{decoded_url} {req_body}"
+
+                matched = scan_text_for_keywords(combined_search_text, keywords)
                 if matched:
-                    print(f"[VIGILANT] KEYWORD BLOCKED (pre-passthrough): {matched} in {decoded_url[:60]} from {client_ip}")
+                    print(f"[VIGILANT] INSTAGRAM KEYWORD BLOCKED: {matched} from {client_ip}")
                     log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [])
                     flow.response = http.Response.make(
                         403,
@@ -941,8 +944,6 @@ class VIGILANTAddon:
                         {"Content-Type": "text/html"}
                     )
                     return
-        except sqlite3.Error as e:
-            print(f"[VIGILANT] Keyword blacklist check failed: {e}")
 
         # TLS Passthrough: Check if host belongs to pinned SSL certificate domains.
         # This now only skips CATEGORY/NLP filtering - the explicit blacklist scan
