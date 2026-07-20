@@ -811,6 +811,14 @@ class VIGILANTAddon:
     def tls_clienthello(self, data):
         """TLS ClientHello hook for transparent SNI domain logging with full decryption capability"""
         try:
+            # Check if SNI filtering is enabled
+            config = load_proxy_config()
+            sni_filtering_enabled = config.get('sni_filtering_enabled', 'true').lower() == 'true'
+            
+            if not sni_filtering_enabled:
+                # SNI tracking disabled, skip behavioral analysis
+                return
+            
             # 1. Direct attribute access for modern mitmproxy
             sni = data.sni
 
