@@ -101,7 +101,8 @@ DEFAULT_CONFIG = {
     "ui_theme": "light",
     "tfidf_classification_threshold": "0.05",
     "tfidf_url_threshold": "0.3",
-    "tfidf_body_threshold": "0.15"
+    "tfidf_body_threshold": "0.15",
+    "sni_filtering_enabled": "true"
 }
 
 CONFIG_DEFAULTS = DEFAULT_CONFIG
