@@ -1205,7 +1205,7 @@ def system_control():
         if action == "restart_proxy":
             # Restart mitmproxy service
             try:
-                subprocess.run(["systemctl", "restart", "vigilant-proxy"], check=True, capture_output=True, timeout=10)
+                subprocess.run(["sudo", "systemctl", "restart", "vigilant-proxy"], check=True, capture_output=True, timeout=10)
                 result["message"] = "Proxy service restarted successfully"
             except subprocess.TimeoutExpired:
                 result["status"] = "warning"
@@ -1216,7 +1216,7 @@ def system_control():
             except FileNotFoundError:
                 # Fallback for non-systemctl systems
                 try:
-                    subprocess.run(["pkill", "-f", "mitmdump"], check=True, timeout=5)
+                    subprocess.run(["sudo", "pkill", "-f", "mitmdump"], check=True, timeout=5)
                     result["message"] = "Proxy process terminated (manual restart required)"
                 except Exception as e2:
                     result["status"] = "error"
@@ -1225,7 +1225,7 @@ def system_control():
         elif action == "restart_dnsmasq":
             # Reload dnsmasq configuration
             try:
-                subprocess.run(["systemctl", "reload", "dnsmasq"], check=True, capture_output=True, timeout=10)
+                subprocess.run(["sudo", "systemctl", "reload", "dnsmasq"], check=True, capture_output=True, timeout=10)
                 result["message"] = "DNS service reloaded successfully"
             except subprocess.TimeoutExpired:
                 result["status"] = "warning"
@@ -1235,7 +1235,7 @@ def system_control():
                 result["message"] = f"Failed to reload DNS: {e.stderr.decode() if e.stderr else str(e)}"
             except FileNotFoundError:
                 try:
-                    subprocess.run(["pkill", "-HUP", "dnsmasq"], check=True, timeout=5)
+                    subprocess.run(["sudo", "pkill", "-HUP", "dnsmasq"], check=True, timeout=5)
                     result["message"] = "DNS service signaled to reload"
                 except Exception as e2:
                     result["status"] = "error"
@@ -1248,7 +1248,7 @@ def system_control():
         elif action == "reload_firewall":
             # Reload firewall rules
             try:
-                subprocess.run(["iptables-restore", "/etc/iptables/rules.v4"], check=True, capture_output=True, timeout=10)
+                subprocess.run(["sudo", "iptables-restore", "/etc/iptables/rules.v4"], check=True, capture_output=True, timeout=10)
                 result["message"] = "Firewall rules reloaded successfully"
             except subprocess.TimeoutExpired:
                 result["status"] = "warning"
