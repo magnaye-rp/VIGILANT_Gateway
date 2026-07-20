@@ -1404,6 +1404,56 @@ def get_devices():
     return jsonify({"devices": _discover_network_devices()})
 
 
+@app.route("/api/devices/active", methods=["GET"])
+def get_active_devices():
+    """Get currently active devices from traffic_log (last 1 minute)"""
+    try:
+        active_devices = []
+        
+        if DB_PATH.exists():
+            with _open_db() as conn:
+                window_start = time.time() - 60
+                if _table_exists(conn, "traffic_log"):
+                    rows = conn.execute(
+                        """
+                        SELECT DISTINCT client_ip, MAX(timestamp) as last_seen
+                        FROM traffic_log
+                        WHERE client_ip LIKE '192.168.10.%' AND timestamp > ?
+                        GROUP BY client_ip
+                        ORDER BY last_seen DESC
+                        """,
+                        (window_start,)
+                    ).fetchall()
+                    
+                    for row in rows:
+                        ip_address = row[0]
+                        last_seen = row[1]
+                        
+                        # Try to get device info from network_devices
+                        hostname = "Unknown Device"
+                        mac_address = "—"
+                        if _table_exists(conn, "network_devices"):
+                            device_row = conn.execute(
+                                "SELECT hostname, custom_name, mac_address FROM network_devices WHERE ip_address = ?",
+                                (ip_address,)
+                            ).fetchone()
+                            if device_row:
+                                hostname = device_row[0] or device_row[1] or "Unknown Device"
+                                mac_address = device_row[2] or "—"
+                        
+                        active_devices.append({
+                            "ip_address": ip_address,
+                            "hostname": hostname,
+                            "mac_address": mac_address,
+                            "last_seen": last_seen
+                        })
+        
+        return jsonify({"devices": active_devices})
+    except Exception as exc:
+        app.logger.error("Failed to get active devices: %s", exc)
+        return jsonify({"devices": []})
+
+
 @app.route("/api/devices/throttled", methods=["GET"])
 def get_throttled_devices():
     """Get list of currently throttled devices with their metrics."""

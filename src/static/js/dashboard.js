@@ -109,27 +109,17 @@ window.loadActiveDevices = async function() {
   const tableBody = document.getElementById('active-tbody');
 
   try {
-    const response = await fetch('/api/devices');
+    const response = await fetch('/api/devices/active');
     const data = await response.json();
     const devices = data.devices || [];
 
-    // Filter for currently active devices (recently seen) and only include 192.168.10.0 network
-    // Use 1-minute window to match nerve center logic
-    const now = Date.now() / 1000;
-    const activeDevices = devices.filter(device => {
-      const ip = device.ip_address || '';
-      const lastSeen = device.last_seen || 0;
-      // Consider device active if seen in last 1 minute and in 192.168.10.0 network
-      return ip.startsWith('192.168.10.') && (now - lastSeen) < 60;
-    });
-
-    if (activeDevices.length === 0) {
+    if (devices.length === 0) {
       tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No active devices</td></tr>';
       return;
     }
 
-    tableBody.innerHTML = activeDevices.map(device => {
-      const hostname = device.hostname || device.custom_name || 'Unknown Device';
+    tableBody.innerHTML = devices.map(device => {
+      const hostname = device.hostname || 'Unknown Device';
       const ip = device.ip_address || '—';
       
       return `

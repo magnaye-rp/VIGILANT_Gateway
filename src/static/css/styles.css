@@ -880,6 +880,16 @@ button {
   color: #0f172a !important;
 }
 
+/* Specific fix for nerve center in light mode */
+[data-theme="light"] .nerve-center,
+[data-theme="light"] .nerve-center *,
+[data-theme="light"] .nerve-center .card-title,
+[data-theme="light"] .nerve-center .card-title *,
+[data-theme="light"] .nerve-center .card-header,
+[data-theme="light"] .nerve-center .card-header * {
+  color: #0f172a !important;
+}
+
 /* Fix sub-container backgrounds in light mode */
 [data-theme="light"] .glassmorphic-card .card-header {
   border-bottom: 1px solid rgba(0, 0, 0, 0.1) !important;
