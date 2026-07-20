@@ -1082,10 +1082,15 @@ def manage_category_hints():
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         category TEXT,
                         domain TEXT,
-                        action TEXT
+                        action TEXT DEFAULT 'throttle'
                     )
                 """)
-                cursor = conn.execute("INSERT INTO category_hints (category, domain, action) VALUES (?, ?, ?)", (category, domain, action))
+                # Try inserting with action column, fallback without it
+                try:
+                    cursor = conn.execute("INSERT INTO category_hints (category, domain, action) VALUES (?, ?, ?)", (category, domain, action))
+                except sqlite3.OperationalError:
+                    # Fallback for old schema without action column
+                    cursor = conn.execute("INSERT INTO category_hints (category, domain) VALUES (?, ?)", (category, domain))
                 conn.commit()
                 new_id = cursor.lastrowid
                 return jsonify({"id": new_id, "category": category, "domain": domain, "action": action}), 201
@@ -1150,11 +1155,11 @@ def set_device_policy():
             
             if mac_address:
                 # Update by MAC address
-                connection.execute(
+                cursor = connection.execute(
                     "UPDATE network_devices SET policy = ?, custom_name = COALESCE(?, custom_name), updated_at = ? WHERE mac_address = ?",
                     (policy, custom_name, time.time(), mac_address)
                 )
-                if connection.rowcount == 0:
+                if cursor.rowcount == 0:
                     # Device doesn't exist, insert it
                     connection.execute(
                         "INSERT INTO network_devices (ip_address, mac_address, policy, custom_name, first_seen, last_seen, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -1162,11 +1167,11 @@ def set_device_policy():
                     )
             else:
                 # Update by IP address
-                connection.execute(
+                cursor = connection.execute(
                     "UPDATE network_devices SET policy = ?, custom_name = COALESCE(?, custom_name), updated_at = ? WHERE ip_address = ?",
                     (policy, custom_name, time.time(), ip_address)
                 )
-                if connection.rowcount == 0:
+                if cursor.rowcount == 0:
                     # Device doesn't exist, insert it
                     connection.execute(
                         "INSERT INTO network_devices (ip_address, mac_address, policy, custom_name, first_seen, last_seen, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
