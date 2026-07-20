@@ -34,9 +34,9 @@
             <div class="card-header">
               <div>
                 <div class="card-title">Active Devices</div>
-                <div class="card-subtitle">Currently connected clients</div>
+                <div class="card-subtitle">Currently online clients</div>
               </div>
-              <button class="btn-secondary" onclick="loadDevices()" style="padding: 0.5rem 1rem;">Refresh</button>
+              <button class="btn-secondary" onclick="loadActiveDevices()" style="padding: 0.5rem 1rem;">Refresh</button>
             </div>
             <div style="overflow-x: auto; max-height: 400px;">
               <table class="traffic-table">
@@ -46,13 +46,41 @@
                     <th>IP Address</th>
                   </tr>
                 </thead>
-                <tbody id="devices-tbody">
+                <tbody id="active-tbody">
                   <tr>
-                    <td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Loading devices...</td>
+                    <td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Loading active devices...</td>
                   </tr>
                 </tbody>
               </table>
             </div>
+          </div>
+        </div>
+
+        <!-- DHCP Leases -->
+        <div class="card glassmorphic-card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">DHCP Leases</div>
+              <div class="card-subtitle">All assigned IP addresses</div>
+            </div>
+            <button class="btn-secondary" onclick="loadLeasedDevices()" style="padding: 0.5rem 1rem;">Refresh</button>
+          </div>
+          <div style="overflow-x: auto;">
+            <table class="traffic-table">
+              <thead>
+                <tr>
+                  <th>Hostname</th>
+                  <th>IP Address</th>
+                  <th>MAC Address</th>
+                  <th>Filter Policy</th>
+                </tr>
+              </thead>
+              <tbody id="leased-tbody">
+                <tr>
+                  <td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Loading leased devices...</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </div>

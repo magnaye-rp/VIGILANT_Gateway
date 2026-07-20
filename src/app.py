@@ -1076,12 +1076,18 @@ def export_logs():
         cw.writerow(['ID', 'Time', 'Client IP', 'Domain', 'Path', 'Method', 'Category', 'Status', 'Entities'])
         
         for log in logs:
+            # Convert sqlite3.Row to dict if needed
+            if hasattr(log, 'keys'):
+                log_dict = dict(log)
+            else:
+                log_dict = log
+            
             # Safely extract and format each field
-            log_id = log.get('id', '')
+            log_id = log_dict.get('id', '')
             if log_id is None:
                 log_id = ''
             
-            ts = log.get('timestamp')
+            ts = log_dict.get('timestamp')
             try:
                 if isinstance(ts, (int, float)) and ts > 0:
                     formatted_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(ts))
@@ -1090,31 +1096,31 @@ def export_logs():
             except Exception:
                 formatted_time = 'N/A'
             
-            client_ip = log.get('client_ip')
+            client_ip = log_dict.get('client_ip')
             if client_ip is None:
                 client_ip = '0.0.0.0'
             
-            host = log.get('host')
+            host = log_dict.get('host')
             if host is None:
                 host = 'unknown'
             
-            path = log.get('path')
+            path = log_dict.get('path')
             if path is None:
                 path = ''
             
-            method = log.get('method')
+            method = log_dict.get('method')
             if method is None:
                 method = ''
             
-            category = log.get('category')
+            category = log_dict.get('category')
             if category is None:
                 category = 'Unclassified'
             
-            flagged = log.get('flagged', 0)
+            flagged = log_dict.get('flagged', 0)
             status = 'Blocked' if flagged else 'Allowed'
             
             # Handle entities field (may be JSON string or None)
-            entities = log.get('entities')
+            entities = log_dict.get('entities')
             if entities is None:
                 entities = ''
             else:
@@ -1358,7 +1364,8 @@ def handle_behavioral_config():
             "network_velocity_preset": config.get("network_velocity_preset", "Medium"),
             "network_velocity_custom": int(config.get("network_velocity_custom", 150)),
             "physical_scroll_preset": config.get("physical_scroll_preset", "Medium"),
-            "physical_scroll_custom": int(config.get("physical_scroll_custom", 75))
+            "physical_scroll_custom": int(config.get("physical_scroll_custom", 75)),
+            "sni_filtering_enabled": _coerce_bool(config.get("sni_filtering_enabled", "true"))
         })
     payload = request.get_json(silent=True) or {}
     
@@ -1403,71 +1410,16 @@ def get_throttled_devices():
     try:
         throttled_devices = []
         
-        if DB_PATH.exists():
-            with _open_db() as connection:
-                # Check for throttle_events table
-                if not _table_exists(connection, "throttle_events"):
-                    return jsonify({
-                        "status": "success",
-                        "throttled_devices": []
-                    })
-                
-                # Get recent throttle events (last 5 minutes)
-                window_start = time.time() - 300
-                rows = connection.execute(
-                    """
-                    SELECT client_ip, host, rpm_current, rpm_baseline, action, timestamp
-                    FROM throttle_events
-                    WHERE timestamp > ?
-                    ORDER BY timestamp DESC
-                    """,
-                    (window_start,)
-                ).fetchall()
-                
-                # Also check traffic_log for flagged requests from same window
-                flagged_rows = connection.execute(
-                    """
-                    SELECT client_ip, host, COUNT(*) as flagged_count, MAX(timestamp) as last_flagged
-                    FROM traffic_log
-                    WHERE flagged = 1 AND timestamp > ?
-                    GROUP BY client_ip, host
-                    """,
-                    (window_start,)
-                ).fetchall()
-                
-                # Build a map of client IPs with their latest throttle metrics
-                device_metrics = {}
-                for row in rows:
-                    client_ip = row[0]
-                    if client_ip not in device_metrics:
-                        device_metrics[client_ip] = {
-                            "client_ip": client_ip,
-                            "current_rpm": row[2],
-                            "baseline_rpm": row[3],
-                            "is_throttled": True,
-                            "last_active_domain": row[1],
-                            "timestamp": row[5],
-                            "throttle_action": row[4]
-                        }
-                    else:
-                        # Keep the most recent entry
-                        if row[5] > device_metrics[client_ip]["timestamp"]:
-                            device_metrics[client_ip].update({
-                                "current_rpm": row[2],
-                                "baseline_rpm": row[3],
-                                "last_active_domain": row[1],
-                                "timestamp": row[5],
-                                "throttle_action": row[4]
-                            })
-                
-                # Add flagged count info from traffic_log
-                for row in flagged_rows:
-                    client_ip = row[0]
-                    if client_ip in device_metrics:
-                        device_metrics[client_ip]["flagged_count"] = row[2]
-                        device_metrics[client_ip]["last_flagged"] = row[3]
-                
-                # Also check network_devices table for policy-based throttling
+        if not DB_PATH.exists():
+            return jsonify({
+                "status": "success",
+                "throttled_devices": []
+            })
+        
+        with _open_db() as connection:
+            # Check for throttle_events table
+            if not _table_exists(connection, "throttle_events"):
+                # Fallback to only checking network_devices for policy-based throttling
                 if _table_exists(connection, "network_devices"):
                     policy_rows = connection.execute(
                         """
@@ -1479,30 +1431,116 @@ def get_throttled_devices():
                     
                     for row in policy_rows:
                         ip_address = row[0]
-                        if ip_address not in device_metrics:
-                            device_metrics[ip_address] = {
-                                "client_ip": ip_address,
-                                "mac_address": row[1],
-                                "hostname": row[2] or "Unknown",
-                                "custom_name": row[3],
-                                "current_rpm": 0,
-                                "baseline_rpm": 0,
-                                "is_throttled": True,
-                                "last_active_domain": "N/A",
-                                "timestamp": time.time(),
-                                "throttle_action": "POLICY_BLACKLIST",
-                                "policy": "blacklist"
-                            }
+                        throttled_devices.append({
+                            "client_ip": ip_address,
+                            "mac_address": row[1],
+                            "hostname": row[2] or "Unknown",
+                            "custom_name": row[3],
+                            "current_rpm": 0,
+                            "baseline_rpm": 0,
+                            "is_throttled": True,
+                            "last_active_domain": "N/A",
+                            "timestamp": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                            "throttle_action": "POLICY_BLACKLIST",
+                            "policy": "blacklist"
+                        })
                 
-                throttled_devices = list(device_metrics.values())
+                return jsonify({
+                    "status": "success",
+                    "throttled_devices": throttled_devices
+                })
+            
+            # Get recent throttle events (last 5 minutes)
+            window_start = time.time() - 300
+            rows = connection.execute(
+                """
+                SELECT client_ip, host, rpm_current, rpm_baseline, action, timestamp
+                FROM throttle_events
+                WHERE timestamp > ?
+                ORDER BY timestamp DESC
+                """,
+                (window_start,)
+            ).fetchall()
+            
+            # Also check traffic_log for flagged requests from same window
+            flagged_rows = connection.execute(
+                """
+                SELECT client_ip, host, COUNT(*) as flagged_count, MAX(timestamp) as last_flagged
+                FROM traffic_log
+                WHERE flagged = 1 AND timestamp > ?
+                GROUP BY client_ip, host
+                """,
+                (window_start,)
+            ).fetchall()
+            
+            # Build a map of client IPs with their latest throttle metrics
+            device_metrics = {}
+            for row in rows:
+                client_ip = row[0]
+                if client_ip not in device_metrics:
+                    device_metrics[client_ip] = {
+                        "client_ip": client_ip,
+                        "current_rpm": row[2],
+                        "baseline_rpm": row[3],
+                        "is_throttled": True,
+                        "last_active_domain": row[1],
+                        "timestamp": row[5],
+                        "throttle_action": row[4]
+                    }
+                else:
+                    # Keep the most recent entry
+                    if row[5] > device_metrics[client_ip]["timestamp"]:
+                        device_metrics[client_ip].update({
+                            "current_rpm": row[2],
+                            "baseline_rpm": row[3],
+                            "last_active_domain": row[1],
+                            "timestamp": row[5],
+                            "throttle_action": row[4]
+                        })
+            
+            # Add flagged count info from traffic_log
+            for row in flagged_rows:
+                client_ip = row[0]
+                if client_ip in device_metrics:
+                    device_metrics[client_ip]["flagged_count"] = row[2]
+                    device_metrics[client_ip]["last_flagged"] = row[3]
+            
+            # Also check network_devices table for policy-based throttling
+            if _table_exists(connection, "network_devices"):
+                policy_rows = connection.execute(
+                    """
+                    SELECT ip_address, mac_address, hostname, custom_name, policy
+                    FROM network_devices
+                    WHERE policy = 'blacklist'
+                    """
+                ).fetchall()
                 
-                # Format timestamps
-                for device in throttled_devices:
-                    ts = device.get("timestamp")
-                    if isinstance(ts, (int, float)):
-                        device["timestamp"] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(ts))
-                    else:
-                        device["timestamp"] = str(ts)
+                for row in policy_rows:
+                    ip_address = row[0]
+                    if ip_address not in device_metrics:
+                        device_metrics[ip_address] = {
+                            "client_ip": ip_address,
+                            "mac_address": row[1],
+                            "hostname": row[2] or "Unknown",
+                            "custom_name": row[3],
+                            "current_rpm": 0,
+                            "baseline_rpm": 0,
+                            "is_throttled": True,
+                            "last_active_domain": "N/A",
+                            "timestamp": time.time(),
+                            "throttle_action": "POLICY_BLACKLIST",
+                            "policy": "blacklist"
+                        }
+            
+            throttled_devices = list(device_metrics.values())
+            
+            # Format timestamps
+            for device in throttled_devices:
+                ts = device.get("timestamp")
+                if isinstance(ts, (int, float)):
+                    device["timestamp"] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(ts))
+                else:
+                    device["timestamp"] = str(ts)
         
         return jsonify({
             "status": "success",

@@ -55,8 +55,9 @@ function switchTab(tabId) {
   currentTab = tabId;
   
   if (tabId === 'device-management') {
-    loadDevices();
     loadThrottledDevices();
+    loadActiveDevices();
+    loadLeasedDevices();
   }
   if (tabId === 'traffic-logs') {
     loadTrafficLogs();
@@ -99,30 +100,34 @@ async function loadThrottledDevices() {
       `;
     }).join('');
   } catch (error) {
+    console.error('Error loading throttled devices:', error);
     tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading throttled devices</td></tr>';
   }
 }
 
-async function loadDevices() {
-  const tableBody = document.getElementById('devices-tbody');
+async function loadActiveDevices() {
+  const tableBody = document.getElementById('active-tbody');
 
   try {
     const response = await fetch('/api/devices');
     const data = await response.json();
     const devices = data.devices || [];
 
-    // Filter out devices in 192.168.100.0 network
-    const filteredDevices = devices.filter(device => {
+    // Filter for currently active devices (recently seen) and exclude gateway network
+    const now = Date.now() / 1000;
+    const activeDevices = devices.filter(device => {
       const ip = device.ip_address || '';
-      return !ip.startsWith('192.168.100.');
+      const lastSeen = device.last_seen || 0;
+      // Consider device active if seen in last 5 minutes and not in gateway network
+      return !ip.startsWith('192.168.100.') && (now - lastSeen) < 300;
     });
 
-    if (filteredDevices.length === 0) {
+    if (activeDevices.length === 0) {
       tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No active devices</td></tr>';
       return;
     }
 
-    tableBody.innerHTML = filteredDevices.map(device => {
+    tableBody.innerHTML = activeDevices.map(device => {
       const hostname = device.hostname || device.custom_name || 'Unknown Device';
       const ip = device.ip_address || '—';
       
@@ -134,7 +139,54 @@ async function loadDevices() {
       `;
     }).join('');
   } catch (error) {
-    tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading devices</td></tr>';
+    console.error('Error loading active devices:', error);
+    tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading active devices</td></tr>';
+  }
+}
+
+async function loadLeasedDevices() {
+  const tableBody = document.getElementById('leased-tbody');
+
+  try {
+    const response = await fetch('/api/devices');
+    const data = await response.json();
+    const devices = data.devices || [];
+
+    // Filter out gateway network devices for leased list
+    const leasedDevices = devices.filter(device => {
+      const ip = device.ip_address || '';
+      return !ip.startsWith('192.168.100.');
+    });
+
+    if (leasedDevices.length === 0) {
+      tableBody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No leased devices</td></tr>';
+      return;
+    }
+
+    tableBody.innerHTML = leasedDevices.map(device => {
+      const policy = device.policy || 'none';
+      const stateClass = policy === 'blacklist' ? 'danger' : (policy === 'whitelist' ? 'success' : 'secondary');
+      const stateLabel = policy === 'blacklist' ? 'Blacklisted' : (policy === 'whitelist' ? 'Whitelisted' : 'Default');
+      
+      return `
+        <tr>
+          <td style="font-weight: 500;">${device.hostname || device.custom_name || 'Unknown Device'}</td>
+          <td style="font-family: monospace; font-size: 0.9rem;">${device.ip_address || '—'}</td>
+          <td style="font-family: monospace; font-size: 0.9rem;">${device.mac_address || '—'}</td>
+          <td><span class="category-badge ${stateClass}">${stateLabel}</span></td>
+          <td>
+            <div class="device-filter-pills">
+              <button class="filter-pill whitelist ${policy === 'whitelist' ? 'active' : ''}" onclick="setDeviceFilter('${device.mac_address}', 'whitelist', this)">Whitelist</button>
+              <button class="filter-pill blacklist ${policy === 'blacklist' ? 'active' : ''}" onclick="setDeviceFilter('${device.mac_address}', 'blacklist', this)">Blacklist</button>
+              <button class="filter-pill none ${policy === 'none' ? 'active' : ''}" onclick="setDeviceFilter('${device.mac_address}', 'none', this)">Default</button>
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join('');
+  } catch (error) {
+    console.error('Error loading leased devices:', error);
+    tableBody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading leased devices</td></tr>';
   }
 }
 
