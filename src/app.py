@@ -12,6 +12,7 @@ import socket
 from pathlib import Path
 import platform
 from collections import deque
+import json
 
 # Global network interface configuration - can be overridden via environment variable
 GATEWAY_INTERFACE = os.getenv("GATEWAY_INTERFACE", "eth1")
@@ -20,9 +21,9 @@ try:
     import psutil
 except ImportError:
     psutil = None
+
 yaml = importlib.import_module("yaml") if importlib.util.find_spec("yaml") else None
 from flask import Flask, jsonify, render_template, request, make_response, send_file, abort, redirect, flash, url_for
-import json
 
 try:
     from flask_cors import CORS
@@ -31,8 +32,14 @@ except ImportError:
         return app
 
 scroll_velocity_tracker = {}
-_last_net_io = None
-_last_net_time = 0
+
+# System-level network tracking (psutil.net_io_counters objects)
+_last_system_net_io = None
+_last_system_net_time = 0
+
+# Interface-level network tracking (dicts with rx_bytes/tx_bytes)
+_last_interface_net_io = None
+_last_interface_net_time = 0
 
 # --- CACHE FOR HEAVY SYSTEM CALLS ---
 _service_status_cache = {}
@@ -42,6 +49,7 @@ CACHE_TTL = 3.0  # Cache psutil process scans for 3 seconds
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 TEMPLATE_DIR = BASE_DIR / "templates"
+
 app = Flask(
     __name__,
     static_folder=str(STATIC_DIR),
@@ -54,9 +62,27 @@ SERVER_IP = "192.168.100.88"
 PRODUCTION_DB_PATH = Path("/home/vigilant_admin/vigilant/logs/vigilant.db")
 LOCAL_DB_PATH = BASE_DIR / "logs" / "vigilant.db"
 
-if PRODUCTION_DB_PATH.exists() and os.access(PRODUCTION_DB_PATH.parent, os.W_OK):
-    DB_PATH = PRODUCTION_DB_PATH
-else:
+# Select database path with permission-aware fallback logic
+DB_PATH = LOCAL_DB_PATH  # Default to local path
+try:
+    if PRODUCTION_DB_PATH.parent.exists():
+        if os.access(PRODUCTION_DB_PATH.parent, os.W_OK):
+            DB_PATH = PRODUCTION_DB_PATH
+        else:
+            app.logger.warning("Production DB path exists but not writable, using local path: %s", LOCAL_DB_PATH)
+    else:
+        # Try to create production directory if it doesn't exist
+        try:
+            PRODUCTION_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+            if os.access(PRODUCTION_DB_PATH.parent, os.W_OK):
+                DB_PATH = PRODUCTION_DB_PATH
+                app.logger.info("Created production DB directory: %s", PRODUCTION_DB_PATH.parent)
+            else:
+                app.logger.warning("Created production DB directory but not writable, using local path")
+        except (PermissionError, OSError) as exc:
+            app.logger.warning("Cannot create production DB directory, using local path: %s", exc)
+except Exception as exc:
+    app.logger.warning("Error selecting DB path, using local: %s", exc)
     DB_PATH = LOCAL_DB_PATH
 
 DEFAULT_CONFIG = {
@@ -72,15 +98,22 @@ DEFAULT_CONFIG = {
     "physical_scroll_threshold": "75",
     "throttle_enabled": "true",
     "throttle_rate": "256",
-    "ui_theme": "light"
+    "ui_theme": "light",
+    "tfidf_classification_threshold": "0.05",
+    "tfidf_url_threshold": "0.3",
+    "tfidf_body_threshold": "0.15"
 }
 
 CONFIG_DEFAULTS = DEFAULT_CONFIG
 
-ALLOWED_CONFIG_KEYS = set(CONFIG_DEFAULTS) | {"block_harmful", "block_distracting", "enable_https", "log_retention", "network_velocity_preset", "network_velocity_custom", "physical_scroll_preset", "physical_scroll_custom", "sni_filtering_enabled", "request_threshold"}
+ALLOWED_CONFIG_KEYS = set(CONFIG_DEFAULTS) | {
+    "block_harmful", "block_distracting", "enable_https", "log_retention", 
+    "network_velocity_preset", "network_velocity_custom", "physical_scroll_preset", 
+    "physical_scroll_custom", "sni_filtering_enabled", "request_threshold"
+}
 BOOLEAN_CONFIG_KEYS = {"block_harmful", "block_distracting", "nlp_enabled", "throttle_enabled", "enable_https", "sni_filtering_enabled"}
 INTEGER_CONFIG_KEYS = {"network_velocity_threshold", "physical_scroll_threshold", "throttle_rate", "log_retention", "network_velocity_custom", "physical_scroll_custom", "request_threshold"}
-STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "upstream_dns", "nlp_accuracy", "ui_theme", "network_velocity_preset", "physical_scroll_preset"}
+STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "upstream_dns", "nlp_accuracy", "ui_theme", "network_velocity_preset", "physical_scroll_preset", "tfidf_classification_threshold", "tfidf_url_threshold", "tfidf_body_threshold"}
 TRAFFIC_CATEGORIES = ("Educational", "Productive", "Distracting", "Harmful")
 DEFAULT_SYSTEM_METRICS = {
     "cpu_percent": 0.0,
@@ -111,7 +144,7 @@ def _table_exists(connection: sqlite3.Connection, table_name: str) -> bool:
 
 def query_db(query: str, args=(), one: bool = False):
     if not DB_PATH.exists():
-        return None if one else []
+        return {} if one else []
 
     try:
         with sqlite3.connect(DB_PATH) as connection:
@@ -119,11 +152,11 @@ def query_db(query: str, args=(), one: bool = False):
             cursor = connection.execute(query, args)
             rows = cursor.fetchall()
             if one:
-                return rows[0] if rows else None
-            return rows
-    except sqlite3.Error as exc:
+                return dict(rows[0]) if rows else {}
+            return list(rows) if rows else []
+    except Exception as exc:
         app.logger.warning("query_db failed: %s", exc)
-        return None if one else []
+        return {} if one else []
 
 
 def _coerce_bool(value):
@@ -229,7 +262,7 @@ def _system_metrics() -> dict:
 
     try:
         return {
-            "cpu_percent": float(psutil.cpu_percent(interval=None)), # Changed interval to None for non-blocking returns
+            "cpu_percent": float(psutil.cpu_percent(interval=None)),
             "memory_percent": float(psutil.virtual_memory().percent),
             "disk_percent": float(psutil.disk_usage('/').percent),
         }
@@ -337,14 +370,29 @@ def _get_network_config() -> dict:
 def _write_dnsmasq_config(config: dict) -> bool:
     config_path = Path("/home/vigilant_admin/vigilant/src/config/dnsmasq.conf")
     fallback_path = Path("/etc/dnsmasq.conf")
-    if not config_path.parent.exists():
-        config_path = fallback_path
+    
+    # Try primary path first, check if directory exists and is writable
+    if config_path.parent.exists() and os.access(config_path.parent, os.W_OK):
+        target_path = config_path
+    elif fallback_path.parent.exists() and os.access(fallback_path.parent, os.W_OK):
+        target_path = fallback_path
+    else:
+        # Try to create the primary directory if it doesn't exist
+        try:
+            _ensure_directory(config_path)
+            if os.access(config_path.parent, os.W_OK):
+                target_path = config_path
+            else:
+                target_path = fallback_path
+        except (PermissionError, OSError) as exc:
+            app.logger.warning("Cannot create config directory, using fallback: %s", exc)
+            target_path = fallback_path
     
     try:
         new_config = []
         dns_servers = config.get("upstream_dns", "8.8.8.8\n8.8.4.4").split("\n")
         
-        new_config.append(f"# VIGILANT Gateway dnsmasq configuration\n")
+        new_config.append("# VIGILANT Gateway dnsmasq configuration\n")
         new_config.append(f"interface={config.get('distribution_interface', 'eth1')}\n")
         new_config.append(f"dhcp-range={config.get('dhcp_start', '192.168.100.10')},{config.get('dhcp_end', '192.168.100.50')},12h\n")
         new_config.append(f"dhcp-option=3,{config.get('gateway_ip', '192.168.100.88')}\n")
@@ -352,12 +400,19 @@ def _write_dnsmasq_config(config: dict) -> bool:
         new_config.append(f"listen-address={config.get('gateway_ip', '192.168.100.88')}\n")
         for dns in dns_servers:
             new_config.append(f"server={dns.strip()}\n")
-        new_config.append(f"cache-size=1000\n")
+        new_config.append("cache-size=1000\n")
         
-        _ensure_directory(config_path)
-        with open(config_path, 'w') as f:
+        _ensure_directory(target_path)
+        with open(target_path, 'w') as f:
             f.writelines(new_config)
+        app.logger.info("Successfully wrote dnsmasq config to %s", target_path)
         return True
+    except PermissionError as exc:
+        app.logger.error("Permission denied writing dnsmasq.conf to %s: %s", target_path, exc)
+        return False
+    except (OSError, IOError) as exc:
+        app.logger.error("IO error writing dnsmasq.conf to %s: %s", target_path, exc)
+        return False
     except Exception as exc:
         app.logger.warning("Failed to write dnsmasq.conf: %s", exc)
         return False
@@ -366,10 +421,26 @@ def _write_dnsmasq_config(config: dict) -> bool:
 def _write_netplan_config(config: dict) -> bool:
     config_path = Path("/home/vigilant_admin/vigilant/src/config/netplan-config.yaml")
     fallback_path = Path("/etc/netplan/00-installer-config.yaml")
-    if not config_path.parent.exists():
-        config_path = fallback_path
     if yaml is None:
+        app.logger.warning("PyYAML not available, cannot write netplan config")
         return False
+    
+    # Try primary path first, check if directory exists and is writable
+    if config_path.parent.exists() and os.access(config_path.parent, os.W_OK):
+        target_path = config_path
+    elif fallback_path.parent.exists() and os.access(fallback_path.parent, os.W_OK):
+        target_path = fallback_path
+    else:
+        # Try to create the primary directory if it doesn't exist
+        try:
+            _ensure_directory(config_path)
+            if os.access(config_path.parent, os.W_OK):
+                target_path = config_path
+            else:
+                target_path = fallback_path
+        except (PermissionError, OSError) as exc:
+            app.logger.warning("Cannot create config directory, using fallback: %s", exc)
+            target_path = fallback_path
     
     try:
         netplan_config = {
@@ -381,10 +452,17 @@ def _write_netplan_config(config: dict) -> bool:
                 }
             }
         }
-        _ensure_directory(config_path)
-        with open(config_path, 'w') as f:
+        _ensure_directory(target_path)
+        with open(target_path, 'w') as f:
             yaml.dump(netplan_config, f, default_flow_style=False)
+        app.logger.info("Successfully wrote netplan config to %s", target_path)
         return True
+    except PermissionError as exc:
+        app.logger.error("Permission denied writing netplan-config.yaml to %s: %s", target_path, exc)
+        return False
+    except (OSError, IOError) as exc:
+        app.logger.error("IO error writing netplan-config.yaml to %s: %s", target_path, exc)
+        return False
     except Exception as exc:
         app.logger.warning("Failed to write netplan-config.yaml: %s", exc)
         return False
@@ -447,7 +525,8 @@ def init_category_hints_db() -> None:
                 CREATE TABLE IF NOT EXISTS category_hints (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     category TEXT NOT NULL,
-                    domain TEXT NOT NULL UNIQUE
+                    domain TEXT NOT NULL UNIQUE,
+                    action TEXT DEFAULT 'throttle'
                 )
                 """
             )
@@ -474,7 +553,7 @@ def init_category_hints_db() -> None:
                 ("Distracting", "9gag.com"), ("Distracting", "buzzfeed.com"),
             ]
             for category, domain in default_hints:
-                connection.execute("INSERT OR IGNORE INTO category_hints (category, domain) VALUES (?, ?)", (category, domain))
+                connection.execute("INSERT OR IGNORE INTO category_hints (category, domain, action) VALUES (?, ?, 'throttle')", (category, domain))
             connection.commit()
     except sqlite3.Error as exc:
         app.logger.debug("init_category_hints_db issue: %s", exc)
@@ -497,7 +576,7 @@ def load_config() -> dict:
             try:
                 config[key] = _coerce_config_value(key, row[1])
             except (TypeError, ValueError):
-                config[key] = CONFIG_DEFAULTS[key]
+                config[key] = CONFIG_DEFAULTS.get(key, row[1])
     except sqlite3.Error as exc:
         app.logger.warning("load_config failed: %s", exc)
     return config
@@ -572,24 +651,32 @@ def get_stats():
         
         if DB_PATH.exists():
             with _open_db() as connection:
-                # 1. Unified Total & Filtered query
                 if _table_exists(connection, "traffic_log"):
-                    query = "SELECT COUNT(*) FROM traffic_log WHERE 1=1"
+                    where_clauses = ["1=1"]
                     params = []
-                    if category_filter and category_filter != 'ALL':
-                        query += " AND category = ?"
+
+                    if category_filter and category_filter.upper() != 'ALL':
+                        where_clauses.append("category = ?")
                         params.append(category_filter)
+
                     if search_filter:
-                        query += " AND (host LIKE ? OR client_ip LIKE ?)"
+                        where_clauses.append("(host LIKE ? OR client_ip LIKE ?)")
                         params.extend([f"%{search_filter}%", f"%{search_filter}%"])
-                    
-                    total_reqs = connection.execute(query, tuple(params)).fetchone()[0] or 0
+
+                    where_sql = " AND ".join(where_clauses)
+
+                    # Query Total Request Count
+                    count_query = f"SELECT COUNT(*) FROM traffic_log WHERE {where_sql}"
+                    total_reqs = connection.execute(count_query, tuple(params)).fetchone()[0] or 0
+
+                    # Blocked Request Count
                     blocked_reqs = connection.execute("SELECT COUNT(*) FROM traffic_log WHERE flagged = 1").fetchone()[0] or 0
                     
+                    # Active clients (last 24 hours)
                     window_start = int(time.time()) - 86400
                     active_clients = connection.execute("SELECT COUNT(DISTINCT client_ip) FROM traffic_log WHERE timestamp > ?", (window_start,)).fetchone()[0] or 0
                     
-                    # Category Matrix Pipeline
+                    # Category breakdown
                     category_rows = connection.execute(
                         """
                         SELECT LOWER(TRIM(category)) AS normalized_category, COUNT(*) AS category_count
@@ -606,23 +693,16 @@ def get_stats():
                     if denom > 0:
                         category_percentages = {cat: round((raw_categories.get(cat.lower(), 0) / denom) * 100, 1) for cat in TRAFFIC_CATEGORIES}
 
-                    # Clean Recent Logs Retrieval
-                    log_query = "SELECT timestamp, client_ip, host, category, flagged FROM traffic_log WHERE 1=1"
-                    log_params = []
-                    if category_filter and category_filter != 'ALL':
-                        log_query += " AND category = ?"
-                        log_params.append(category_filter)
-                    if search_filter:
-                        log_query += " AND (host LIKE ? OR client_ip LIKE ?)"
-                        log_params.extend([f"%{search_filter}%", f"%{search_filter}%"])
-                    
-                    log_query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
-                    log_params.extend([per_page, offset])
+                    # Paginated Traffic Logs
+                    log_query = f"SELECT timestamp, client_ip, host, category, flagged FROM traffic_log WHERE {where_sql} ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+                    log_params = params + [per_page, offset]
                     
                     rows = connection.execute(log_query, tuple(log_params)).fetchall()
                     formatted_recent = [_format_recent_log_entry(dict(r)) for r in rows]
 
-        total_pages = (total_reqs + per_page - 1) // per_page if total_reqs > 0 else 1
+        # Calculate Total Pages Safely
+        total_pages = max(1, (total_reqs + per_page - 1) // per_page) if total_reqs > 0 else 1
+        
         system_metrics = _system_metrics()
         network_config = _get_network_config()
         network_config["available_interfaces"] = _get_network_interfaces()
@@ -641,8 +721,8 @@ def get_stats():
             "network_config": network_config
         })
     except Exception as exc:
-        app.logger.error("Failed to compile /api/stats: %s", exc)
-        return jsonify({"error": "Internal fallback triggered"}), 500
+        app.logger.error("Failed to compile /api/stats: %s", exc, exc_info=True)
+        return jsonify({"error": "Internal server error"}), 500
 
 
 @app.route("/")
@@ -654,8 +734,7 @@ def dashboard():
 
 @app.route("/api/dashboard/summary")
 def dashboard_summary():
-    global _last_net_io, _last_net_time
-    start_time = time.time()
+    global _last_system_net_io, _last_system_net_time
     
     cpu_usage = 0.0
     ram_usage_gb = 0.0
@@ -674,15 +753,15 @@ def dashboard_summary():
 
             current_time = time.time()
             current_io = psutil.net_io_counters()
-            if _last_net_io and _last_net_time:
-                time_diff = max(0.001, current_time - _last_net_time)
-                rx_bytes = max(0, current_io.bytes_recv - _last_net_io.bytes_recv)
-                tx_bytes = max(0, current_io.bytes_sent - _last_net_io.bytes_sent)
+            if _last_system_net_io and _last_system_net_time:
+                time_diff = max(0.001, current_time - _last_system_net_time)
+                rx_bytes = max(0, current_io.bytes_recv - _last_system_net_io.bytes_recv)
+                tx_bytes = max(0, current_io.bytes_sent - _last_system_net_io.bytes_sent)
                 rx_mbps = round((rx_bytes * 8) / (1024 * 1024 * time_diff), 1)
                 tx_mbps = round((tx_bytes * 8) / (1024 * 1024 * time_diff), 1)
 
-            _last_net_io = current_io
-            _last_net_time = current_time
+            _last_system_net_io = current_io
+            _last_system_net_time = current_time
         except Exception as e:
             app.logger.debug("Error fetching psutil metrics: %s", e)
             
@@ -727,7 +806,7 @@ def dashboard_summary():
 
     config = load_config()
     nlp_enabled = _coerce_bool(config.get("nlp_enabled", "true"))
-    theme_mode = config.get("theme_mode", "dark")
+    theme_mode = config.get("ui_theme", "dark")
     
     try:
         net_vel = float(config.get("network_velocity_threshold", "1.5"))
@@ -801,31 +880,65 @@ def clear_logs():
 def export_logs():
     try:
         logs = query_db("SELECT timestamp, client_ip, host, category, flagged FROM traffic_log WHERE category NOT IN ('DNS_TRACKED', 'NON-HTML') ORDER BY timestamp DESC")
+        if not isinstance(logs, list):
+            logs = []
+            
         text_stream = io.StringIO()
         cw = csv.writer(text_stream)
         cw.writerow(['Time', 'Client IP', 'Domain', 'Category', 'Status'])
+        
         for log in logs:
-            formatted_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log['timestamp']))
-            cw.writerow([formatted_time, log['client_ip'], log['host'], log['category'], 'Blocked' if log['flagged'] else 'Allowed'])
+            ts = log.get('timestamp')
+            try:
+                if isinstance(ts, (int, float)):
+                    formatted_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(ts))
+                else:
+                    formatted_time = str(ts or "N/A")
+            except Exception:
+                formatted_time = "N/A"
+                
+            cw.writerow([
+                formatted_time, 
+                log.get('client_ip', '0.0.0.0'), 
+                log.get('host', 'unknown'), 
+                log.get('category', 'Unclassified'), 
+                'Blocked' if log.get('flagged') else 'Allowed'
+            ])
         
         byte_stream = io.BytesIO(text_stream.getvalue().encode('utf-8'))
         text_stream.close()
         return send_file(byte_stream, as_attachment=True, download_name='traffic_logs.csv', mimetype='text/csv')
     except Exception as e:
+        app.logger.error("Failed to export logs: %s", e, exc_info=True)
         return abort(500, description="Failed to export logs")
 
 
 @app.route('/api/config/setup/export')
 def export_config():
-    keywords = [row['keyword'] for row in query_db("SELECT keyword FROM keyword_blacklist")] or []
-    whitelist = [row['mac_address'] for row in query_db("SELECT mac_address FROM network_devices WHERE policy = 'whitelist'")] or []
-    settings_dict = {row['key']: row['value'] for row in (query_db("SELECT key, value FROM config_settings") or [])}
-    
-    config_data = {"backup_version": "1.0", "blocked_keywords": keywords, "mac_whitelist": whitelist, "settings": settings_dict}
-    response = make_response(json.dumps(config_data, indent=4))
-    response.headers["Content-Disposition"] = "attachment; filename=vigilant_config.json"
-    response.headers["Content-Type"] = "application/json"
-    return response
+    try:
+        kw_rows = query_db("SELECT keyword FROM keyword_blacklist")
+        keywords = [row['keyword'] for row in kw_rows] if isinstance(kw_rows, list) else []
+
+        wl_rows = query_db("SELECT mac_address FROM network_devices WHERE policy = 'whitelist'")
+        whitelist = [row['mac_address'] for row in wl_rows] if isinstance(wl_rows, list) else []
+
+        st_rows = query_db("SELECT key, value FROM config_settings")
+        settings_dict = {row['key']: row['value'] for row in st_rows} if isinstance(st_rows, list) else {}
+
+        config_data = {
+            "backup_version": "1.0",
+            "blocked_keywords": keywords,
+            "mac_whitelist": whitelist,
+            "settings": settings_dict
+        }
+        
+        response = make_response(json.dumps(config_data, indent=4))
+        response.headers["Content-Disposition"] = "attachment; filename=vigilant_config.json"
+        response.headers["Content-Type"] = "application/json"
+        return response
+    except Exception as exc:
+        app.logger.error("Failed to export config: %s", exc, exc_info=True)
+        return jsonify({"error": "Failed to export configuration"}), 500
 
 
 @app.route('/api/config/setup/import', methods=['POST'])
@@ -838,6 +951,10 @@ def import_config():
     try:
         config_data = json.loads(file.read().decode('utf-8'))
         with _open_db() as connection:
+            # Ensure tables exist before operations
+            connection.execute("CREATE TABLE IF NOT EXISTS keyword_blacklist (id INTEGER PRIMARY KEY AUTOINCREMENT, keyword TEXT NOT NULL UNIQUE)")
+            connection.execute("CREATE TABLE IF NOT EXISTS config_settings (key TEXT PRIMARY KEY, value TEXT, updated_at REAL)")
+            
             connection.execute("DELETE FROM keyword_blacklist")
             for kw in config_data.get("blocked_keywords", []):
                 connection.execute("INSERT OR IGNORE INTO keyword_blacklist (keyword) VALUES (?)", (kw,))
@@ -848,6 +965,12 @@ def import_config():
                     connection.execute("INSERT INTO config_settings (key, value, updated_at) VALUES (?, ?, ?)", (k, str(v), now_ts))
             connection.commit()
         flash("Import successful", "success")
+    except json.JSONDecodeError as e:
+        app.logger.error(f"Failed to parse config file: {e}")
+        flash("Invalid config file format", "error")
+    except sqlite3.Error as e:
+        app.logger.error(f"Database error during import: {e}")
+        flash("Database error during import", "error")
     except Exception as e:
         flash(f"Import failed: {str(e)}", "error")
     return redirect(url_for('dashboard'))
@@ -907,74 +1030,74 @@ def handle_keywords():
 
 @app.route("/api/keywords/<int:keyword_id>", methods=["DELETE"])
 def delete_keyword(keyword_id):
-    with _open_db() as connection:
-        cursor = connection.execute("DELETE FROM keyword_blacklist WHERE id = ?", (keyword_id,))
-        connection.commit()
-    return jsonify({"status": "success"}) if cursor.rowcount > 0 else (jsonify({"error": "Not found"}), 404)
+    try:
+        with _open_db() as connection:
+            if not _table_exists(connection, "keyword_blacklist"):
+                return jsonify({"error": "Not found"}), 404
+            cursor = connection.execute("DELETE FROM keyword_blacklist WHERE id = ?", (keyword_id,))
+            connection.commit()
+            return jsonify({"status": "success"}) if cursor.rowcount > 0 else (jsonify({"error": "Not found"}), 404)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ─── CATEGORY HINTS API ENDPOINTS ───────────────────────────────────
 
 @app.route("/api/categories/hints", methods=["GET", "POST"])
 def manage_category_hints():
-    import sqlite3
-    db_path = "/home/vigilant-admin/vigilant_gateway/src/logs/vigilant.db"
-    
     if request.method == "GET":
         try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            # Verify table exists or fall back cleanly
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='category_hints'")
-            if not cursor.fetchone():
-                return jsonify([]) # Return clean empty array if table isn't built yet
-                
-            cursor.execute("SELECT id, category, domain, action FROM category_hints")
-            hints = [{"id": row[0], "category": row[1], "domain": row[2], "action": row[3]} for row in cursor.fetchall()]
-            conn.close()
-            return jsonify(hints)
+            with _open_db() as conn:
+                if not _table_exists(conn, "category_hints"):
+                    return jsonify([])
+                    
+                cursor = conn.execute("SELECT id, category, domain, action FROM category_hints")
+                hints = [{"id": row[0], "category": row[1], "domain": row[2], "action": row[3]} for row in cursor.fetchall()]
+                return jsonify(hints)
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
     elif request.method == "POST":
         try:
-            data = request.json or {}
+            data = request.get_json(silent=True) or {}
             category = data.get("category")
             domain = data.get("domain")
             action = data.get("action", "throttle")
             
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            # Ensure table structure exists
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS category_hints (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    category TEXT,
-                    domain TEXT,
-                    action TEXT
-                )
-            """)
-            cursor.execute("INSERT INTO category_hints (category, domain, action) VALUES (?, ?, ?)", (category, domain, action))
-            conn.commit()
-            new_id = cursor.lastrowid
-            conn.close()
-            return jsonify({"id": new_id, "category": category, "domain": domain, "action": action}), 201
+            if not category or not domain:
+                return jsonify({"error": "Category and domain are required"}), 400
+
+            with _open_db() as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS category_hints (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        category TEXT,
+                        domain TEXT,
+                        action TEXT
+                    )
+                """)
+                cursor = conn.execute("INSERT INTO category_hints (category, domain, action) VALUES (?, ?, ?)", (category, domain, action))
+                conn.commit()
+                new_id = cursor.lastrowid
+                return jsonify({"id": new_id, "category": category, "domain": domain, "action": action}), 201
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
+
 @app.route("/api/categories/hints/<int:hint_id>", methods=["DELETE"])
 def delete_category_hint(hint_id):
-    import sqlite3
-    db_path = "/home/vigilant-admin/vigilant_gateway/src/logs/vigilant.db"
     try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM category_hints WHERE id = ?", (hint_id,))
-        conn.commit()
-        conn.close()
-        return jsonify({"success": True}), 200
+        with _open_db() as conn:
+            if not _table_exists(conn, "category_hints"):
+                return jsonify({"error": "Not found"}), 404
+            cursor = conn.execute("DELETE FROM category_hints WHERE id = ?", (hint_id,))
+            conn.commit()
+            if cursor.rowcount > 0:
+                return jsonify({"success": True}), 200
+            return jsonify({"error": "Not found"}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/api/config/behavioral", methods=["GET", "POST"])
 def handle_behavioral_config():
@@ -1089,7 +1212,7 @@ def _read_arp_table() -> dict:
 
 def _get_interface_throughput(interface: str) -> dict:
     """Get current throughput statistics for a specific interface"""
-    global _last_net_io, _last_net_time
+    global _last_interface_net_io, _last_interface_net_time
     
     stats = _read_proc_net_dev()
     if interface not in stats:
@@ -1098,18 +1221,18 @@ def _get_interface_throughput(interface: str) -> dict:
     current_io = stats[interface]
     current_time = time.time()
     
-    if _last_net_io and _last_net_time:
-        time_diff = max(0.001, current_time - _last_net_time)
-        rx_bytes = max(0, current_io['rx_bytes'] - _last_net_io.get('rx_bytes', 0))
-        tx_bytes = max(0, current_io['tx_bytes'] - _last_net_io.get('tx_bytes', 0))
+    if _last_interface_net_io and _last_interface_net_time:
+        time_diff = max(0.001, current_time - _last_interface_net_time)
+        rx_bytes = max(0, current_io['rx_bytes'] - _last_interface_net_io.get('rx_bytes', 0))
+        tx_bytes = max(0, current_io['tx_bytes'] - _last_interface_net_io.get('tx_bytes', 0))
         rx_mbps = round((rx_bytes * 8) / (1024 * 1024 * time_diff), 2)
         tx_mbps = round((tx_bytes * 8) / (1024 * 1024 * time_diff), 2)
     else:
         rx_mbps = 0.0
         tx_mbps = 0.0
     
-    _last_net_io = current_io
-    _last_net_time = current_time
+    _last_interface_net_io = current_io
+    _last_interface_net_time = current_time
     
     return {'rx_mbps': rx_mbps, 'tx_mbps': tx_mbps}
 
@@ -1118,12 +1241,9 @@ def _discover_network_devices() -> list:
     now = time.time()
     discovered_devices = {}
     
-    # Use new robust network scanner functions
     dnsmasq_leases_list = _read_dnsmasq_leases()
     arp_table = _read_arp_table()
-    interface_stats = _read_proc_net_dev()
     
-    # Build device map from DHCP leases
     for lease in dnsmasq_leases_list:
         ip = lease['ip_address']
         discovered_devices[ip] = {
@@ -1131,10 +1251,9 @@ def _discover_network_devices() -> list:
             'mac_address': lease['mac_address'],
             'hostname': lease['hostname'],
             'last_seen': now,
-            'bytes': 0  # Will be updated from interface stats if available
+            'bytes': 0
         }
     
-    # Augment with ARP table data
     for ip, arp_data in arp_table.items():
         if ip in discovered_devices:
             discovered_devices[ip]['mac_address'] = arp_data['mac_address']
@@ -1173,8 +1292,6 @@ def _discover_network_devices() -> list:
     return list(discovered_devices.values())
 
 
-
-
 def _init_traffic_db() -> None:
     """Creates database structures along with highly critical target column indexes."""
     try:
@@ -1182,7 +1299,6 @@ def _init_traffic_db() -> None:
             connection.execute("CREATE TABLE IF NOT EXISTS traffic_log (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp REAL, client_ip TEXT, host TEXT, path TEXT, method TEXT, category TEXT, flagged INTEGER DEFAULT 0, entities TEXT)")
             connection.execute("CREATE TABLE IF NOT EXISTS config_settings (key TEXT PRIMARY KEY, value TEXT, updated_at REAL)")
             
-            # --- INDEX CREATION STEP FOR UNDER-50MS QUERY SPEED ---
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_timestamp ON traffic_log(timestamp DESC)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_category ON traffic_log(category)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_flagged ON traffic_log(flagged)")

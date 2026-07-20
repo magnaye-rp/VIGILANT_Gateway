@@ -182,15 +182,14 @@ stage_3_python_env() {
     source "$VIGILANT_HOME/venv/bin/activate"
     pip install --upgrade pip > /dev/null 2>&1
     
-    # FIX: Pin dependencies to prevent breaking upstream API alterations
-    pip install \
-        flask \
-        flask-cors \
-        mitmproxy==9.0.1 \
-        spacy \
-        psutil \
-        "bcrypt<4.1.0" \
-        > /dev/null 2>&1
+    # Copy requirements.txt to venv directory for clean installation
+    cp "$REPO_DIR/requirements.txt" "$VIGILANT_HOME/requirements.txt"
+    
+    # Install from requirements file to avoid shell quoting issues
+    pip install -r "$VIGILANT_HOME/requirements.txt" > /dev/null 2>&1
+    
+    # Install additional packages not in requirements.txt
+    pip install mitmproxy==9.0.1 spacy > /dev/null 2>&1
     
     log_info "Downloading spaCy model (en_core_web_sm)..."
     python -m spacy download en_core_web_sm > /dev/null 2>&1
@@ -228,62 +227,8 @@ stage_4_copy_files() {
     log_info "Copying Python files..."
     cp "$REPO_DIR/src/app.py" "$VIGILANT_HOME/"
     
-    # Sanitize and compile the local addon source file
-    SRC_ADDON="$REPO_DIR/src/vigilant_addon.py"
-    log_info "Auto-patching python layout constraints inside $SRC_ADDON..."
-    python3 -c "
-filename = '${SRC_ADDON}'
-with open(filename, 'r') as f:
-    code = f.read()
-
-# Eliminate structural crash conditions by stripping tab variants
-fixed_code = code.expandtabs(4)
-lines = fixed_code.splitlines(keepends=True)
-
-start_idx, end_idx = -1, -1
-for i, line in enumerate(lines):
-    if 'def tls_clienthello' in line:
-        start_idx = i
-    if start_idx != -1 and 'def log_to_dashboard' in line:
-        end_idx = i
-        break
-
-if start_idx != -1 and end_idx != -1:
-    clean_func = [
-        '    def tls_clienthello(self, data):\n',
-        '        \"\"\"TLS ClientHello hook for transparent SNI domain logging with full decryption capability\"\"\"\n',
-        '        try:\n',
-        '            sni = data.sni\n',
-        '            if sni and any(domain in sni for domain in [\"apple.com\", \"icloud.com\"]):\n',
-        '                data.ignore_connection = True\n',
-        '                return\n',
-        '            client_ip = data.context.client_conn.peername[0]\n',
-        '            if sni:\n',
-        '                self.log_to_dashboard(client_ip, sni)\n',
-        '                clean_sni = sni.lstrip(\"www.\")\n',
-        '                base = \".\".join(clean_sni.split(\".\")[-2:])\n',
-        '                flagged, rpm_now, rpm_base = should_throttle(client_ip, sni)\n',
-        '                if flagged and client_ip not in throttled_clients:\n',
-        '                    throttled_clients.add(client_ip)\n',
-        '                    log_throttle(client_ip, sni, rpm_now, rpm_base, \"TLS_THROTTLE_APPLIED\")\n',
-        '                    apply_throttle(client_ip)\n',
-        '                    print(f\"[VIGILANT] TLS DOOMSCROLL DETECTED {client_ip} @ {sni} RPM={rpm_now:.1f} baseline={rpm_base:.1f}\")\n',
-        '                social_domains = load_social_domains()\n',
-        '                if any(base in d for d in social_domains):\n',
-        '                    log_request(client_ip, sni, \"(TLS_SNI)\", \"TLS\", \"Mobile_Bypass\", False, [])\n',
-        '                    print(f\"[VIGILANT] TLS SNI bypass logged: {client_ip} -> {sni}\")\n',
-        '        except (AttributeError, IndexError, TypeError) as e:\n',
-        '            print(f\"[VIGILANT] TLS ClientHello: Failed to extract client IP or data structures: {e}\")\n',
-        '        except Exception as e:\n',
-        '            print(f\"[VIGILANT] TLS ClientHello global framework error: {e}\")\n\n'
-    ]
-    lines[start_idx:end_idx] = clean_func
-    with open(filename, 'w') as f:
-        f.writelines(lines)
-    print('Indentation layout verified.')
-"
-    
     # Establish operational symlink from active work tree
+    SRC_ADDON="$REPO_DIR/src/vigilant_addon.py"
     chmod 644 "$SRC_ADDON"
     rm -f "$VIGILANT_HOME/addons/vigilant_addon.py"
     ln -s "$SRC_ADDON" "$VIGILANT_HOME/addons/vigilant_addon.py"
@@ -492,7 +437,7 @@ ExecStart=/home/vigilant_admin/vigilant/venv/bin/mitmdump \
     --listen-host 0.0.0.0 \
     --listen-port 8080 \
     --set block_global=false \
-    --set ignore_hosts="^(.*\\.)?(facebook|twitter|x|tiktok|instagram|reddit|youtube|google|apple|icloud|duckduckgo)\\.com$" \
+    --set ignore_hosts="^(.*\.)?(facebook|twitter|x|tiktok|instagram|reddit|youtube|google|apple|icloud|duckduckgo)\.com(:[0-9]+)?$" \
     -s /home/vigilant_admin/vigilant/addons/vigilant_addon.py
 Restart=always
 RestartSec=5
@@ -584,7 +529,10 @@ def init_database():
         'sni_filtering_enabled': 'true',
         'upstream_interface': 'eth0',
         'distribution_interface': 'wlan0',
-        'theme_mode': 'dark'
+        'theme_mode': 'dark',
+        'tfidf_classification_threshold': '0.05',
+        'tfidf_url_threshold': '0.3',
+        'tfidf_body_threshold': '0.15'
     }
     for key, value in default_configs.items():
         cursor.execute('''

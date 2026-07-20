@@ -7,6 +7,9 @@ import urllib.parse
 from collections import defaultdict, deque, Counter
 from mitmproxy import http, tls
 import spacy
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 
 # ─── Configuration ────────────────────────────────────────────────
 import os
@@ -74,6 +77,145 @@ CATEGORY_KEYWORDS = {
 
 # ─── NLP Setup ────────────────────────────────────────────────────
 nlp = spacy.load("en_core_web_sm")
+
+# ─── TF-IDF Classifier ─────────────────────────────────────────────
+class VigilantTFIDFClassifier:
+    """
+    TF-IDF based text classifier using cosine similarity against category centroids.
+    Replaces legacy regex word-stripping and string-splitting methods with vector-based
+    semantic similarity scoring.
+    """
+    
+    def __init__(self, category_keywords):
+        """
+        Initialize classifier with category keyword mappings.
+        
+        Args:
+            category_keywords: Dict mapping category names to sets of keywords
+        """
+        self.category_keywords = category_keywords
+        self.vectorizer = TfidfVectorizer(
+            lowercase=True,
+            stop_words='english',
+            ngram_range=(1, 2),
+            min_df=1,
+            max_df=0.95
+        )
+        self.category_centroids = {}
+        self._fit_category_centroids()
+    
+    def _fit_category_centroids(self):
+        """
+        Build TF-IDF vectors for each category's keywords and compute centroids.
+        Each category's centroid is the mean TF-IDF vector of all its keyword documents.
+
+        Centroids are pre-stacked into a single 2-D matrix
+        (shape: n_categories × vocab_size) so that classify() can perform a
+        single batch cosine_similarity call instead of one call per category.
+        """
+        category_documents = {}
+        for category, keywords in self.category_keywords.items():
+            # Create sample documents from keywords for training
+            docs = []
+            for keyword in keywords:
+                docs.append(keyword)
+                # Add n-gram variations
+                words = keyword.split()
+                if len(words) > 1:
+                    docs.append(' '.join(words))
+            category_documents[category] = docs
+
+        # Fit vectorizer on all category documents
+        all_docs = []
+        for docs in category_documents.values():
+            all_docs.extend(docs)
+
+        # Reset pre-computed structures
+        self.category_names = []       # ordered list matching centroid_matrix rows
+        self.centroid_matrix = None    # shape: (n_categories, vocab_size) ndarray
+
+        if all_docs:
+            self.vectorizer.fit(all_docs)
+
+            # Compute centroids for each category and store individually
+            # (kept for any external code that reads category_centroids directly)
+            centroid_rows = []
+            for category, docs in category_documents.items():
+                if docs:
+                    tfidf_matrix = self.vectorizer.transform(docs)
+                    centroid = np.mean(tfidf_matrix.toarray(), axis=0)
+                    self.category_centroids[category] = centroid
+                    self.category_names.append(category)
+                    centroid_rows.append(centroid)
+
+            # Pre-stack into a single matrix for fast batch cosine_similarity
+            if centroid_rows:
+                self.centroid_matrix = np.vstack(centroid_rows)  # (n_categories, vocab_size)
+    
+    def classify(self, text, threshold=0.1):
+        """
+        Classify text by computing cosine similarity against category centroids.
+
+        Text is truncated to SAMPLE_PREFIX_BYTES characters before vectorisation
+        to prevent latency spikes on large HTTP response bodies.
+
+        Cosine similarity is computed in a single batch call against the
+        pre-stacked centroid_matrix rather than in a per-category loop.
+
+        Args:
+            text: Input text to classify
+            threshold: Minimum similarity score to consider a category match
+
+        Returns:
+            Tuple of (best_category, similarity_scores_dict)
+        """
+        if not text or not text.strip():
+            return None, {}
+
+        # ── Truncation guard ──────────────────────────────────────────────
+        # Cap text at SAMPLE_PREFIX_BYTES characters (UTF-8 decoded length).
+        # This is the universal safety net regardless of where classify() is
+        # called from; callers that already sample the body get no overhead.
+        if len(text) > SAMPLE_PREFIX_BYTES:
+            text = text[:SAMPLE_PREFIX_BYTES]
+
+        # Transform input text to TF-IDF vector
+        try:
+            text_vector = self.vectorizer.transform([text])
+        except ValueError:
+            # Handle case where text has no features after vectorization
+            return None, {}
+
+        # ── Batch cosine similarity (single matrix multiply) ──────────────
+        # cosine_similarity returns shape (1, n_categories); flatten to 1-D.
+        if self.centroid_matrix is not None and self.category_names:
+            scores_array = cosine_similarity(text_vector, self.centroid_matrix)[0]
+            similarities = {
+                cat: float(scores_array[i])
+                for i, cat in enumerate(self.category_names)
+            }
+        else:
+            # Fallback: per-category loop (centroid_matrix not built yet)
+            similarities = {}
+            for category, centroid in self.category_centroids.items():
+                if centroid is not None:
+                    similarity = cosine_similarity(
+                        text_vector, centroid.reshape(1, -1)
+                    )[0][0]
+                    similarities[category] = float(similarity)
+
+        # Find best category above threshold
+        best_category = None
+        best_score = 0.0
+        for category, score in similarities.items():
+            if score >= threshold and score > best_score:
+                best_category = category
+                best_score = score
+
+        return best_category, similarities
+
+# Initialize global TF-IDF classifier instance with category keywords
+tfidf_classifier = VigilantTFIDFClassifier(CATEGORY_KEYWORDS)
 
 # ─── Database Setup ───────────────────────────────────────────────
 def init_db():
@@ -312,37 +454,23 @@ def should_throttle(client_ip, host):
 
 
 # ══════════════════════════════════════════════════════════════════
-# ─── FIX #1: Context-Aware Text Normalization & Keyword Engine ─────
+# ─── Legacy Methods Removed ─────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════
-#
-# The old normalize_text() stripped ALL whitespace and punctuation from
-# the entire text before matching, which silently glued adjacent words
-# together ("shows. Some" -> "showsome"). Any keyword that happened to
-# be a substring spanning that seam ("owso", etc.) or that simply
-# matched a longer fused word would trigger a false block.
-#
-# The fix splits normalization into two independent representations:
-#
-#   1. normalize_words()   -> preserves word boundaries (spaces are kept
-#                              as single separators). Used for real
-#                              whole-word / whole-phrase matching.
-#   2. collapse_stuffed()  -> targets ONLY the specific obfuscation
-#                              pattern of single characters chained by
-#                              one separator each (b.r.a.i.n.r.o.t,
-#                              b-r-a-i-n-r-o-t, b_r_a_i_n_r_o_t). Normal
-#                              prose essentially never contains 4+
-#                              consecutive one-letter "words", so this
-#                              pattern is a strong, low-false-positive
-#                              signal of deliberate obfuscation. It does
-#                              NOT touch ordinary multi-letter words, so
-#                              "shows. Some" stays as two separate words.
+# The following legacy regex word-stripping and string-splitting methods
+# have been removed and replaced with TF-IDF vectorization and cosine
+# similarity scoring via VigilantTFIDFClassifier:
+# - normalize_words()
+# - collapse_stuffed_segments()
+# - find_keyword_hits()
+# - scan_url_keywords()
+# - scan_body_keywords()
+# ══════════════════════════════════════════════════════════════════
 
-def normalize_words(text: str) -> str:
+# ─── Efficient Keyword Detection Helpers ─────────────────────────────
+def normalize_text_simple(text: str) -> str:
     """
-    Word-boundary-preserving normalization: lowercase, collapse all
-    punctuation/whitespace runs to a single space. Adjacent real words
-    remain distinct tokens (never fused), so keyword matching can use
-    \b...\b (whole word/phrase) checks safely.
+    Simple text normalization for keyword matching.
+    Lowercase and collapse whitespace/punctuation to single spaces.
     """
     if not text:
         return ""
@@ -351,117 +479,29 @@ def normalize_words(text: str) -> str:
     return re.sub(r'\s+', ' ', collapsed).strip()
 
 
-_STUFFED_PATTERN = re.compile(r'(?:[a-z0-9][^a-z0-9\s]){3,}[a-z0-9]', re.IGNORECASE)
-
-def collapse_stuffed_segments(text: str):
+def scan_text_for_keywords(text: str, keywords) -> str:
     """
-    Returns the list of joined tokens produced ONLY from character-stuffed
-    bypass runs (>=4 single characters each separated by exactly one
-    non-alphanumeric character), e.g. 'b.r.a.i.n.r.o.t' -> ['brainrot'].
-
-    Deliberately narrow scope: this pattern requires 4+ single-character
-    "words" chained in a row, which essentially never occurs in ordinary
-    prose, HTML, or JSON. Crucially, we return ONLY the matched/collapsed
-    segments (never the whole document glued together), so a later
-    substring check against these segments can't accidentally match a
-    short keyword that happens to appear inside an ordinary word (e.g.
-    keyword "ass" inside "class" never matches here, because "class"
-    isn't a stuffed run and so never enters this segment list).
+    Efficient keyword detection using normalized token intersection.
+    Returns the first matched keyword or None.
+    
+    This approach is much faster than TF-IDF for explicit blacklist checking
+    since blacklist keywords are exact matches rather than semantic similarity.
     """
-    if not text:
-        return []
-    lowered = text.lower()
-    segments = []
-    for match in _STUFFED_PATTERN.finditer(lowered):
-        segments.append(re.sub(r'[^a-z0-9]', '', match.group(0)))
-    return segments
-
-
-def find_keyword_hits(raw_text: str, keyword: str):
-    """
-    Returns (hit_count, via_stuffed_bypass: bool) for a single keyword
-    against a piece of raw (unnormalized) text.
-
-    - Whole-word/phrase matches are counted against normalize_words()
-      output using \b boundaries, so 'brainrot' does not match inside
-      'nobrainrotator' but does match 'BRAIN-ROT' after normalization.
-    - A separate check looks ONLY at segments produced by
-      collapse_stuffed_segments() - i.e. text already identified as a
-      deliberately obfuscated single-character-chained run - and checks
-      whether the glued keyword appears in one of those segments.
-      Restricting to actual stuffed segments (instead of the whole
-      document) prevents short keywords from matching as an incidental
-      substring of an unrelated, non-obfuscated word.
-    """
-    keyword_norm = normalize_words(keyword)
-    if not keyword_norm:
-        return 0, False
-
-    words_text = normalize_words(raw_text)
-    pattern = r'\b' + re.escape(keyword_norm).replace(r'\ ', r'\s+') + r'\b'
-    hits = len(re.findall(pattern, words_text))
-
-    keyword_glued = keyword_norm.replace(' ', '')
-    via_stuffed = False
-    if keyword_glued and hits == 0:
-        segments = collapse_stuffed_segments(raw_text)
-        via_stuffed = any(keyword_glued in seg for seg in segments)
-
-    return hits, via_stuffed
-
-
-# ══════════════════════════════════════════════════════════════════
-# ─── FIX #2: Separate URL vs. Body Keyword Scanning Strategies ─────
-# ══════════════════════════════════════════════════════════════════
-#
-# A keyword typed into a URL/query string is a deliberate, low-noise
-# signal (short string, user- or app-authored) -> a single hit is
-# sufficient to act on. A keyword buried once in a 2,000-word response
-# body is comparatively weak evidence and needs corroboration (repeat
-# occurrences, or a stuffed-bypass hit, which is inherently suspicious
-# regardless of count).
-
-def scan_url_keywords(url_text: str, path_text: str, keywords):
-    """
-    Strict scan for URL/path context: ANY whole-word hit, or ANY
-    stuffed-bypass hit, is sufficient to flag - URLs are short and
-    deliberately constructed, so a single match is meaningful evidence.
-    Returns the first matched keyword, or None.
-    """
+    if not text or not keywords:
+        return None
+    
+    normalized_text = normalize_text_simple(text)
+    normalized_tokens = set(normalized_text.split())
+    
     for keyword in keywords:
-        hits, via_stuffed = find_keyword_hits(url_text, keyword)
-        if hits == 0:
-            hits, via_stuffed = find_keyword_hits(path_text, keyword)
-        if hits > 0 or via_stuffed:
+        normalized_keyword = normalize_text_simple(keyword)
+        keyword_tokens = set(normalized_keyword.split())
+        
+        # Check if all keyword tokens are present in the text
+        if keyword_tokens.issubset(normalized_tokens):
             return keyword
+    
     return None
-
-
-# Body keyword hits need corroboration before blocking outright, since
-# a single passive mention deep in a long article is weak evidence.
-BODY_MIN_OCCURRENCES = 2
-
-def scan_body_keywords(body_text: str, keywords):
-    """
-    Lenient scan for response-body context: requires either
-    BODY_MIN_OCCURRENCES+ whole-word hits, or any stuffed-bypass hit
-    (obfuscation is suspicious on its own regardless of frequency).
-    Returns the first matched keyword, or None.
-    """
-    for keyword in keywords:
-        hits, via_stuffed = find_keyword_hits(body_text, keyword)
-        if via_stuffed or hits >= BODY_MIN_OCCURRENCES:
-            return keyword
-    return None
-
-
-# ══════════════════════════════════════════════════════════════════
-# ─── FIX #3: Proportional Density Scoring + Override Guards ────────
-# ══════════════════════════════════════════════════════════════════
-MIN_DISTINCT_CATEGORY_KEYWORDS = 2   # need >=2 distinct keywords from a category...
-MIN_CATEGORY_DENSITY = 0.008          # ...AND >=0.8% of all content tokens, to shift category
-PROTECTED_HINT_HARMFUL_DISTINCT = 4  # stricter bar to override an Educational/Productive domain hint
-PROTECTED_HINT_HARMFUL_DENSITY = 0.02
 
 
 def get_domain_hint(host):
@@ -486,91 +526,56 @@ def categorize_content(text, host=""):
     if nlp_enabled:
         doc      = nlp(text[:10000]) if len(text) >= 20 else None
         entities = [(ent.text, ent.label_) for ent in doc.ents] if doc else []
-        tokens   = [t.lemma_.lower() for t in doc
-                    if not t.is_stop and t.is_alpha] if doc else []
     else:
         doc = None
         entities = []
-        tokens = normalize_words(text).split() if len(text) >= 20 else []
 
-    total_tokens = max(len(tokens), 1)
-    token_counts = Counter(tokens)
+    # Use TF-IDF classifier for cosine similarity-based categorization.
+    # Use higher threshold (0.15-0.20) for full page content to avoid false
+    # positives from boilerplate.  Truncate to SAMPLE_PREFIX_BYTES at the
+    # call-site so the classify() truncation guard never needs to copy a
+    # large string unnecessarily (classify() also guards internally).
+    classification_threshold = float(config.get('tfidf_classification_threshold', 0.15))
+    classify_text = text[:SAMPLE_PREFIX_BYTES] if len(text) > SAMPLE_PREFIX_BYTES else text
+    tfidf_category, tfidf_scores = tfidf_classifier.classify(classify_text, threshold=classification_threshold)
 
-    # Density-based scoring: score = (occurrences of category keywords) / (total tokens),
-    # rather than a naive set-intersection size, so a 2,000-word article that happens to
-    # contain one incidental "shocking" doesn't score the same as a page saturated with
-    # trigger words.
-    scores = {}
-    distinct_matches = {}
-    for category, keywords in CATEGORY_KEYWORDS.items():
-        matched_keywords = set(token_counts) & keywords
-        occurrence_count = sum(token_counts[k] for k in matched_keywords)
-        scores[category] = occurrence_count / total_tokens
-        distinct_matches[category] = len(matched_keywords)
+    # If domain hint exists and is protected, give it priority
+    if hint_category:
+        if protected_hint:
+            # For protected hints, require strong TF-IDF evidence to override
+            if tfidf_category == "Harmful" and tfidf_scores.get("Harmful", 0) > 0.3:
+                category = "Harmful"
+            else:
+                category = hint_category
+        else:
+            # For non-protected hints, TF-IDF can override with moderate confidence
+            if tfidf_category and tfidf_scores.get(tfidf_category, 0) > 0.15:
+                category = tfidf_category
+            else:
+                category = hint_category
+    else:
+        # No domain hint, use TF-IDF classification
+        category = tfidf_category if tfidf_category else "Uncategorized"
 
-    # NER weighting nudges density scores slightly rather than adding large flat integers,
-    # so a handful of named entities can't singlehandedly flip the category.
+    # NER weighting for additional context
     if doc and doc.ents:
         for ent in doc.ents:
             if ent.label_ in ["LAW", "WORK_OF_ART", "EVENT", "ORG", "PERSON", "GPE"]:
-                scores["Educational"] = scores.get("Educational", 0) + (1 / total_tokens)
+                if category == "Uncategorized":
+                    category = "Educational"
             elif ent.label_ in ["DATE", "TIME", "CARDINAL", "ORDINAL"]:
-                scores["Productive"] = scores.get("Productive", 0) + (1 / total_tokens)
+                if category == "Uncategorized":
+                    category = "Productive"
 
-    if hint_category:
-        # A confirmed domain hint is strong, deliberate admin input - give it a
-        # substantial density boost so it firmly anchors the category unless a
-        # LOT of contrary evidence shows up.
-        scores[hint_category] = scores.get(hint_category, 0) + (hint_score / total_tokens) + 0.05
-
-    # ── Minimum threshold gate ──
-    # A category (other than the hint category) may only "win" if it clears BOTH
-    # a minimum distinct-keyword count and a minimum density. This prevents 2-3
-    # rogue keyword tokens scattered through a long educational page from
-    # dragging the whole page into Distracting/Harmful.
-    def clears_threshold(category):
-        return (distinct_matches.get(category, 0) >= MIN_DISTINCT_CATEGORY_KEYWORDS
-                and scores.get(category, 0) >= MIN_CATEGORY_DENSITY)
-
-    harmful_score = scores.get("Harmful", 0)
-    if harmful_score > 0:
+    # Utility context guard for Harmful classification
+    if category == "Harmful":
         utility_terms = {"git", "code", "dev", "assets", "static", "github", "google", "microsoft", "apple"}
-        has_utility_context = any(term in token_counts for term in utility_terms)
+        text_lower = text.lower()
+        has_utility_context = any(term in text_lower for term in utility_terms)
+        if has_utility_context:
+            category = "Educational"
 
-        if protected_hint:
-            # Strict override guard: an Educational/Productive domain hint can only be
-            # overridden by Harmful if the evidence is overwhelming (many distinct
-            # keywords AND high density) - a few rogue words are not enough.
-            overwhelming = (distinct_matches.get("Harmful", 0) >= PROTECTED_HINT_HARMFUL_DISTINCT
-                            and harmful_score >= PROTECTED_HINT_HARMFUL_DENSITY)
-            if not overwhelming:
-                return hint_category, entities
-            if has_utility_context:
-                return "Educational", entities
-            return "Harmful", entities
-
-        if not clears_threshold("Harmful"):
-            # Doesn't clear the minimum bar - fall through to normal scoring below
-            # instead of auto-flagging Harmful off a single stray keyword.
-            scores["Harmful"] = 0
-        elif has_utility_context:
-            return "Educational", entities
-        else:
-            return "Harmful", entities
-
-    # For non-Harmful categories, likewise require the minimum threshold before
-    # leaving Uncategorized/the hinted category.
-    eligible = {c: s for c, s in scores.items()
-                if c == hint_category or clears_threshold(c)}
-
-    if not eligible:
-        return (hint_category if hint_category else "Uncategorized"), entities
-
-    best = max(eligible, key=eligible.get)
-    if eligible[best] <= 0:
-        return (hint_category if hint_category else "Uncategorized"), entities
-
-    return best, entities
+    return category, entities
 
 
 # ─── Traffic Control Throttling ───────────────────────────────────────
@@ -804,61 +809,71 @@ class VIGILANTAddon:
         print("[VIGILANT] DNS log tailing thread started")
 
     def tls_clienthello(self, data):
-    """TLS ClientHello hook for transparent SNI domain logging with full decryption capability"""
-    try:
-        # 1. Direct attribute access for modern mitmproxy
-        sni = data.sni
+        """TLS ClientHello hook for transparent SNI domain logging with full decryption capability"""
+        try:
+            # 1. Direct attribute access for modern mitmproxy
+            sni = data.sni
 
-        # 2. Safely bypass internal Apple ecosystem traffic to prevent device lockups
-        if sni and any(domain in sni for domain in ["apple.com", "icloud.com"]):
-            data.ignore_connection = True
-            return
+            # 2. Safely bypass internal Apple ecosystem traffic to prevent device lockups
+            if sni and any(domain in sni for domain in ["apple.com", "icloud.com"]):
+                data.ignore_connection = True
+                return
 
-        # 3. Use the verified modern mitmproxy peername path
-        client_ip = data.context.client_conn.peername[0]
+            # 3. Use the verified modern mitmproxy peername path
+            client_ip = data.context.client_conn.peername[0]
 
-        if sni:
-            # Log ALL SNI domains immediately to dashboard database
-            self.log_to_dashboard(client_ip, sni)
-            
-            # NOTE: Removed `data.ignore_connection = True` from here.
-            # This allows mitmproxy to step forward and complete the TLS handshake 
-            # using the trusted certificate you installed via AirDrop.
+            if sni:
+                # Log ALL SNI domains immediately to dashboard database
+                self.log_to_dashboard(client_ip, sni)
 
-            clean_sni = sni.lstrip("www.")
-            base = ".".join(clean_sni.split(".")[-2:])
+                # NOTE: Removed `data.ignore_connection = True` from here.
+                # This allows mitmproxy to step forward and complete the TLS handshake
+                # using the trusted certificate you installed via AirDrop.
 
-            flagged, rpm_now, rpm_base = should_throttle(client_ip, sni)
+                clean_sni = sni.lstrip("www.")
+                base = ".".join(clean_sni.split(".")[-2:])
 
-            if flagged and client_ip not in throttled_clients:
-                throttled_clients.add(client_ip)
-                log_throttle(client_ip, sni, rpm_now, rpm_base, "TLS_THROTTLE_APPLIED")
-                apply_throttle(client_ip)
-                print(f"[VIGILANT] TLS DOOMSCROLL DETECTED {client_ip} @ {sni} "
-                      f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
+                flagged, rpm_now, rpm_base = should_throttle(client_ip, sni)
 
-            social_domains = load_social_domains()
-            if any(base in d for d in social_domains):
-                log_request(client_ip, sni, "(TLS_SNI)", "TLS", "Mobile_Bypass", False, [])
-                print(f"[VIGILANT] TLS SNI bypass logged: {client_ip} -> {sni}")
-                
-    except (AttributeError, IndexError, TypeError) as e:
-        print(f"[VIGILANT] TLS ClientHello: Failed to extract client IP or data structures: {e}")
-    except Exception as e:
-        print(f"[VIGILANT] TLS ClientHello global framework error: {e}")
+                if flagged and client_ip not in throttled_clients:
+                    throttled_clients.add(client_ip)
+                    log_throttle(client_ip, sni, rpm_now, rpm_base, "TLS_THROTTLE_APPLIED")
+                    apply_throttle(client_ip)
+                    print(f"[VIGILANT] TLS DOOMSCROLL DETECTED {client_ip} @ {sni} "
+                          f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
+
+                social_domains = load_social_domains()
+                if any(base in d for d in social_domains):
+                    log_request(client_ip, sni, "(TLS_SNI)", "TLS", "Mobile_Bypass", False, [])
+                    print(f"[VIGILANT] TLS SNI bypass logged: {client_ip} -> {sni}")
+
+        except (AttributeError, IndexError, TypeError) as e:
+            print(f"[VIGILANT] TLS ClientHello: Failed to extract client IP or data structures: {e}")
+        except Exception as e:
+            print(f"[VIGILANT] TLS ClientHello global framework error: {e}")
 
     def log_to_dashboard(self, client_ip: str, sni: str):
-        """Log SNI domain to dashboard database for transparent passthrough tracking"""
+        """Log SNI domain to dashboard database for transparent passthrough tracking using TF-IDF classification"""
         try:
             # Get domain hint for categorization
             hint_category, _ = get_domain_hint(sni)
             
-            # Use domain hint category if it's loggable, otherwise default to Productive
-            # This ensures SNI logs are saved to database (Uncategorized is filtered out)
+            # Use domain hint category if it's loggable
             if hint_category and hint_category.lower() in _LOGGABLE_CATEGORIES:
                 category = hint_category
             else:
-                category = "Productive"  # Default category for SNI logs to ensure database logging
+                # Use TF-IDF classifier to categorize SNI domain name
+                # Convert domain to text for classification (e.g., "instagram.com" -> "instagram social media")
+                # Use lower threshold (0.05-0.08) for domain names/short URLs
+                config = load_proxy_config()
+                domain_threshold = float(config.get('tfidf_url_threshold', 0.05))
+                domain_text = sni.replace(".", " ").replace("-", " ")
+                tfidf_category, tfidf_scores = tfidf_classifier.classify(domain_text, threshold=domain_threshold)
+                
+                if tfidf_category and tfidf_category.lower() in _LOGGABLE_CATEGORIES:
+                    category = tfidf_category
+                else:
+                    category = "Productive"  # Default category for SNI logs to ensure database logging
             
             # Log the SNI domain request
             log_request(client_ip, sni, "(TLS_SNI)", "TLS", category, False, [])
@@ -906,7 +921,9 @@ class VIGILANTAddon:
 
                 path_text = flow.request.path[:2000]
 
-                matched = scan_url_keywords(decoded_url, path_text, keywords)
+                # Use efficient token intersection for keyword detection
+                url_text = decoded_url + " " + path_text
+                matched = scan_text_for_keywords(url_text, keywords)
                 if matched:
                     print(f"[VIGILANT] KEYWORD BLOCKED (pre-passthrough): {matched} in {decoded_url[:60]} from {client_ip}")
                     log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [])
@@ -959,12 +976,10 @@ class VIGILANTAddon:
                         request_body = flow.request.get_text(strict=False) if flow.request.content else ""
                     except Exception:
                         request_body = ""
-                    if any(domain in host for domain in ["youtube.com", "googlevideo.com", "tiktok.com", "tiktokv.com", "instagram.com"]):
-                        matched = scan_url_keywords(request_body, "", keywords)
-                    else:
-                        matched = scan_body_keywords(request_body, keywords)
+                    # Use efficient token intersection for keyword detection (unified approach for all domains)
+                    matched = scan_text_for_keywords(request_body, keywords)
                     if matched:
-                        print(f"[VIGILANT] RESPONSE KEYWORD BLOCKED: {matched} in {content_type} response from {host}")
+                        print(f"[VIGILANT] REQUEST KEYWORD BLOCKED: {matched} in request body from {host}")
                         log_request(client_ip, host, path, method, "Harmful", True, [])
                         flow.response = http.Response.make(
                             403,
@@ -1072,7 +1087,8 @@ class VIGILANTAddon:
 
                 if keywords:
                     if clean:
-                        matched = scan_body_keywords(clean, keywords)
+                        # Use efficient token intersection for keyword detection
+                        matched = scan_text_for_keywords(clean, keywords)
                     else:
                         matched = None
                     if matched:
