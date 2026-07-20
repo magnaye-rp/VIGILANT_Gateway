@@ -1725,13 +1725,14 @@ def get_nerve_center_metrics():
         
         if DB_PATH.exists():
             with _open_db() as conn:
-                # Count active devices (seen in last 5 minutes) from 192.168.10.0 network
-                window_start = time.time() - 300
-                if _table_exists(conn, "network_devices"):
+                # Count active devices (seen in last 1 minute) from 192.168.10.0 network
+                # Use traffic_log to count devices that have actually made requests recently
+                window_start = time.time() - 60
+                if _table_exists(conn, "traffic_log"):
                     row = conn.execute(
                         """
-                        SELECT COUNT(*) FROM network_devices
-                        WHERE ip_address LIKE '192.168.10.%' AND last_seen > ?
+                        SELECT COUNT(DISTINCT client_ip) FROM traffic_log
+                        WHERE client_ip LIKE '192.168.10.%' AND timestamp > ?
                         """,
                         (window_start,)
                     ).fetchone()
