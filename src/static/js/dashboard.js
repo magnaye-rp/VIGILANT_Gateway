@@ -114,12 +114,13 @@ window.loadActiveDevices = async function() {
     const devices = data.devices || [];
 
     // Filter for currently active devices (recently seen) and only include 192.168.10.0 network
+    // Use 1-minute window to match nerve center logic
     const now = Date.now() / 1000;
     const activeDevices = devices.filter(device => {
       const ip = device.ip_address || '';
       const lastSeen = device.last_seen || 0;
-      // Consider device active if seen in last 5 minutes and in 192.168.10.0 network
-      return ip.startsWith('192.168.10.') && (now - lastSeen) < 300;
+      // Consider device active if seen in last 1 minute and in 192.168.10.0 network
+      return ip.startsWith('192.168.10.') && (now - lastSeen) < 60;
     });
 
     if (activeDevices.length === 0) {
