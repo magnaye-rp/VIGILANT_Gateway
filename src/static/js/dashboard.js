@@ -65,6 +65,7 @@ function switchTab(tabId) {
   if (tabId === 'settings') loadUnifiedConfig();
   if (tabId === 'filtering') {
     loadCategoryHints();
+    loadKeywords();
   }
   if (tabId === 'behavioral-control') {
     loadBehavioralSettings();
@@ -183,10 +184,10 @@ window.loadLeasedDevices = async function() {
 
 window.setDeviceFilter = async function(macAddress, action, buttonElement) {
   try {
-    const response = await fetch('/api/devices/filter', {
+    const response = await fetch('/api/devices/policy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mac: macAddress, action: action })
+      body: JSON.stringify({ mac_address: macAddress, policy: action })
     });
     
     if (response.ok) {
@@ -740,6 +741,56 @@ async function saveBehavioralSettings(event) {
   }
 }
 
+// ─── Keyword Filtering ───
+window.loadKeywords = async function() {
+  const tableBody = document.getElementById('keywords-table-body');
+  if (!tableBody) return;
+
+  try {
+    const response = await fetch('/api/keywords');
+    const keywords = await response.json();
+
+    if (!keywords || keywords.length === 0) {
+      tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No constraints active</td></tr>';
+      return;
+    }
+
+    tableBody.innerHTML = keywords.map(kw => `
+      <tr>
+        <td>${kw.keyword}</td>
+        <td style="text-align: right;">
+          <a href="#" onclick="deleteKeyword(${kw.id}); return false;" style="color: var(--danger);">[Delete]</a>
+        </td>
+      </tr>
+    `).join('');
+  } catch (error) {
+    console.error('Error loading keywords:', error);
+    tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading keywords</td></tr>';
+  }
+};
+
+window.deleteKeyword = async function(keywordId) {
+  if (!confirm('Are you sure you want to delete this keyword?')) {
+    return;
+  }
+
+  try {
+    const response = await fetch(`/api/keywords/${keywordId}`, {
+      method: 'DELETE'
+    });
+
+    if (response.ok) {
+      showToast('Keyword deleted successfully', 'success');
+      loadKeywords();
+    } else {
+      const data = await response.json();
+      showToast(data.error || 'Failed to delete keyword', 'danger');
+    }
+  } catch (error) {
+    showToast('Error deleting keyword', 'danger');
+  }
+};
+
 // ─── Category Hints Management ───
 async function loadCategoryHints() {
   const tableBody = document.getElementById('category-hints-table-body');
@@ -804,77 +855,6 @@ async function updateGlobalThroughput() {
 
 // Start periodic throughput polling (every 2 seconds)
 setInterval(updateGlobalThroughput, 2000);
-
-// ─── Category Hints Management ───
-async function loadCategoryHints() {
-  const tableBody = document.getElementById('category-hints-table-body');
-
-  try {
-    const response = await fetch('/api/categories/hints');
-    const hints = await response.json();
-
-    if (hints.length === 0) {
-      tableBody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No category mappings configured</td></tr>';
-      return;
-    }
-
-    tableBody.innerHTML = hints.map(hint => `
-      <tr>
-        <td><span class="category-badge ${hint.category.toLowerCase()}">${hint.category}</span></td>
-        <td>${hint.domain}</td>
-        <td style="text-align: right;">
-          <a href="#" onclick="deleteCategoryHint(${hint.id}); return false;" style="color: var(--danger);">[Delete]</a>
-        </td>
-      </tr>
-    `).join('');
-  } catch (error) {
-    tableBody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading category hints</td></tr>';
-  }
-}
-
-document.getElementById('category-hint-form').addEventListener('submit', async function(e) {
-  e.preventDefault();
-
-  const categorySelect = document.getElementById('category-hint-category');
-  const domainInput = document.getElementById('category-hint-domain');
-  
-  const category = categorySelect.value;
-  const domain = domainInput.value.trim();
-
-  if (!category) {
-    showToast('Please select a category', 'danger');
-    return;
-  }
-
-  if (!domain) {
-    showToast('Please enter a domain', 'danger');
-    return;
-  }
-
-  try {
-    const response = await fetch('/api/categories/hints', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ category: category, domain: domain })
-    });
-
-    const data = await response.json();
-
-    if (response.ok) {
-      showToast('Category mapping added successfully', 'success');
-      domainInput.value = '';
-      categorySelect.value = '';
-      loadCategoryHints();
-    } else {
-      showToast(data.error || 'Failed to add category mapping', 'danger');
-    }
-  } catch (error) {
-    console.error('Error adding category hint:', error);
-    showToast('Error adding category mapping', 'danger');
-  }
-});
 
 async function deleteCategoryHint(hintId) {
   if (!confirm('Are you sure you want to delete this category mapping?')) {
@@ -1043,7 +1023,7 @@ async function factoryReset() {
 function exportConfig() {
     showToast('Exporting configuration...', 'info');
     // Direct browser redirect to download the JSON payload attachment cleanly
-    window.location.href = '/api/config/export';
+    window.location.href = '/api/config/setup/export';
 }
 
 function importConfig() {
@@ -1064,7 +1044,7 @@ function importConfig() {
         formData.append('config_file', file);
         
         // 4. Send the multi-part request to our backend API
-        fetch('/api/config/import', {
+        fetch('/api/config/setup/import', {
             method: 'POST',
             body: formData
         })
@@ -1161,14 +1141,6 @@ function executeConfirm() {
   }
 }
 
-function showToast(message, type = 'info') {
-  const toast = document.createElement('div');
-  toast.className = `toast ${type}`;
-  toast.textContent = message;
-  document.getElementById('toastContainer').appendChild(toast);
-  setTimeout(() => toast.remove(), 4000);
-}
-
 async function saveWizardConfig(e) {
   e?.preventDefault();
 
@@ -1221,6 +1193,7 @@ async function saveWizardConfig(e) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  initTheme();
   startDashboardPolling();
   loadConfigToUI();
 
@@ -1230,9 +1203,87 @@ document.addEventListener('DOMContentLoaded', () => {
   const wizardForm = document.getElementById('wizardForm');
   if (wizardForm) wizardForm.addEventListener('submit', saveWizardConfig);
 
-  // Initialize SNI status indicator
   const sniCheckbox = document.getElementById('behavioral-sni-enabled');
   if (sniCheckbox) updateSNIStatusIndicator(sniCheckbox);
+
+  const keywordForm = document.getElementById('keyword-form');
+  if (keywordForm) {
+    keywordForm.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const keywordInput = document.getElementById('keyword-input');
+      const keyword = keywordInput.value.trim();
+
+      if (!keyword) {
+        showToast('Please enter a keyword', 'danger');
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/keywords', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keyword: keyword })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+          showToast('Keyword added successfully', 'success');
+          keywordInput.value = '';
+          loadKeywords();
+        } else {
+          showToast(data.error || 'Failed to add keyword', 'danger');
+        }
+      } catch (error) {
+        showToast('Error adding keyword', 'danger');
+      }
+    });
+  }
+
+  const categoryHintForm = document.getElementById('category-hint-form');
+  if (categoryHintForm) {
+    categoryHintForm.addEventListener('submit', async function(e) {
+      e.preventDefault();
+
+      const categorySelect = document.getElementById('category-hint-category');
+      const domainInput = document.getElementById('category-hint-domain');
+      
+      const category = categorySelect.value;
+      const domain = domainInput.value.trim();
+
+      if (!category) {
+        showToast('Please select a category', 'danger');
+        return;
+      }
+
+      if (!domain) {
+        showToast('Please enter a domain', 'danger');
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/categories/hints', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ category: category, domain: domain })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+          showToast('Category mapping added successfully', 'success');
+          domainInput.value = '';
+          categorySelect.value = '';
+          loadCategoryHints();
+        } else {
+          showToast(data.error || 'Failed to add category mapping', 'danger');
+        }
+      } catch (error) {
+        console.error('Error adding category hint:', error);
+        showToast('Error adding category mapping', 'danger');
+      }
+    });
+  }
 });
 
 // ─── Theme Management ───
@@ -1272,20 +1323,6 @@ function toggleThemeMode(isDark) {
   toggleTheme(mode);
 }
 
-// ─── SNI Status Indicator ───
-function updateSNIStatusIndicator(checkbox) {
-  const textIndicator = document.getElementById('sni-status-text');
-  if (!textIndicator) return;
-  
-  if (checkbox.checked) {
-    textIndicator.textContent = "ON";
-    textIndicator.style.color = "#1A938A";
-  } else {
-    textIndicator.textContent = "OFF";
-    textIndicator.style.color = "rgba(128, 128, 128, 0.6)";
-  }
-}
-
 // ─── Unified Polling Engine ───
 let dashboardPollInterval = null;
 
@@ -1307,23 +1344,48 @@ function startDashboardPolling() {
         healthIcon.style.color = isOptimal ? '#1A938A' : 'var(--danger)';
         healthText.textContent = isOptimal ? 'Optimal' : 'Degraded';
       }
+
+      const interfaceThroughput = document.getElementById('nerve-interface-throughput');
+      if (interfaceThroughput) {
+        interfaceThroughput.textContent = `Rx: ${data.system.throughput_rx_mbps} Mbps / Tx: ${data.system.throughput_tx_mbps} Mbps`;
+      }
+
+      const interfaceMode = document.getElementById('nerve-interface-mode');
+      if (interfaceMode && data.network_config) {
+        const upstream = data.network_config.upstream_interface || 'Unknown';
+        const distribution = data.network_config.distribution_interface || 'Unknown';
+        interfaceMode.textContent = `${upstream} → ${distribution}`;
+      }
+
+      const sysThroughput = document.getElementById('sys-throughput');
+      if (sysThroughput) {
+        sysThroughput.textContent = `${data.system.throughput_rx_mbps} / ${data.system.throughput_tx_mbps}`;
+      }
       
       const networkLoad = document.getElementById('nerve-network-load');
       if (networkLoad) {
         networkLoad.textContent = 'Network Active';
       }
       
-      // Fetch accurate nerve center metrics
+      const shieldIntegrity = document.getElementById('nerve-shield-integrity');
+      if (shieldIntegrity) {
+        shieldIntegrity.textContent = `${data.devices.total_connected} Active / ${data.devices.throttled_count} Throttled`;
+      }
+
+      const nlpStatus = document.getElementById('nerve-nlp-status');
+      if (nlpStatus) {
+        nlpStatus.textContent = data.active_config?.nlp_enabled ? 'Active' : 'Idle';
+      }
+
+      // Fetch additional nerve center metrics when available
       try {
         const nerveResponse = await fetch('/api/nerve-center/metrics');
         if (nerveResponse.ok) {
           const nerveData = await nerveResponse.json();
-          const shieldIntegrity = document.getElementById('nerve-shield-integrity');
           if (shieldIntegrity) {
             shieldIntegrity.textContent = `${nerveData.active_count} Active / ${nerveData.throttled_count} Throttled`;
           }
-          const nlpStatus = document.getElementById('nerve-nlp-status');
-          if (nlpStatus) {
+          if (nlpStatus && nerveData.nlp_status) {
             nlpStatus.textContent = nerveData.nlp_status;
           }
         }
@@ -1391,5 +1453,3 @@ function startDashboardPolling() {
   fetchSummary();
   dashboardPollInterval = setInterval(fetchSummary, 3000);
 }
-
-window.addEventListener('DOMContentLoaded', initTheme);

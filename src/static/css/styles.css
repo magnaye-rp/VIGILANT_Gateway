@@ -9,6 +9,7 @@
   --surface-light: rgba(255, 255, 255, 0.6);
   --surface-lighter: rgba(255, 255, 255, 0.5);
   --text: #212529;
+  --text-primary: #212529;
   --text-secondary: #495057;
   --border: rgba(0, 0, 0, 0.08);
   
@@ -26,6 +27,7 @@
   --surface-light: rgba(33, 37, 41, 0.6);
   --surface-lighter: rgba(33, 37, 41, 0.5);
   --text: #F8F9FA;
+  --text-primary: #F8F9FA;
   --text-secondary: #adb5bd;
   --border: rgba(255, 255, 255, 0.08);
 }
