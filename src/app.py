@@ -1715,6 +1715,76 @@ def get_interface_throughput():
         }), 500
 
 
+@app.route("/api/nerve-center/metrics", methods=["GET"])
+def get_nerve_center_metrics():
+    """Get accurate metrics for VIGILANT Nerve Center display"""
+    try:
+        # Get device counts from 192.168.10.0 network only
+        active_count = 0
+        throttled_count = 0
+        
+        if DB_PATH.exists():
+            with _open_db() as conn:
+                # Count active devices (seen in last 5 minutes) from 192.168.10.0 network
+                window_start = time.time() - 300
+                if _table_exists(conn, "network_devices"):
+                    row = conn.execute(
+                        """
+                        SELECT COUNT(*) FROM network_devices
+                        WHERE ip_address LIKE '192.168.10.%' AND last_seen > ?
+                        """,
+                        (window_start,)
+                    ).fetchone()
+                    active_count = int(row[0] or 0) if row else 0
+                
+                # Count throttled devices from 192.168.10.0 network
+                # Check both throttle_events and policy-based blacklisting
+                throttled_ips = set()
+                
+                # Check throttle_events
+                if _table_exists(conn, "throttle_events"):
+                    rows = conn.execute(
+                        """
+                        SELECT DISTINCT client_ip FROM throttle_events
+                        WHERE timestamp > ? AND client_ip LIKE '192.168.10.%'
+                        """,
+                        (window_start,)
+                    ).fetchall()
+                    for row in rows:
+                        throttled_ips.add(row[0])
+                
+                # Check policy-based blacklisting
+                if _table_exists(conn, "network_devices"):
+                    rows = conn.execute(
+                        """
+                        SELECT ip_address FROM network_devices
+                        WHERE policy = 'blacklist' AND ip_address LIKE '192.168.10.%'
+                        """
+                    ).fetchall()
+                    for row in rows:
+                        throttled_ips.add(row[0])
+                
+                throttled_count = len(throttled_ips)
+        
+        # Get NLP status from config
+        config = load_config()
+        nlp_enabled = _coerce_bool(config.get("nlp_enabled", "true"))
+        nlp_status = "Active" if nlp_enabled else "Idle"
+        
+        return jsonify({
+            "active_count": active_count,
+            "throttled_count": throttled_count,
+            "nlp_status": nlp_status
+        })
+    except Exception as exc:
+        app.logger.error("Failed to get nerve center metrics: %s", exc)
+        return jsonify({
+            "active_count": 0,
+            "throttled_count": 0,
+            "nlp_status": "Unknown"
+        })
+
+
 def _read_proc_net_dev() -> dict:
     """Read network interface statistics from /proc/net/dev"""
     stats = {}

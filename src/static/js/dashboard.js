@@ -1329,9 +1329,22 @@ function startDashboardPolling() {
         shieldIntegrity.textContent = `${activeCount} Active / ${throttledCount} Throttled`;
       }
       
-      const nlpStatus = document.getElementById('nerve-nlp-status');
-      if (nlpStatus) {
-        nlpStatus.textContent = data.active_config.nlp_enabled ? 'Active' : 'Idle';
+      // Fetch accurate nerve center metrics
+      try {
+        const nerveResponse = await fetch('/api/nerve-center/metrics');
+        if (nerveResponse.ok) {
+          const nerveData = await nerveResponse.json();
+          const shieldIntegrity = document.getElementById('nerve-shield-integrity');
+          if (shieldIntegrity) {
+            shieldIntegrity.textContent = `${nerveData.active_count} Active / ${nerveData.throttled_count} Throttled`;
+          }
+          const nlpStatus = document.getElementById('nerve-nlp-status');
+          if (nlpStatus) {
+            nlpStatus.textContent = nerveData.nlp_status;
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch nerve center metrics:', error);
       }
 
       // 2. Update System Gauges (throughput removed per requirements)
