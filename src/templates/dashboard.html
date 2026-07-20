@@ -1040,7 +1040,7 @@
             </div>
             <div>
               <div style="font-size: 0.85rem; opacity: 0.8; margin-bottom: 0.25rem;">Interface Mode</div>
-              <div style="font-size: 1.1rem; font-weight: 600;" id="nerve-interface-mode">Physical Access Point (PCIe-Ethernet)</div>
+              <div style="font-size: 1.1rem; font-weight: 600;" id="nerve-interface-mode">Loading...</div>
             </div>
             <div>
               <div style="font-size: 0.85rem; opacity: 0.8; margin-bottom: 0.25rem;">Interface Throughput</div>
@@ -2091,7 +2091,7 @@
   function exportConfig() {
       showToast('Exporting configuration...', 'info');
       // Direct browser redirect to download the JSON payload attachment cleanly
-      window.location.href = '/api/config/export';
+      window.location.href = '/api/config/setup/export';
   }
 
   function importConfig() {
@@ -2112,7 +2112,7 @@
           formData.append('config_file', file);
           
           // 4. Send the multi-part request to our backend API
-          fetch('/api/config/import', {
+          fetch('/api/config/setup/import', {
               method: 'POST',
               body: formData
           })
@@ -2372,6 +2372,13 @@
         const nlpStatus = document.getElementById('nerve-nlp-status');
         if (nlpStatus) {
           nlpStatus.textContent = data.active_config.nlp_enabled ? 'Active' : 'Idle';
+        }
+
+        const interfaceMode = document.getElementById('nerve-interface-mode');
+        if (interfaceMode && data.network_config) {
+          const upstream = data.network_config.upstream_interface || 'Unknown';
+          const distribution = data.network_config.distribution_interface || 'Unknown';
+          interfaceMode.textContent = `${upstream} → ${distribution}`;
         }
 
         // 2. Update System Gauges

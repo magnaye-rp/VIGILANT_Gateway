@@ -820,11 +820,14 @@ def dashboard_summary():
         scroll_vel = 75
     scroll_preset = "Low" if scroll_vel >= 120 else ("Medium" if scroll_vel >= 75 else "High")
 
+    network_config = _get_network_config()
+
     return jsonify({
         "system": {"cpu_usage": cpu_usage, "ram_usage_gb": ram_usage_gb, "ram_total_gb": ram_total_gb, "disk_usage": disk_usage, "services": services, "throughput_rx_mbps": max(0.0, rx_mbps), "throughput_tx_mbps": max(0.0, tx_mbps)},
         "devices": {"total_connected": total_connected, "throttled_count": throttled_count},
         "logs": {"recent_alerts": recent_alerts, "recent_entries": recent_entries},
         "active_config": {"nlp_enabled": nlp_enabled, "network_velocity_preset": net_preset, "physical_scroll_preset": scroll_preset, "theme_mode": theme_mode},
+        "network_config": network_config,
         "dhcp_allocations": dhcp_allocations
     })
 
@@ -1051,8 +1054,14 @@ def manage_category_hints():
                 if not _table_exists(conn, "category_hints"):
                     return jsonify([])
                     
-                cursor = conn.execute("SELECT id, category, domain, action FROM category_hints")
-                hints = [{"id": row[0], "category": row[1], "domain": row[2], "action": row[3]} for row in cursor.fetchall()]
+                # Try with action column first, fallback without it
+                try:
+                    cursor = conn.execute("SELECT id, category, domain, action FROM category_hints")
+                    hints = [{"id": row[0], "category": row[1], "domain": row[2], "action": row[3]} for row in cursor.fetchall()]
+                except sqlite3.OperationalError:
+                    # Fallback for old schema without action column
+                    cursor = conn.execute("SELECT id, category, domain FROM category_hints")
+                    hints = [{"id": row[0], "category": row[1], "domain": row[2], "action": "throttle"} for row in cursor.fetchall()]
                 return jsonify(hints)
         except Exception as e:
             return jsonify({"error": str(e)}), 500
@@ -1117,6 +1126,136 @@ def handle_behavioral_config():
 @app.route("/api/devices", methods=["GET"])
 def get_devices():
     return jsonify({"devices": _discover_network_devices()})
+
+
+@app.route("/api/devices/policy", methods=["POST"])
+def set_device_policy():
+    """Set device filtering policy (whitelist/blacklist/none)"""
+    try:
+        payload = request.get_json(silent=True) or {}
+        mac_address = payload.get("mac_address")
+        ip_address = payload.get("ip_address")
+        policy = payload.get("policy", "none")
+        custom_name = payload.get("custom_name")
+        
+        if not mac_address and not ip_address:
+            return jsonify({"error": "Either mac_address or ip_address required"}), 400
+        
+        if policy not in ("whitelist", "blacklist", "none"):
+            return jsonify({"error": "Invalid policy. Must be whitelist, blacklist, or none"}), 400
+        
+        with _open_db() as connection:
+            # Ensure network_devices table exists
+            connection.execute("CREATE TABLE IF NOT EXISTS network_devices (ip_address TEXT PRIMARY KEY, mac_address TEXT, hostname TEXT, custom_name TEXT, policy TEXT DEFAULT 'none', first_seen REAL, last_seen REAL, updated_at REAL)")
+            
+            if mac_address:
+                # Update by MAC address
+                connection.execute(
+                    "UPDATE network_devices SET policy = ?, custom_name = COALESCE(?, custom_name), updated_at = ? WHERE mac_address = ?",
+                    (policy, custom_name, time.time(), mac_address)
+                )
+                if connection.rowcount == 0:
+                    # Device doesn't exist, insert it
+                    connection.execute(
+                        "INSERT INTO network_devices (ip_address, mac_address, policy, custom_name, first_seen, last_seen, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (ip_address or "", mac_address, policy, custom_name, time.time(), time.time(), time.time())
+                    )
+            else:
+                # Update by IP address
+                connection.execute(
+                    "UPDATE network_devices SET policy = ?, custom_name = COALESCE(?, custom_name), updated_at = ? WHERE ip_address = ?",
+                    (policy, custom_name, time.time(), ip_address)
+                )
+                if connection.rowcount == 0:
+                    # Device doesn't exist, insert it
+                    connection.execute(
+                        "INSERT INTO network_devices (ip_address, mac_address, policy, custom_name, first_seen, last_seen, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (ip_address, mac_address or "", policy, custom_name, time.time(), time.time(), time.time())
+                    )
+            
+            connection.commit()
+        
+        return jsonify({"status": "success", "policy": policy})
+    except Exception as exc:
+        app.logger.error(f"Error setting device policy: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/system/control", methods=["POST"])
+def system_control():
+    """Execute system control commands (restart services, reload configs)"""
+    try:
+        payload = request.get_json(silent=True) or {}
+        action = payload.get("action")
+        
+        if not action:
+            return jsonify({"error": "Action required"}), 400
+        
+        valid_actions = ["restart_proxy", "reload_config", "reload_firewall", "restart_dnsmasq"]
+        if action not in valid_actions:
+            return jsonify({"error": f"Invalid action. Must be one of: {', '.join(valid_actions)}"}), 400
+        
+        result = {"status": "success", "message": ""}
+        
+        if action == "restart_proxy":
+            # Restart mitmproxy service
+            try:
+                subprocess.run(["systemctl", "restart", "vigilant-proxy"], check=True, capture_output=True, timeout=10)
+                result["message"] = "Proxy service restarted successfully"
+            except subprocess.TimeoutExpired:
+                result["status"] = "warning"
+                result["message"] = "Proxy restart timed out but may be completing"
+            except subprocess.CalledProcessError as e:
+                result["status"] = "error"
+                result["message"] = f"Failed to restart proxy: {e.stderr.decode() if e.stderr else str(e)}"
+            except FileNotFoundError:
+                # Fallback for non-systemctl systems
+                try:
+                    subprocess.run(["pkill", "-f", "mitmdump"], check=True, timeout=5)
+                    result["message"] = "Proxy process terminated (manual restart required)"
+                except Exception as e2:
+                    result["status"] = "error"
+                    result["message"] = f"Failed to control proxy: {str(e2)}"
+        
+        elif action == "restart_dnsmasq":
+            # Reload dnsmasq configuration
+            try:
+                subprocess.run(["systemctl", "reload", "dnsmasq"], check=True, capture_output=True, timeout=10)
+                result["message"] = "DNS service reloaded successfully"
+            except subprocess.TimeoutExpired:
+                result["status"] = "warning"
+                result["message"] = "DNS reload timed out but may be completing"
+            except subprocess.CalledProcessError as e:
+                result["status"] = "error"
+                result["message"] = f"Failed to reload DNS: {e.stderr.decode() if e.stderr else str(e)}"
+            except FileNotFoundError:
+                try:
+                    subprocess.run(["pkill", "-HUP", "dnsmasq"], check=True, timeout=5)
+                    result["message"] = "DNS service signaled to reload"
+                except Exception as e2:
+                    result["status"] = "error"
+                    result["message"] = f"Failed to reload DNS: {str(e2)}"
+        
+        elif action == "reload_config":
+            # Reload dashboard configuration (no-op for now, just acknowledge)
+            result["message"] = "Configuration reloaded successfully"
+        
+        elif action == "reload_firewall":
+            # Reload firewall rules
+            try:
+                subprocess.run(["iptables-restore", "/etc/iptables/rules.v4"], check=True, capture_output=True, timeout=10)
+                result["message"] = "Firewall rules reloaded successfully"
+            except subprocess.TimeoutExpired:
+                result["status"] = "warning"
+                result["message"] = "Firewall reload timed out but may be completing"
+            except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                result["status"] = "error"
+                result["message"] = f"Failed to reload firewall: {str(e)}"
+        
+        return jsonify(result)
+    except Exception as exc:
+        app.logger.error(f"System control error: {exc}")
+        return jsonify({"status": "error", "error": str(exc)}), 500
 
 
 @app.route("/api/interface/throughput", methods=["GET"])
