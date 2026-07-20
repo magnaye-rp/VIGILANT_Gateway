@@ -252,47 +252,45 @@ stage_5_network_config() {
     log_info "Backing up netplan config..."
     cp /etc/netplan/00-installer-config.yaml \
        /etc/netplan/00-installer-config.yaml.bak 2>/dev/null || true
+
+    log_info "Configuring Netplan for WAN ($WAN_INTERFACE) and LAN ($LAN_INTERFACE)..."
     
-    log_info "Generating netplan configuration with dynamic interface..."
-    # Check if LAN interface is wireless
-    if [[ "$LAN_INTERFACE" == wl* ]]; then
-        log_info "Detected wireless LAN interface, configuring AP mode..."
-        cat > /etc/netplan/00-installer-config.yaml << EOF
+    # Netplan handles both ethernet and wifi interfaces under the hood for static assignment
+    cat > /etc/netplan/00-installer-config.yaml << EOF
 network:
   version: 2
   renderer: networkd
   ethernets:
     $WAN_INTERFACE:
       dhcp4: true
+EOF
+
+    # If LAN is Wi-Fi, set under wifis section; if Ethernet, set under ethernets
+    if [[ "$LAN_INTERFACE" == wl* ]]; then
+        cat >> /etc/netplan/00-installer-config.yaml << EOF
   wifis:
     $LAN_INTERFACE:
       dhcp4: no
-      access-points:
-        "VIGILANT-Gateway":
-          password: "vigilantsecure"
       addresses:
-        - 192.168.100.88/24
+        - 192.168.10.1/24
+      ignore-carrier: true
 EOF
     else
-        log_info "Detected wired LAN interface, configuring static IP..."
-        cat > /etc/netplan/00-installer-config.yaml << EOF
-network:
-  version: 2
-  renderer: networkd
-  ethernets:
-    $WAN_INTERFACE:
-      dhcp4: true
+        cat >> /etc/netplan/00-installer-config.yaml << EOF
     $LAN_INTERFACE:
       dhcp4: no
       addresses:
-        - 192.168.100.88/24
+        - 192.168.10.1/24
+      ignore-carrier: true
 EOF
     fi
-    
+
     log_info "Applying netplan changes..."
     netplan generate > /dev/null 2>&1
     netplan apply > /dev/null 2>&1
-    log_success "Network configured with $WAN_INTERFACE (WAN) and $LAN_INTERFACE (LAN)"
+    systemctl restart systemd-networkd > /dev/null 2>&1 || true
+    
+    log_success "Network configured: $WAN_INTERFACE (DHCP WAN), $LAN_INTERFACE (Static 192.168.10.1 LAN)"
 }
 
 # ─── Stage 6: DNS/DHCP Setup ────────────────────────────────────────────────
