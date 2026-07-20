@@ -30,7 +30,7 @@ MIN_REQUESTS_BASELINE = 10
 # Default values (will be overridden by database config)
 DEFAULT_VELOCITY_THRESHOLD = 1.5
 DEFAULT_THROTTLE_RATE = "512kbit"
-DEFAULT_PINNED_DOMAINS = "instagram.com,facebook.com,tiktok.com,x.com,twitter.com"
+DEFAULT_PINNED_DOMAINS = "facebook.com,tiktok.com,x.com,twitter.com"
 
 # Global asset whitelist
 GLOBAL_WHITELIST = {
