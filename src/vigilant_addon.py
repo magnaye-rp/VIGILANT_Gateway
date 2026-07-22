@@ -972,14 +972,15 @@ class VIGILANTAddon:
         except Exception as e:
             print(f"[VIGILANT] TLS ClientHello error: {e}")
 
-    def tls_failed_clienthandshake(self, data: tls.TLSErrorData):
+    def tls_failed_client(self, data: tls.TlsData):
         """Automatically catch TLS pinning rejections and register for dynamic passthrough."""
-        server_name = getattr(data, "sni", None)
-        if not server_name and hasattr(data, "context") and hasattr(data.context, "server_conn"):
-            server_name = data.context.server_conn.sni
+        # Retrieve SNI directly from the connection object
+        server_name = getattr(data.conn, "sni", None)
 
         if server_name:
-            print(f"[VIGILANT] Detected TLS Certificate Pinning on {server_name}. Registering for L4 bypass.")
+            print(
+                f"[VIGILANT] Detected TLS Certificate Pinning on {server_name}. Registering for L4 bypass."
+            )
             self.pinned_hosts.add(server_name)
 
 
