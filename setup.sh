@@ -14,8 +14,8 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # ─── Configuration ──────────────────────────────────────────────────────────
-VIGILANT_USER="vigilant_admin"
-VIGILANT_HOME="/home/$VIGILANT_USER/vigilant"
+VIGILANT_USER="vigilant-admin"
+VIGILANT_HOME="/home/$VIGILANT_USER/vigilant_gateway"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WAN_INTERFACE=""
 LAN_INTERFACE=""
@@ -442,28 +442,26 @@ WantedBy=multi-user.target
 EOF
 
     log_info "Creating vigilant-proxy.service..."
-    # FIX: Configured to ignore common search engines and core apple traffic structures to completely bypass HSTS constraints
-    # Added capabilities for non-root transparent proxying
-    cat << 'EOF' > /etc/systemd/system/vigilant-proxy.service
+    cat << EOF > /etc/systemd/system/vigilant-proxy.service
 [Unit]
 Description=VIGILANT Transparent Proxy (mitmproxy)
 After=network.target vigilant-firewall.service
 
 [Service]
 Type=simple
-User=vigilant_admin
-WorkingDirectory=/home/vigilant_admin/vigilant
+User=$VIGILANT_USER
+WorkingDirectory=$VIGILANT_HOME
 Environment=PYTHONUNBUFFERED=1
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-ExecStart=/home/vigilant_admin/vigilant/venv/bin/mitmdump \
+ExecStart=$VIGILANT_HOME/venv/bin/mitmdump \
     --mode transparent \
     --showhost \
     --listen-host 0.0.0.0 \
     --listen-port 8080 \
     --set block_global=false \
     --set connection_strategy=lazy \
-    -s /home/vigilant_admin/vigilant/addons/vigilant_addon.py
+    -s $VIGILANT_HOME/src/vigilant_addon.py
 Restart=always
 RestartSec=5
 
@@ -479,7 +477,7 @@ After=network.target vigilant-proxy.service
 
 [Service]
 Type=simple
-User=vigilant_admin
+User=$VIGILANT_USER
 WorkingDirectory=$VIGILANT_HOME
 Environment=PYTHONUNBUFFERED=1
 ExecStart=$VIGILANT_HOME/venv/bin/python3 $VIGILANT_HOME/app.py
