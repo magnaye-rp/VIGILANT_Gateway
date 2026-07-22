@@ -10,6 +10,7 @@ import spacy
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
+from mitmproxy import ctx, http, tls
 
 # ─── Configuration ────────────────────────────────────────────────
 import os
@@ -974,14 +975,21 @@ class VIGILANTAddon:
 
     def tls_failed_client(self, data: tls.TlsData):
         """Automatically catch TLS pinning rejections and register for dynamic passthrough."""
-        # Retrieve SNI directly from the connection object
         server_name = getattr(data.conn, "sni", None)
 
-        if server_name:
+        if server_name and server_name not in self.pinned_hosts:
             print(
                 f"[VIGILANT] Detected TLS Certificate Pinning on {server_name}. Registering for L4 bypass."
             )
             self.pinned_hosts.add(server_name)
+
+            # Instruct mitmproxy to dynamically ignore future connections to this SNI
+            current_ignores = list(ctx.options.ignore_hosts)
+            pattern = f"^{re.escape(server_name)}:443$"
+            if pattern not in current_ignores:
+                current_ignores.append(pattern)
+                ctx.options.ignore_hosts = current_ignores
+                print(f"[VIGILANT] Added {server_name} to mitmproxy ignore_hosts rule.")
 
 
     def log_to_dashboard(self, client_ip: str, sni: str):
