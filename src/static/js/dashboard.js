@@ -144,10 +144,10 @@ window.loadLeasedDevices = async function() {
     const data = await response.json();
     const devices = data.devices || [];
 
-    // Filter to only include 192.168.10.0 network devices
+    // Filter to include valid managed LAN network devices
     const leasedDevices = devices.filter(device => {
       const ip = device.ip_address || '';
-      return ip.startsWith('192.168.10.');
+      return Boolean(ip && !ip.startsWith('127.'));
     });
 
     if (leasedDevices.length === 0) {

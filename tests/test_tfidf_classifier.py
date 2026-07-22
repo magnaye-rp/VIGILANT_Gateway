@@ -34,7 +34,10 @@ try:
         VigilantTFIDFClassifier,
         CATEGORY_KEYWORDS,
         SAMPLE_PREFIX_BYTES,
+        TfidfVectorizer,
     )
+    if TfidfVectorizer is None:
+        raise ImportError("sklearn TfidfVectorizer is not installed")
     import numpy as np
     IMPORT_OK = True
     IMPORT_ERROR = None

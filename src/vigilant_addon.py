@@ -5,12 +5,26 @@ import threading
 import subprocess
 import urllib.parse
 from collections import defaultdict, deque, Counter
-from mitmproxy import http, tls
-import spacy
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-import numpy as np
-from mitmproxy import ctx, http, tls
+try:
+    from mitmproxy import ctx, http, tls
+except ImportError:
+    ctx = http = tls = None
+
+try:
+    import spacy
+except ImportError:
+    spacy = None
+
+try:
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+except ImportError:
+    TfidfVectorizer = cosine_similarity = None
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 # ─── Configuration ────────────────────────────────────────────────
 import os
@@ -95,6 +109,12 @@ class VigilantTFIDFClassifier:
             category_keywords: Dict mapping category names to sets of keywords
         """
         self.category_keywords = category_keywords
+        self.category_names = []
+        self.centroid_matrix = None
+        self.category_centroids = {}
+        if TfidfVectorizer is None or np is None:
+            self.vectorizer = None
+            return
         self.vectorizer = TfidfVectorizer(
             lowercase=True,
             stop_words='english',
@@ -102,18 +122,11 @@ class VigilantTFIDFClassifier:
             min_df=1,
             max_df=0.95
         )
-        self.category_centroids = {}
         self._fit_category_centroids()
     
     def _fit_category_centroids(self):
-        """
-        Build TF-IDF vectors for each category's keywords and compute centroids.
-        Each category's centroid is the mean TF-IDF vector of all its keyword documents.
-
-        Centroids are pre-stacked into a single 2-D matrix
-        (shape: n_categories × vocab_size) so that classify() can perform a
-        single batch cosine_similarity call instead of one call per category.
-        """
+        if self.vectorizer is None or TfidfVectorizer is None:
+            return
         category_documents = {}
         for category, keywords in self.category_keywords.items():
             # Create sample documents from keywords for training
@@ -154,6 +167,8 @@ class VigilantTFIDFClassifier:
                 self.centroid_matrix = np.vstack(centroid_rows)  # (n_categories, vocab_size)
     
     def classify(self, text, threshold=0.1):
+        if self.vectorizer is None or TfidfVectorizer is None:
+            return "Unclassified", 0.0
         """
         Classify text by computing cosine similarity against category centroids.
 
@@ -257,7 +272,8 @@ def init_db():
             host        TEXT,
             rpm_current REAL,
             rpm_baseline REAL,
-            action      TEXT
+            action      TEXT,
+            reason      TEXT
         )
     """)
     c.execute("""
@@ -448,13 +464,13 @@ def log_request(client_ip, host, path, method, category, flagged, entities):
     except Exception as e:
         print(f"[VIGILANT] Unexpected error in log_request: {e}")
 
-def log_throttle(client_ip, host, rpm_now, rpm_base, action):
+def log_throttle(client_ip, host, rpm_now, rpm_base, action, reason=""):
     try:
         with db_lock:
             conn = _connect_db()
             conn.execute(
-                "INSERT INTO throttle_events VALUES (NULL,?,?,?,?,?,?)",
-                (time.time(), client_ip, host, rpm_now, rpm_base, action)
+                "INSERT INTO throttle_events (timestamp, client_ip, host, rpm_current, rpm_baseline, action, reason) VALUES (?,?,?,?,?,?,?)",
+                (time.time(), client_ip, host, rpm_now, rpm_base, action, reason)
             )
             conn.commit()
             conn.close()
@@ -718,7 +734,7 @@ def tail_dnsmasq_log():
                                     flagged, rpm_now, rpm_base = should_throttle(client_ip, domain)
                                     if flagged and client_ip not in throttled_clients:
                                         throttled_clients.add(client_ip)
-                                        log_throttle(client_ip, domain, rpm_now, rpm_base, "DNS_THROTTLE_APPLIED")
+                                        log_throttle(client_ip, domain, rpm_now, rpm_base, "DNS_THROTTLE_APPLIED", "DNS velocity threshold exceeded")
                                         apply_throttle(client_ip)
                                         print(f"[VIGILANT] DNS DOOMSCROLL DETECTED {client_ip} @ {domain} "
                                               f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
@@ -957,7 +973,7 @@ class VIGILANTAddon:
                 flagged, rpm_now, rpm_base = should_throttle(client_ip, server_name)
                 if flagged and client_ip not in throttled_clients:
                     throttled_clients.add(client_ip)
-                    log_throttle(client_ip, server_name, rpm_now, rpm_base, "TLS_THROTTLE_APPLIED")
+                    log_throttle(client_ip, server_name, rpm_now, rpm_base, "TLS_THROTTLE_APPLIED", "SNI/TLS velocity threshold exceeded")
                     apply_throttle(client_ip)
                     print(f"[VIGILANT] TLS DOOMSCROLL DETECTED {client_ip} @ {server_name} "
                           f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
@@ -1114,7 +1130,7 @@ class VIGILANTAddon:
         flagged, rpm_now, rpm_base = should_throttle(client_ip, host)
         if flagged and client_ip not in throttled_clients:
             throttled_clients.add(client_ip)
-            log_throttle(client_ip, host, rpm_now, rpm_base, "HTTP_THROTTLE_APPLIED")
+            log_throttle(client_ip, host, rpm_now, rpm_base, "HTTP_THROTTLE_APPLIED", "HTTP request velocity threshold exceeded")
             apply_throttle(client_ip)
             print(f"[VIGILANT] HTTP DOOMSCROLL DETECTED {client_ip} @ {host} "
                   f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")

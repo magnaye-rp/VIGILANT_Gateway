@@ -9,6 +9,7 @@ import importlib.util
 import csv
 import io
 import socket
+import ipaddress
 from contextlib import contextmanager
 from pathlib import Path
 import platform
@@ -100,6 +101,7 @@ DEFAULT_CONFIG = {
     "physical_scroll_threshold": "75",
     "throttle_enabled": "true",
     "throttle_rate": "256",
+    "throttle_duration": "300",
     "ui_theme": "light",
     "tfidf_classification_threshold": "0.05",
     "tfidf_url_threshold": "0.3",
@@ -115,9 +117,11 @@ ALLOWED_CONFIG_KEYS = set(CONFIG_DEFAULTS) | {
     "physical_scroll_custom", "sni_filtering_enabled", "request_threshold"
 }
 BOOLEAN_CONFIG_KEYS = {"block_harmful", "block_distracting", "nlp_enabled", "throttle_enabled", "enable_https", "sni_filtering_enabled"}
-INTEGER_CONFIG_KEYS = {"network_velocity_threshold", "physical_scroll_threshold", "throttle_rate", "log_retention", "network_velocity_custom", "physical_scroll_custom", "request_threshold"}
+INTEGER_CONFIG_KEYS = {"network_velocity_threshold", "physical_scroll_threshold", "throttle_rate", "throttle_duration", "log_retention", "network_velocity_custom", "physical_scroll_custom", "request_threshold"}
 STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "upstream_dns", "nlp_accuracy", "ui_theme", "network_velocity_preset", "physical_scroll_preset", "tfidf_classification_threshold", "tfidf_url_threshold", "tfidf_body_threshold"}
 TRAFFIC_CATEGORIES = ("Educational", "Productive", "Distracting", "Harmful")
+L4_TRAFFIC_CATEGORIES = ("DNS_TRACKED", "SNI_PASSTHROUGH")
+DEFAULT_THROTTLE_DURATION = 300
 DEFAULT_SYSTEM_METRICS = {
     "cpu_percent": 0.0,
     "memory_percent": 0.0,
@@ -177,9 +181,19 @@ def init_db() -> None:
                 "ip_address TEXT PRIMARY KEY, mac_address TEXT, hostname TEXT, custom_name TEXT, "
                 "policy TEXT DEFAULT 'none', first_seen REAL, last_seen REAL, updated_at REAL)"
             )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS throttle_events ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp REAL, client_ip TEXT, host TEXT, "
+                "rpm_current REAL, rpm_baseline REAL, action TEXT, reason TEXT)"
+            )
+            if not _column_exists(connection, "throttle_events", "reason"):
+                connection.execute("ALTER TABLE throttle_events ADD COLUMN reason TEXT")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_timestamp ON traffic_log(timestamp DESC)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_category ON traffic_log(category)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_flagged ON traffic_log(flagged)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_client_ip ON traffic_log(client_ip)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_throttle_timestamp ON throttle_events(timestamp DESC)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_throttle_client_ip ON throttle_events(client_ip)")
             connection.commit()
     except sqlite3.Error as exc:
         app.logger.debug("Database initialization encountered locking: %s", exc)
@@ -191,6 +205,13 @@ def _table_exists(connection: sqlite3.Connection, table_name: str) -> bool:
         (table_name,),
     ).fetchone()
     return row is not None
+
+
+def _column_exists(connection: sqlite3.Connection, table_name: str, column_name: str) -> bool:
+    if not _table_exists(connection, table_name):
+        return False
+    columns = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return any(str(column[1]) == column_name for column in columns)
 
 
 def query_db(query: str, args=(), one: bool = False):
@@ -245,51 +266,138 @@ def _coerce_config_value(key: str, value):
     raise ValueError(f"Unsupported configuration key: {key}")
 
 
+def _extract_ipv4_prefix(value) -> str | None:
+    raw_value = str(value or "").strip()
+    if not raw_value:
+        return None
+    try:
+        address = ipaddress.ip_address(raw_value.split("/", 1)[0])
+    except ValueError:
+        return None
+    if address.version != 4:
+        return None
+    octets = str(address).split(".")
+    return ".".join(octets[:3]) + ".%"
+
+
+def _managed_ip_prefix(config: dict | None = None) -> str:
+    config = config or load_config()
+    for key in ("dhcp_start", "gateway_ip", "dhcp_end"):
+        prefix = _extract_ipv4_prefix(config.get(key))
+        if prefix:
+            return prefix
+
+    fallback_network = _get_network_config()
+    for key in ("dhcp_start", "gateway_ip", "dhcp_end"):
+        prefix = _extract_ipv4_prefix(fallback_network.get(key))
+        if prefix:
+            return prefix
+
+    return "192.168.100.%"
+
+
+def _matches_managed_prefix(ip_address: str, managed_prefix: str | None = None) -> bool:
+    prefix = (managed_prefix or _managed_ip_prefix()).rstrip("%")
+    return bool(ip_address) and str(ip_address).startswith(prefix)
+
+
+def _current_throttle_duration(config: dict | None = None) -> int:
+    config = config or load_config()
+    try:
+        return max(60, int(config.get("throttle_duration", DEFAULT_THROTTLE_DURATION)))
+    except (TypeError, ValueError):
+        return DEFAULT_THROTTLE_DURATION
+
+
+def _l7_traffic_filter_sql(alias: str = "") -> str:
+    prefix = f"{alias}." if alias else ""
+    quoted = ", ".join(f"'{category}'" for category in L4_TRAFFIC_CATEGORIES)
+    return (
+        f"({prefix}category IS NULL OR UPPER(TRIM({prefix}category)) NOT IN ({quoted}))"
+    )
+
+
+def _l4_tracking_filter_sql(alias: str = "") -> str:
+    prefix = f"{alias}." if alias else ""
+    quoted = ", ".join(f"'{category}'" for category in L4_TRAFFIC_CATEGORIES)
+    return f"UPPER(TRIM({prefix}category)) IN ({quoted})"
+
+
+def _normalize_service_state(value: str | None) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"active", "running", "online", "enabled"}:
+        return "active"
+    if normalized in {"inactive", "failed", "dead", "offline", "stopped", "unknown"}:
+        return "offline"
+    return "offline"
+
+
+def _systemctl_service_state(unit_name: str) -> str | None:
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", unit_name],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=1.5,
+        )
+        if result.returncode == 0:
+            stdout = (result.stdout or "").strip().lower()
+            if _normalize_service_state(stdout) == "active":
+                return "active"
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        return None
+    return None
+
+
+def _process_service_state(*markers: str, exclude_current_pid: bool = False) -> str:
+    if psutil is None:
+        return "offline"
+
+    current_pid = os.getpid()
+    lowered_markers = tuple(marker.lower() for marker in markers if marker)
+
+    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            info = proc.info
+            if exclude_current_pid and info.get("pid") == current_pid:
+                continue
+
+            searchable = " ".join(
+                [
+                    str(info.get("name") or "").lower(),
+                    " ".join(str(item).lower() for item in (info.get("cmdline") or [])),
+                ]
+            )
+            if any(marker in searchable for marker in lowered_markers):
+                return "active"
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+
+    return "offline"
+
+
 def _service_statuses() -> dict:
-    """Optimized with a TTL cache to avoid hammering the OS with process iterations."""
+    """Return cached service states with systemd-first checks and process fallbacks."""
     global _service_status_cache, _service_cache_time
     now = time.time()
     
     if _service_status_cache and (now - _service_cache_time < CACHE_TTL):
         return _service_status_cache
 
-    if psutil is None:
-        return {
-            "vigilant_proxy": "offline",
-            "vigilant_dashboard": "offline",
-            "vigilant_firewall": "active",
-        }
-
-    current_pid = os.getpid()
-    proxy_active = False
-    dashboard_active = False
-
-    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
-        try:
-            info = proc.info
-            pid = info.get("pid")
-            name = (info.get("name") or "").lower()
-            cmdline = " ".join(str(item).lower() for item in (info.get("cmdline") or []))
-
-            if not proxy_active and ("mitmdump" in name or "mitmdump" in cmdline):
-                proxy_active = True
-
-            if (
-                not dashboard_active
-                and pid != current_pid
-                and ("app.py" in name or "app.py" in cmdline)
-            ):
-                dashboard_active = True
-
-            if proxy_active and dashboard_active:
-                break
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            continue
+    proxy_state = _systemctl_service_state("vigilant-proxy") or _process_service_state("mitmdump", "mitmproxy", "vigilant_addon")
+    dashboard_state = _systemctl_service_state("vigilant-dashboard") or _process_service_state("app.py", "vigilant-dashboard") or "active"
+    firewall_state = _systemctl_service_state("vigilant-firewall") or _process_service_state("iptables", "nftables", "ufw") or "active"
+    dns_state = _systemctl_service_state("dnsmasq") or _process_service_state("dnsmasq")
 
     _service_status_cache = {
-        "vigilant_proxy": "active" if proxy_active else "offline",
-        "vigilant_dashboard": "active" if dashboard_active else "offline",
-        "vigilant_firewall": "active",
+        "vigilant_proxy": proxy_state,
+        "mitmproxy": proxy_state,
+        "vigilant_dashboard": dashboard_state,
+        "dashboard": dashboard_state,
+        "vigilant_firewall": firewall_state,
+        "firewall": firewall_state,
+        "dnsmasq": dns_state,
     }
     _service_cache_time = now
     return _service_status_cache
@@ -400,7 +508,7 @@ def _parse_netplan_config() -> dict:
                         settings["upstream_interface"] = iface_name
                     elif "addresses" in iface_config:
                         settings["distribution_interface"] = iface_name
-                        settings["lan_address"] = iface_config["addresses"][0] if iface_config["addresses"] else "192.168.10.1/24"
+                        settings["lan_address"] = iface_config["addresses"][0] if iface_config["addresses"] else f"{SERVER_IP}/24"
     except Exception as exc:
         app.logger.warning("Failed to parse netplan-config.yaml: %s", exc)
     
@@ -413,9 +521,9 @@ def _get_network_config() -> dict:
     return {
         "upstream_interface": netplan_settings.get("upstream_interface", "eth0"),
         "distribution_interface": dnsmasq_settings.get("interface", netplan_settings.get("distribution_interface", "eth1")),
-        "gateway_ip": dnsmasq_settings.get("listen_address", "192.168.10.1"),
-        "dhcp_start": dnsmasq_settings.get("dhcp_start", "192.168.10.10"),
-        "dhcp_end": dnsmasq_settings.get("dhcp_end", "192.168.10.50"),
+        "gateway_ip": dnsmasq_settings.get("listen_address", SERVER_IP),
+        "dhcp_start": dnsmasq_settings.get("dhcp_start", "192.168.100.10"),
+        "dhcp_end": dnsmasq_settings.get("dhcp_end", "192.168.100.50"),
         "upstream_dns": "\n".join(dnsmasq_settings.get("dns_servers", ["8.8.8.8", "8.8.4.4"]))
     }
 
@@ -614,24 +722,33 @@ def init_category_hints_db() -> None:
 
 def load_config() -> dict:
     config = dict(CONFIG_DEFAULTS)
-    if not DB_PATH.exists():
-        return config
-    try:
-        with _open_db() as connection:
-            if not _table_exists(connection, "config_settings"):
-                return config
-            rows = connection.execute("SELECT key, value FROM config_settings").fetchall()
+    if DB_PATH.exists():
+        try:
+            with _open_db() as connection:
+                if _table_exists(connection, "config_settings"):
+                    rows = connection.execute("SELECT key, value FROM config_settings").fetchall()
+                    for row in rows:
+                        key = str(row[0])
+                        if key not in ALLOWED_CONFIG_KEYS:
+                            continue
+                        try:
+                            config[key] = _coerce_config_value(key, row[1])
+                        except (TypeError, ValueError):
+                            config[key] = CONFIG_DEFAULTS.get(key, row[1])
+        except sqlite3.Error as exc:
+            app.logger.warning("load_config failed: %s", exc)
 
-        for row in rows:
-            key = str(row[0])
-            if key not in ALLOWED_CONFIG_KEYS:
-                continue
+    for k in list(config.keys()):
+        if k in BOOLEAN_CONFIG_KEYS:
             try:
-                config[key] = _coerce_config_value(key, row[1])
-            except (TypeError, ValueError):
-                config[key] = CONFIG_DEFAULTS.get(key, row[1])
-    except sqlite3.Error as exc:
-        app.logger.warning("load_config failed: %s", exc)
+                config[k] = _coerce_bool(config[k])
+            except ValueError:
+                config[k] = True
+        elif k in INTEGER_CONFIG_KEYS:
+            try:
+                config[k] = _coerce_int(config[k])
+            except ValueError:
+                pass
     return config
 
 
@@ -678,6 +795,166 @@ def _format_recent_log_entry(log: dict) -> dict:
     }
 
 
+def _format_timestamp_fields(timestamp_value) -> tuple[str, str]:
+    if isinstance(timestamp_value, (int, float)):
+        return (
+            time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(timestamp_value)),
+            time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(timestamp_value)),
+        )
+    fallback = str(timestamp_value or "N/A")
+    return fallback, fallback
+
+
+def _decorate_traffic_log_row(row: sqlite3.Row | dict) -> dict:
+    log_dict = dict(row) if hasattr(row, "keys") else dict(row)
+    formatted_time, iso_timestamp = _format_timestamp_fields(log_dict.get("timestamp"))
+    log_dict["flagged"] = bool(log_dict.get("flagged", 0))
+    log_dict["formatted_time"] = formatted_time
+    log_dict["iso_timestamp"] = iso_timestamp
+    return log_dict
+
+
+def _decorate_throttle_event_row(row: sqlite3.Row | dict) -> dict:
+    event = dict(row) if hasattr(row, "keys") else dict(row)
+    formatted_time, iso_timestamp = _format_timestamp_fields(event.get("timestamp"))
+    action = str(event.get("action") or "THROTTLE_EVENT")
+    reason = str(event.get("reason") or "").strip()
+    event.update(
+        {
+            "source": "throttle_events",
+            "event_type": "throttle",
+            "category": action,
+            "flagged": True,
+            "formatted_time": formatted_time,
+            "iso_timestamp": iso_timestamp,
+            "reason": reason or action.replace("_", " ").title(),
+        }
+    )
+    return event
+
+
+def _collect_policy_blacklist_devices(connection: sqlite3.Connection, managed_prefix: str) -> dict:
+    devices = {}
+    if not _table_exists(connection, "network_devices"):
+        return devices
+
+    rows = connection.execute(
+        """
+        SELECT ip_address, mac_address, hostname, custom_name, policy, last_seen
+        FROM network_devices
+        WHERE policy = 'blacklist' AND ip_address LIKE ?
+        """,
+        (managed_prefix,),
+    ).fetchall()
+
+    for row in rows:
+        devices[row[0]] = {
+            "client_ip": row[0],
+            "ip_address": row[0],
+            "mac_address": row[1],
+            "hostname": row[2] or row[3] or "Unknown",
+            "custom_name": row[3],
+            "current_rpm": 0,
+            "baseline_rpm": 0,
+            "is_throttled": True,
+            "last_active_domain": "Manual policy",
+            "timestamp": row[5] or time.time(),
+            "throttle_action": "POLICY_BLACKLIST",
+            "reason": "Manual blacklist policy",
+            "policy": row[4] or "blacklist",
+            "source": "network_devices",
+        }
+    return devices
+
+
+def _collect_dynamic_throttle_devices(
+    connection: sqlite3.Connection,
+    active_since: float,
+    managed_prefix: str,
+) -> dict:
+    devices = {}
+    if not _table_exists(connection, "throttle_events"):
+        return devices
+
+    select_reason = "reason" if _column_exists(connection, "throttle_events", "reason") else "NULL AS reason"
+    rows = connection.execute(
+        f"""
+        SELECT client_ip, host, rpm_current, rpm_baseline, action, timestamp, {select_reason}
+        FROM throttle_events
+        WHERE timestamp > ? AND client_ip LIKE ?
+        ORDER BY timestamp DESC
+        """,
+        (active_since, managed_prefix),
+    ).fetchall()
+
+    for row in rows:
+        client_ip = row[0]
+        if not client_ip or client_ip in devices:
+            continue
+        devices[client_ip] = {
+            "client_ip": client_ip,
+            "ip_address": client_ip,
+            "current_rpm": row[2] or 0,
+            "baseline_rpm": row[3] or 0,
+            "is_throttled": True,
+            "last_active_domain": row[1] or "Unknown",
+            "timestamp": row[5],
+            "throttle_action": row[4] or "THROTTLE_APPLIED",
+            "reason": row[6] or row[4] or "Dynamic throttle triggered",
+            "source": "throttle_events",
+        }
+    return devices
+
+
+def _apply_device_metadata(connection: sqlite3.Connection, devices: dict) -> None:
+    if not devices or not _table_exists(connection, "network_devices"):
+        return
+
+    placeholders = ",".join("?" for _ in devices)
+    rows = connection.execute(
+        f"""
+        SELECT ip_address, mac_address, hostname, custom_name, policy, last_seen
+        FROM network_devices
+        WHERE ip_address IN ({placeholders})
+        """,
+        tuple(devices.keys()),
+    ).fetchall()
+
+    for row in rows:
+        entry = devices.get(row[0])
+        if not entry:
+            continue
+        entry["mac_address"] = row[1] or entry.get("mac_address")
+        entry["hostname"] = row[2] or row[3] or entry.get("hostname", "Unknown")
+        entry["custom_name"] = row[3] or entry.get("custom_name")
+        entry["policy"] = row[4] or entry.get("policy", "none")
+        entry["last_seen"] = row[5] or entry.get("last_seen")
+
+
+def _get_current_throttled_devices(connection: sqlite3.Connection, config: dict | None = None) -> list[dict]:
+    config = config or load_config()
+    managed_prefix = _managed_ip_prefix(config)
+    active_since = time.time() - _current_throttle_duration(config)
+
+    devices = _collect_dynamic_throttle_devices(connection, active_since, managed_prefix)
+    devices.update({k: v for k, v in _collect_policy_blacklist_devices(connection, managed_prefix).items() if k not in devices})
+    _apply_device_metadata(connection, devices)
+
+    throttled_devices = sorted(
+        devices.values(),
+        key=lambda item: float(item.get("timestamp") or 0),
+        reverse=True,
+    )
+
+    for device in throttled_devices:
+        ts = device.get("timestamp")
+        formatted_time, iso_timestamp = _format_timestamp_fields(ts)
+        device["formatted_time"] = formatted_time
+        device["timestamp"] = iso_timestamp
+
+    return throttled_devices
+
+
 # ==========================================
 #       OPTIMIZED BULK STATS ENDPOINT
 # ==========================================
@@ -701,11 +978,14 @@ def get_stats():
         formatted_counts = [{"category": c, "count": 0} for c in TRAFFIC_CATEGORIES]
         category_percentages = {c: 0.0 for c in TRAFFIC_CATEGORIES}
         formatted_recent = []
+        throttled_devices = []
+        managed_prefix = _managed_ip_prefix()
         
         if DB_PATH.exists():
             with _open_db() as connection:
+                throttled_devices = _get_current_throttled_devices(connection)
                 if _table_exists(connection, "traffic_log"):
-                    where_clauses = ["1=1"]
+                    where_clauses = [_l7_traffic_filter_sql()]
                     params = []
 
                     if category_filter and category_filter.upper() != 'ALL':
@@ -723,18 +1003,27 @@ def get_stats():
                     total_reqs = connection.execute(count_query, tuple(params)).fetchone()[0] or 0
 
                     # Blocked Request Count
-                    blocked_reqs = connection.execute("SELECT COUNT(*) FROM traffic_log WHERE flagged = 1").fetchone()[0] or 0
+                    blocked_reqs = connection.execute(
+                        f"SELECT COUNT(*) FROM traffic_log WHERE {_l7_traffic_filter_sql()} AND flagged = 1"
+                    ).fetchone()[0] or 0
                     
-                    # Active clients (last 24 hours)
+                    # Active clients (last 24 hours) for managed subnet only
                     window_start = int(time.time()) - 86400
-                    active_clients = connection.execute("SELECT COUNT(DISTINCT client_ip) FROM traffic_log WHERE timestamp > ?", (window_start,)).fetchone()[0] or 0
+                    active_clients = connection.execute(
+                        f"""
+                        SELECT COUNT(DISTINCT client_ip) FROM traffic_log
+                        WHERE {_l7_traffic_filter_sql()} AND timestamp > ? AND client_ip LIKE ?
+                        """,
+                        (window_start, managed_prefix),
+                    ).fetchone()[0] or 0
                     
                     # Category breakdown
                     category_rows = connection.execute(
-                        """
+                        f"""
                         SELECT LOWER(TRIM(category)) AS normalized_category, COUNT(*) AS category_count
                         FROM traffic_log
-                        WHERE category IS NOT NULL AND LOWER(TRIM(category)) IN ('educational', 'productive', 'distracting', 'harmful')
+                        WHERE {_l7_traffic_filter_sql()} AND category IS NOT NULL
+                          AND LOWER(TRIM(category)) IN ('educational', 'productive', 'distracting', 'harmful')
                         GROUP BY LOWER(TRIM(category))
                         """
                     ).fetchall()
@@ -747,7 +1036,10 @@ def get_stats():
                         category_percentages = {cat: round((raw_categories.get(cat.lower(), 0) / denom) * 100, 1) for cat in TRAFFIC_CATEGORIES}
 
                     # Paginated Traffic Logs
-                    log_query = f"SELECT timestamp, client_ip, host, category, flagged FROM traffic_log WHERE {where_sql} ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+                    log_query = (
+                        "SELECT timestamp, client_ip, host, category, flagged "
+                        f"FROM traffic_log WHERE {where_sql} ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+                    )
                     log_params = params + [per_page, offset]
                     
                     rows = connection.execute(log_query, tuple(log_params)).fetchall()
@@ -767,6 +1059,7 @@ def get_stats():
             "counts": formatted_counts,
             "percentage_metrics": category_percentages,
             "recent": formatted_recent,
+            "throttles": throttled_devices,
             "uptime": _format_uptime(),
             "statuses": _service_statuses(),
             "pagination": {"page": page, "per_page": per_page, "total_pages": total_pages, "total_items": total_reqs},
@@ -820,8 +1113,10 @@ def dashboard_summary():
             
     services_state = _service_statuses()
     services = {
-        "mitmproxy": services_state.get("vigilant_proxy", "offline"),
-        "dnsmasq": "active"
+        "mitmproxy": services_state.get("mitmproxy", "offline"),
+        "dnsmasq": services_state.get("dnsmasq", "offline"),
+        "firewall": services_state.get("firewall", "offline"),
+        "dashboard": services_state.get("dashboard", "offline"),
     }
 
     total_connected = 0
@@ -829,35 +1124,71 @@ def dashboard_summary():
     recent_alerts = 0
     recent_entries = []
     dhcp_allocations = []
+    config = load_config()
+    managed_prefix = _managed_ip_prefix(config)
     
     if DB_PATH.exists():
         try:
             with _open_db() as conn:
                 window_start = int(time.time()) - 86400
+                active_since = time.time() - _current_throttle_duration(config)
+                throttled_devices = _get_current_throttled_devices(conn, config)
+                throttled_count = len(throttled_devices)
+
                 if _table_exists(conn, "traffic_log"):
-                    row = conn.execute("SELECT COUNT(DISTINCT client_ip) FROM traffic_log WHERE timestamp > ? AND client_ip LIKE '192.168.10.%'", (window_start,)).fetchone()
+                    row = conn.execute(
+                        f"""
+                        SELECT COUNT(DISTINCT client_ip) FROM traffic_log
+                        WHERE {_l7_traffic_filter_sql()} AND timestamp > ? AND client_ip LIKE ?
+                        """,
+                        (window_start, managed_prefix),
+                    ).fetchone()
                     total_connected = int(row[0] or 0) if row else 0
                     
-                    row = conn.execute("SELECT COUNT(*) FROM traffic_log WHERE flagged = 1 AND timestamp > ?", (window_start,)).fetchone()
-                    recent_alerts = int(row[0] or 0) if row else 0
+                    l7_alerts = conn.execute(
+                        f"SELECT COUNT(*) FROM traffic_log WHERE {_l7_traffic_filter_sql()} AND flagged = 1 AND timestamp > ?",
+                        (window_start,),
+                    ).fetchone()
+                    recent_alerts = int(l7_alerts[0] or 0) if l7_alerts else 0
+
+                    if _table_exists(conn, "throttle_events"):
+                        throttle_alerts = conn.execute(
+                            "SELECT COUNT(*) FROM throttle_events WHERE timestamp > ?",
+                            (active_since,),
+                        ).fetchone()
+                        recent_alerts += int(throttle_alerts[0] or 0) if throttle_alerts else 0
                     
-                    rows = conn.execute("SELECT timestamp, client_ip, host, category, flagged FROM traffic_log ORDER BY timestamp DESC LIMIT 10").fetchall()
+                    rows = conn.execute(
+                        f"""
+                        SELECT timestamp, client_ip, host, category, flagged
+                        FROM traffic_log
+                        WHERE {_l7_traffic_filter_sql()}
+                        ORDER BY timestamp DESC LIMIT 10
+                        """
+                    ).fetchall()
                     recent_entries = [_format_recent_log_entry(dict(r)) for r in rows]
                 
                 if _table_exists(conn, "network_devices"):
-                    row = conn.execute("SELECT COUNT(*) FROM network_devices WHERE policy = 'blacklist' AND ip_address LIKE '192.168.10.%'").fetchone()
-                    throttled_count = int(row[0] or 0) if row else 0
-                    
-                    device_rows = conn.execute("SELECT ip_address, mac_address, hostname, custom_name, last_seen FROM network_devices WHERE ip_address LIKE '192.168.10.%' ORDER BY last_seen DESC").fetchall()
+                    device_rows = conn.execute(
+                        """
+                        SELECT ip_address, mac_address, hostname, custom_name, policy, last_seen
+                        FROM network_devices
+                        WHERE ip_address LIKE ?
+                        ORDER BY last_seen DESC
+                        """,
+                        (managed_prefix,),
+                    ).fetchall()
                     for row in device_rows:
                         dhcp_allocations.append({
                             "ip_address": row[0], "mac_address": row[1],
-                            "hostname": row[2] or "Unknown", "custom_name": row[3], "last_seen": row[4]
+                            "hostname": row[2] or row[3] or "Unknown",
+                            "custom_name": row[3],
+                            "policy": row[4] or "none",
+                            "last_seen": row[5],
                         })
         except sqlite3.Error as e:
             app.logger.warning(f"DB Error in summary: {e}")
 
-    config = load_config()
     nlp_enabled = _coerce_bool(config.get("nlp_enabled", "true"))
     theme_mode = config.get("ui_theme", "dark")
     
@@ -877,9 +1208,18 @@ def dashboard_summary():
 
     return jsonify({
         "system": {"cpu_usage": cpu_usage, "ram_usage_gb": ram_usage_gb, "ram_total_gb": ram_total_gb, "disk_usage": disk_usage, "services": services, "throughput_rx_mbps": max(0.0, rx_mbps), "throughput_tx_mbps": max(0.0, tx_mbps)},
-        "devices": {"total_connected": total_connected, "throttled_count": throttled_count},
+        "devices": {"total_connected": total_connected, "throttled_count": throttled_count, "throttled_devices": throttled_devices},
         "logs": {"recent_alerts": recent_alerts, "recent_entries": recent_entries},
-        "active_config": {"nlp_enabled": nlp_enabled, "network_velocity_preset": net_preset, "physical_scroll_preset": scroll_preset, "theme_mode": theme_mode},
+        "active_config": {
+            "nlp_enabled": nlp_enabled,
+            "network_velocity_preset": net_preset,
+            "physical_scroll_preset": scroll_preset,
+            "theme_mode": theme_mode,
+            "sni_filtering_enabled": _coerce_bool(config.get("sni_filtering_enabled", "true")),
+            "throttle_enabled": _coerce_bool(config.get("throttle_enabled", "true")),
+            "throttle_rate": config.get("throttle_rate", CONFIG_DEFAULTS["throttle_rate"]),
+            "throttle_duration": _current_throttle_duration(config),
+        },
         "network_config": network_config,
         "dhcp_allocations": dhcp_allocations
     })
@@ -922,12 +1262,14 @@ def clear_logs():
         with _open_db() as connection:
             if _table_exists(connection, "traffic_log"):
                 connection.execute("DELETE FROM traffic_log")
-                connection.commit()
-                try:
-                    connection.execute("VACUUM")
-                except sqlite3.Error:
-                    pass
-        return jsonify({"status": "success", "message": "Traffic logs cleared successfully"})
+            if _table_exists(connection, "throttle_events"):
+                connection.execute("DELETE FROM throttle_events")
+            connection.commit()
+            try:
+                connection.execute("VACUUM")
+            except sqlite3.Error:
+                pass
+        return jsonify({"status": "success", "message": "Traffic and throttling logs cleared successfully"})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
@@ -940,6 +1282,8 @@ def get_traffic_logs():
         limit = request.args.get('limit', 100, type=int)
         offset = request.args.get('offset', 0, type=int)
         client_ip = request.args.get('client_ip', '').strip()
+        category = request.args.get('category', '').strip()
+        search = request.args.get('search', '').strip()
         status = request.args.get('status', '').strip()  # 'flagged' or 'allowed'
         since_id = request.args.get('since_id', type=int)  # Get logs newer than this ID
         since_timestamp = request.args.get('since_timestamp', type=float)  # Get logs newer than this timestamp
@@ -948,13 +1292,21 @@ def get_traffic_logs():
         limit = max(1, min(limit, 1000))  # Cap at 1000 to prevent excessive loads
         offset = max(0, offset)
         
-        where_clauses = ["1=1"]
+        where_clauses = [_l7_traffic_filter_sql()]
         params = []
         
         # Add filters
         if client_ip:
             where_clauses.append("client_ip = ?")
             params.append(client_ip)
+
+        if category and category.upper() != "ALL":
+            where_clauses.append("category = ?")
+            params.append(category)
+
+        if search:
+            where_clauses.append("(host LIKE ? OR path LIKE ? OR client_ip LIKE ?)")
+            params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
         
         if status.lower() == 'flagged':
             where_clauses.append("flagged = 1")
@@ -992,29 +1344,7 @@ def get_traffic_logs():
                     log_params = params + [limit, offset]
                     
                     rows = connection.execute(log_query, tuple(log_params)).fetchall()
-                    
-                    for row in rows:
-                        log_dict = {
-                            "id": row[0],
-                            "timestamp": row[1],
-                            "client_ip": row[2],
-                            "host": row[3],
-                            "path": row[4],
-                            "method": row[5],
-                            "category": row[6],
-                            "flagged": bool(row[7]),
-                            "entities": row[8]
-                        }
-                        
-                        # Format timestamp for display
-                        if isinstance(log_dict["timestamp"], (int, float)):
-                            log_dict["formatted_time"] = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log_dict["timestamp"]))
-                            log_dict["iso_timestamp"] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(log_dict["timestamp"]))
-                        else:
-                            log_dict["formatted_time"] = str(log_dict["timestamp"] or "N/A")
-                            log_dict["iso_timestamp"] = log_dict["formatted_time"]
-                        
-                        logs.append(log_dict)
+                    logs = [_decorate_traffic_log_row(row) for row in rows]
         
         return jsonify({
             "status": "success",
@@ -1044,7 +1374,7 @@ def refresh_traffic_logs():
         
         limit = max(1, min(limit, 500))  # Cap at 500 for refresh endpoint
         
-        where_clauses = ["1=1"]
+        where_clauses = [_l7_traffic_filter_sql()]
         params = []
         
         if since_id:
@@ -1075,29 +1405,7 @@ def refresh_traffic_logs():
                     log_params = params + [limit]
                     
                     rows = connection.execute(log_query, tuple(log_params)).fetchall()
-                    
-                    for row in rows:
-                        log_dict = {
-                            "id": row[0],
-                            "timestamp": row[1],
-                            "client_ip": row[2],
-                            "host": row[3],
-                            "path": row[4],
-                            "method": row[5],
-                            "category": row[6],
-                            "flagged": bool(row[7]),
-                            "entities": row[8]
-                        }
-                        
-                        # Format timestamp for display
-                        if isinstance(log_dict["timestamp"], (int, float)):
-                            log_dict["formatted_time"] = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log_dict["timestamp"]))
-                            log_dict["iso_timestamp"] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(log_dict["timestamp"]))
-                        else:
-                            log_dict["formatted_time"] = str(log_dict["timestamp"] or "N/A")
-                            log_dict["iso_timestamp"] = log_dict["formatted_time"]
-                        
-                        logs.append(log_dict)
+                    logs = [_decorate_traffic_log_row(row) for row in rows]
         
         return jsonify({
             "status": "success",
@@ -1113,94 +1421,189 @@ def refresh_traffic_logs():
         return jsonify({"error": "Internal server error", "details": str(e)}), 500
 
 
+@app.route('/api/logs/throttling', methods=["GET"])
+def get_throttling_logs():
+    """Fetch L4 passthrough tracking and behavioral throttling events."""
+    try:
+        limit = max(1, min(request.args.get('limit', 100, type=int), 1000))
+        offset = max(0, request.args.get('offset', 0, type=int))
+        client_ip = request.args.get('client_ip', '').strip()
+        search = request.args.get('search', '').strip()
+        since_timestamp = request.args.get('since_timestamp', type=float)
+
+        throttle_logs = []
+        tracking_logs = []
+
+        if DB_PATH.exists():
+            with _open_db() as connection:
+                if _table_exists(connection, "throttle_events"):
+                    select_reason = "reason" if _column_exists(connection, "throttle_events", "reason") else "NULL AS reason"
+                    where_clauses = ["1=1"]
+                    params = []
+                    if client_ip:
+                        where_clauses.append("client_ip = ?")
+                        params.append(client_ip)
+                    if search:
+                        where_clauses.append("(host LIKE ? OR action LIKE ? OR reason LIKE ? OR client_ip LIKE ?)")
+                        params.extend([f"%{search}%", f"%{search}%", f"%{search}%", f"%{search}%"])
+                    if since_timestamp:
+                        where_clauses.append("timestamp > ?")
+                        params.append(since_timestamp)
+
+                    rows = connection.execute(
+                        f"""
+                        SELECT id, timestamp, client_ip, host, rpm_current, rpm_baseline, action, {select_reason}
+                        FROM throttle_events
+                        WHERE {" AND ".join(where_clauses)}
+                        ORDER BY timestamp DESC
+                        """,
+                        tuple(params),
+                    ).fetchall()
+                    throttle_logs = [_decorate_throttle_event_row(row) for row in rows]
+
+                if _table_exists(connection, "traffic_log"):
+                    where_clauses = [_l4_tracking_filter_sql()]
+                    params = []
+                    if client_ip:
+                        where_clauses.append("client_ip = ?")
+                        params.append(client_ip)
+                    if search:
+                        where_clauses.append("(host LIKE ? OR path LIKE ? OR client_ip LIKE ?)")
+                        params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
+                    if since_timestamp:
+                        where_clauses.append("timestamp > ?")
+                        params.append(since_timestamp)
+
+                    rows = connection.execute(
+                        f"""
+                        SELECT id, timestamp, client_ip, host, path, method, category, flagged, entities
+                        FROM traffic_log
+                        WHERE {" AND ".join(where_clauses)}
+                        ORDER BY timestamp DESC
+                        """,
+                        tuple(params),
+                    ).fetchall()
+                    tracking_logs = []
+                    for row in rows:
+                        event = _decorate_traffic_log_row(row)
+                        event["source"] = "traffic_log"
+                        event["event_type"] = "l4_tracking"
+                        tracking_logs.append(event)
+
+        merged_logs = sorted(
+            throttle_logs + tracking_logs,
+            key=lambda item: float(item.get("timestamp") or 0),
+            reverse=True,
+        )
+        total_count = len(merged_logs)
+        page_logs = merged_logs[offset:offset + limit]
+
+        return jsonify({
+            "status": "success",
+            "logs": page_logs,
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "total_count": total_count,
+                "has_more": (offset + limit) < total_count,
+            },
+        })
+    except sqlite3.Error as exc:
+        app.logger.error("Database error in get_throttling_logs: %s", exc, exc_info=True)
+        return jsonify({"error": "Database error", "details": str(exc)}), 500
+    except Exception as exc:
+        app.logger.error("Error in get_throttling_logs: %s", exc, exc_info=True)
+        return jsonify({"error": "Internal server error", "details": str(exc)}), 500
+
+
 @app.route('/api/logs/export')
 def export_logs():
-    """Export traffic logs to CSV with proper data formatting and error handling."""
+    """Export L7 traffic logs or throttling/L4 tracking logs to CSV."""
     try:
-        # Query all relevant fields from traffic_log
-        logs = query_db("SELECT id, timestamp, client_ip, host, path, method, category, flagged, entities FROM traffic_log WHERE category NOT IN ('DNS_TRACKED', 'NON-HTML') ORDER BY timestamp DESC")
-        if not isinstance(logs, list):
-            logs = []
-            
+        export_type = str(request.args.get("type", "traffic")).strip().lower() or "traffic"
         text_stream = io.StringIO()
         cw = csv.writer(text_stream)
-        # Write CSV header
-        cw.writerow(['ID', 'Time', 'Client IP', 'Domain', 'Path', 'Method', 'Category', 'Status', 'Entities'])
-        
-        for log in logs:
-            # Convert sqlite3.Row to dict if needed
-            if hasattr(log, 'keys'):
-                log_dict = dict(log)
+        download_name = "traffic_logs_export.csv"
+
+        with _open_db() as connection:
+            if export_type == "throttling":
+                cw.writerow(['ID', 'Time', 'Source', 'Client IP', 'Domain', 'Action', 'Reason', 'Current RPM', 'Baseline RPM'])
+                throttle_rows = []
+                if _table_exists(connection, "throttle_events"):
+                    select_reason = "reason" if _column_exists(connection, "throttle_events", "reason") else "NULL AS reason"
+                    rows = connection.execute(
+                        f"""
+                        SELECT id, timestamp, client_ip, host, rpm_current, rpm_baseline, action, {select_reason}
+                        FROM throttle_events
+                        ORDER BY timestamp DESC
+                        """
+                    ).fetchall()
+                    throttle_rows.extend(_decorate_throttle_event_row(row) for row in rows)
+
+                if _table_exists(connection, "traffic_log"):
+                    rows = connection.execute(
+                        f"""
+                        SELECT id, timestamp, client_ip, host, path, method, category, flagged, entities
+                        FROM traffic_log
+                        WHERE {_l4_tracking_filter_sql()}
+                        ORDER BY timestamp DESC
+                        """
+                    ).fetchall()
+                    for row in rows:
+                        event = _decorate_traffic_log_row(row)
+                        event["source"] = "traffic_log"
+                        event["event_type"] = "l4_tracking"
+                        event["reason"] = str(event.get("category") or "").replace("_", " ").title()
+                        throttle_rows.append(event)
+
+                for event in sorted(throttle_rows, key=lambda item: float(item.get("timestamp") or 0), reverse=True):
+                    cw.writerow([
+                        event.get("id", ""),
+                        event.get("formatted_time", "N/A"),
+                        event.get("source", ""),
+                        event.get("client_ip", "0.0.0.0"),
+                        event.get("host", "unknown"),
+                        event.get("action") or event.get("category", ""),
+                        str(event.get("reason", "")).replace('\n', ' ').replace('"', "'"),
+                        event.get("rpm_current", ""),
+                        event.get("rpm_baseline", ""),
+                    ])
+                download_name = "throttling_logs_export.csv"
             else:
-                log_dict = log
-            
-            # Safely extract and format each field
-            log_id = log_dict.get('id', '')
-            if log_id is None:
-                log_id = ''
-            
-            ts = log_dict.get('timestamp')
-            try:
-                if isinstance(ts, (int, float)) and ts > 0:
-                    formatted_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(ts))
-                else:
-                    formatted_time = 'N/A'
-            except Exception:
-                formatted_time = 'N/A'
-            
-            client_ip = log_dict.get('client_ip')
-            if client_ip is None:
-                client_ip = '0.0.0.0'
-            
-            host = log_dict.get('host')
-            if host is None:
-                host = 'unknown'
-            
-            path = log_dict.get('path')
-            if path is None:
-                path = ''
-            
-            method = log_dict.get('method')
-            if method is None:
-                method = ''
-            
-            category = log_dict.get('category')
-            if category is None:
-                category = 'Unclassified'
-            
-            flagged = log_dict.get('flagged', 0)
-            status = 'Blocked' if flagged else 'Allowed'
-            
-            # Handle entities field (may be JSON string or None)
-            entities = log_dict.get('entities')
-            if entities is None:
-                entities = ''
-            else:
-                entities_str = str(entities)
-                # Remove newlines and quotes to keep CSV clean
-                entities_str = entities_str.replace('\n', ' ').replace('"', "'")
-                entities = entities_str
-            
-            cw.writerow([
-                str(log_id),
-                formatted_time,
-                str(client_ip),
-                str(host),
-                str(path),
-                str(method),
-                str(category),
-                status,
-                entities
-            ])
-        
-        # Convert to bytes and send as file
+                cw.writerow(['ID', 'Time', 'Client IP', 'Domain', 'Path', 'Method', 'Category', 'Status', 'Entities'])
+                rows = []
+                if _table_exists(connection, "traffic_log"):
+                    rows = connection.execute(
+                        f"""
+                        SELECT id, timestamp, client_ip, host, path, method, category, flagged, entities
+                        FROM traffic_log
+                        WHERE {_l7_traffic_filter_sql()}
+                        ORDER BY timestamp DESC
+                        """
+                    ).fetchall()
+
+                for log in (_decorate_traffic_log_row(row) for row in rows):
+                    entities = str(log.get('entities') or '').replace('\n', ' ').replace('"', "'")
+                    status = 'Blocked' if log.get('flagged') else 'Allowed'
+                    cw.writerow([
+                        log.get('id', ''),
+                        log.get('formatted_time', 'N/A'),
+                        log.get('client_ip', '0.0.0.0'),
+                        log.get('host', 'unknown'),
+                        log.get('path', ''),
+                        log.get('method', ''),
+                        log.get('category', 'Unclassified'),
+                        status,
+                        entities,
+                    ])
+
         byte_stream = io.BytesIO(text_stream.getvalue().encode('utf-8'))
         text_stream.close()
         
         return send_file(
             byte_stream,
             as_attachment=True,
-            download_name='traffic_logs_export.csv',
+            download_name=download_name,
             mimetype='text/csv'
         )
     except sqlite3.Error as e:
@@ -1419,10 +1822,13 @@ def handle_behavioral_config():
         config = load_config()
         return jsonify({
             "network_velocity_preset": config.get("network_velocity_preset", "Medium"),
-            "network_velocity_custom": int(config.get("network_velocity_custom", 150)),
+            "network_velocity_custom": int(config.get("network_velocity_custom", config.get("network_velocity_threshold", 150))),
             "physical_scroll_preset": config.get("physical_scroll_preset", "Medium"),
-            "physical_scroll_custom": int(config.get("physical_scroll_custom", 75)),
-            "sni_filtering_enabled": _coerce_bool(config.get("sni_filtering_enabled", "true"))
+            "physical_scroll_custom": int(config.get("physical_scroll_custom", config.get("physical_scroll_threshold", 75))),
+            "sni_filtering_enabled": _coerce_bool(config.get("sni_filtering_enabled", "true")),
+            "throttle_enabled": _coerce_bool(config.get("throttle_enabled", "true")),
+            "throttle_rate": int(config.get("throttle_rate", CONFIG_DEFAULTS["throttle_rate"])),
+            "throttle_duration": _current_throttle_duration(config),
         })
     payload = request.get_json(silent=True) or {}
     
@@ -1466,6 +1872,7 @@ def get_active_devices():
     """Get currently active devices from traffic_log (last 1 minute)"""
     try:
         active_devices = []
+        managed_prefix = _managed_ip_prefix()
         
         if DB_PATH.exists():
             with _open_db() as conn:
@@ -1475,11 +1882,11 @@ def get_active_devices():
                         """
                         SELECT DISTINCT client_ip, MAX(timestamp) as last_seen
                         FROM traffic_log
-                        WHERE client_ip LIKE '192.168.10.%' AND timestamp > ?
+                        WHERE client_ip LIKE ? AND timestamp > ?
                         GROUP BY client_ip
                         ORDER BY last_seen DESC
                         """,
-                        (window_start,)
+                        (managed_prefix, window_start)
                     ).fetchall()
                     
                     for row in rows:
@@ -1515,8 +1922,6 @@ def get_active_devices():
 def get_throttled_devices():
     """Get list of currently throttled devices with their metrics."""
     try:
-        throttled_devices = []
-        
         if not DB_PATH.exists():
             return jsonify({
                 "status": "success",
@@ -1524,139 +1929,7 @@ def get_throttled_devices():
             })
         
         with _open_db() as connection:
-            # Check for throttle_events table
-            if not _table_exists(connection, "throttle_events"):
-                # Fallback to only checking network_devices for policy-based throttling
-                if _table_exists(connection, "network_devices"):
-                    policy_rows = connection.execute(
-                        """
-                        SELECT ip_address, mac_address, hostname, custom_name, policy
-                        FROM network_devices
-                        WHERE policy = 'blacklist'
-                        """
-                    ).fetchall()
-                    
-                    for row in policy_rows:
-                        ip_address = row[0]
-                        # Filter out gateway network devices (192.168.100.0)
-                        if ip_address.startswith('192.168.100.'):
-                            continue
-                        throttled_devices.append({
-                            "client_ip": ip_address,
-                            "mac_address": row[1],
-                            "hostname": row[2] or "Unknown",
-                            "custom_name": row[3],
-                            "current_rpm": 0,
-                            "baseline_rpm": 0,
-                            "is_throttled": True,
-                            "last_active_domain": "N/A",
-                            "timestamp": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-                            "throttle_action": "POLICY_BLACKLIST",
-                            "policy": "blacklist"
-                        })
-                
-                return jsonify({
-                    "status": "success",
-                    "throttled_devices": throttled_devices
-                })
-            
-            # Get recent throttle events (last 5 minutes)
-            window_start = time.time() - 300
-            rows = connection.execute(
-                """
-                SELECT client_ip, host, rpm_current, rpm_baseline, action, timestamp
-                FROM throttle_events
-                WHERE timestamp > ?
-                ORDER BY timestamp DESC
-                """,
-                (window_start,)
-            ).fetchall()
-            
-            # Also check traffic_log for flagged requests from same window
-            flagged_rows = connection.execute(
-                """
-                SELECT client_ip, host, COUNT(*) as flagged_count, MAX(timestamp) as last_flagged
-                FROM traffic_log
-                WHERE flagged = 1 AND timestamp > ?
-                GROUP BY client_ip, host
-                """,
-                (window_start,)
-            ).fetchall()
-            
-            # Build a map of client IPs with their latest throttle metrics
-            device_metrics = {}
-            for row in rows:
-                client_ip = row[0]
-                # Filter out gateway network devices (192.168.100.0)
-                if client_ip.startswith('192.168.100.'):
-                    continue
-                if client_ip not in device_metrics:
-                    device_metrics[client_ip] = {
-                        "client_ip": client_ip,
-                        "current_rpm": row[2],
-                        "baseline_rpm": row[3],
-                        "is_throttled": True,
-                        "last_active_domain": row[1],
-                        "timestamp": row[5],
-                        "throttle_action": row[4]
-                    }
-                else:
-                    # Keep the most recent entry
-                    if row[5] > device_metrics[client_ip]["timestamp"]:
-                        device_metrics[client_ip].update({
-                            "current_rpm": row[2],
-                            "baseline_rpm": row[3],
-                            "last_active_domain": row[1],
-                            "timestamp": row[5],
-                            "throttle_action": row[4]
-                        })
-            
-            # Add flagged count info from traffic_log
-            for row in flagged_rows:
-                client_ip = row[0]
-                if client_ip in device_metrics:
-                    device_metrics[client_ip]["flagged_count"] = row[2]
-                    device_metrics[client_ip]["last_flagged"] = row[3]
-            
-            # Also check network_devices table for policy-based throttling
-            if _table_exists(connection, "network_devices"):
-                policy_rows = connection.execute(
-                    """
-                    SELECT ip_address, mac_address, hostname, custom_name, policy
-                    FROM network_devices
-                    WHERE policy = 'blacklist'
-                    """
-                ).fetchall()
-                
-                for row in policy_rows:
-                    ip_address = row[0]
-                    # Filter out gateway network devices (192.168.100.0)
-                    if ip_address.startswith('192.168.100.'):
-                        continue
-                    if ip_address not in device_metrics:
-                        device_metrics[ip_address] = {
-                            "client_ip": ip_address,
-                            "mac_address": row[1],
-                            "hostname": row[2] or "Unknown",
-                            "custom_name": row[3],
-                            "current_rpm": 0,
-                            "baseline_rpm": 0,
-                            "is_throttled": True,
-                            "last_active_domain": "N/A",
-                            "timestamp": time.time(),
-                            "throttle_action": "POLICY_BLACKLIST",
-                            "policy": "blacklist"
-                        }
-            
-            throttled_devices = list(device_metrics.values())
-            
-            # Format timestamps
-            for device in throttled_devices:
-                ts = device.get("timestamp")
-                if isinstance(ts, (int, float)):
-                    device["timestamp"] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(ts))
-                else:
-                    device["timestamp"] = str(ts)
+            throttled_devices = _get_current_throttled_devices(connection)
         
         return jsonify({
             "status": "success",
@@ -1678,11 +1951,19 @@ def set_device_policy():
     policy = data.get("policy", "standard")
     custom_name = data.get("custom_name", "")
 
-    if not ip_address:
-        return jsonify({"error": "ip_address is required"}), 400
-
     try:
         with get_db_connection() as conn:
+            if not ip_address and mac_address:
+                existing_row = conn.execute(
+                    "SELECT ip_address FROM network_devices WHERE mac_address = ? ORDER BY last_seen DESC LIMIT 1",
+                    (mac_address,),
+                ).fetchone()
+                if existing_row:
+                    ip_address = existing_row[0]
+
+            if not ip_address:
+                return jsonify({"error": "ip_address is required"}), 400
+
             conn.execute('''
                 INSERT INTO network_devices (ip_address, mac_address, policy, custom_name, first_seen, last_seen, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -1780,9 +2061,11 @@ def system_control():
 def get_interface_throughput():
     """Get real-time throughput statistics for the gateway interface"""
     try:
-        throughput = _get_interface_throughput(GATEWAY_INTERFACE)
+        config = load_config()
+        interface_name = config.get("distribution_interface") or _get_network_config().get("distribution_interface") or GATEWAY_INTERFACE
+        throughput = _get_interface_throughput(interface_name)
         return jsonify({
-            "interface": GATEWAY_INTERFACE,
+            "interface": interface_name,
             "rx_mbps": throughput['rx_mbps'],
             "tx_mbps": throughput['tx_mbps'],
             "timestamp": time.time()
@@ -1802,56 +2085,25 @@ def get_interface_throughput():
 def get_nerve_center_metrics():
     """Get accurate metrics for VIGILANT Nerve Center display"""
     try:
-        # Get device counts from 192.168.10.0 network only
         active_count = 0
         throttled_count = 0
+        config = load_config()
+        managed_prefix = _managed_ip_prefix(config)
         
         if DB_PATH.exists():
             with _open_db() as conn:
-                # Count active devices (seen in last 1 minute) from 192.168.10.0 network
-                # Use traffic_log to count devices that have actually made requests recently
                 window_start = time.time() - 60
                 if _table_exists(conn, "traffic_log"):
                     row = conn.execute(
-                        """
+                        f"""
                         SELECT COUNT(DISTINCT client_ip) FROM traffic_log
-                        WHERE client_ip LIKE '192.168.10.%' AND timestamp > ?
+                        WHERE {_l7_traffic_filter_sql()} AND client_ip LIKE ? AND timestamp > ?
                         """,
-                        (window_start,)
+                        (managed_prefix, window_start)
                     ).fetchone()
                     active_count = int(row[0] or 0) if row else 0
-                
-                # Count throttled devices from 192.168.10.0 network
-                # Check both throttle_events and policy-based blacklisting
-                throttled_ips = set()
-                
-                # Check throttle_events
-                if _table_exists(conn, "throttle_events"):
-                    rows = conn.execute(
-                        """
-                        SELECT DISTINCT client_ip FROM throttle_events
-                        WHERE timestamp > ? AND client_ip LIKE '192.168.10.%'
-                        """,
-                        (window_start,)
-                    ).fetchall()
-                    for row in rows:
-                        throttled_ips.add(row[0])
-                
-                # Check policy-based blacklisting
-                if _table_exists(conn, "network_devices"):
-                    rows = conn.execute(
-                        """
-                        SELECT ip_address FROM network_devices
-                        WHERE policy = 'blacklist' AND ip_address LIKE '192.168.10.%'
-                        """
-                    ).fetchall()
-                    for row in rows:
-                        throttled_ips.add(row[0])
-                
-                throttled_count = len(throttled_ips)
+                throttled_count = len(_get_current_throttled_devices(conn, config))
         
-        # Get NLP status from config
-        config = load_config()
         nlp_enabled = _coerce_bool(config.get("nlp_enabled", "true"))
         nlp_status = "Active" if nlp_enabled else "Idle"
         
