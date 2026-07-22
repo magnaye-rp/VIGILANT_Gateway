@@ -43,7 +43,7 @@ class TestThrottlingAndLogSegregation(unittest.TestCase):
 
     def test_log_throttle_insertion(self):
         vigilant_addon.log_throttle(
-            client_ip="192.168.100.25",
+            client_ip="192.168.10.25",
             host="example.com",
             rpm_now=180.0,
             rpm_base=50.0,
@@ -56,7 +56,7 @@ class TestThrottlingAndLogSegregation(unittest.TestCase):
             rows = conn.execute("SELECT * FROM throttle_events").fetchall()
             self.assertEqual(len(rows), 1)
             row = dict(rows[0])
-            self.assertEqual(row["client_ip"], "192.168.100.25")
+            self.assertEqual(row["client_ip"], "192.168.10.25")
             self.assertEqual(row["host"], "example.com")
             self.assertEqual(row["action"], "TLS_THROTTLE_APPLIED")
             self.assertEqual(row["reason"], "SNI/TLS velocity threshold exceeded")
@@ -67,17 +67,17 @@ class TestThrottlingAndLogSegregation(unittest.TestCase):
             conn.execute(
                 "INSERT INTO traffic_log (timestamp, client_ip, host, path, method, category, flagged) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (time.time(), "192.168.100.10", "wiki.org", "/page", "GET", "Educational", 0)
+                (time.time(), "192.168.10.10", "wiki.org", "/page", "GET", "Educational", 0)
             )
             conn.execute(
                 "INSERT INTO traffic_log (timestamp, client_ip, host, path, method, category, flagged) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (time.time(), "192.168.100.10", "tracker.com", "(DNS_QUERY)", "DNS", "DNS_TRACKED", 0)
+                (time.time(), "192.168.10.10", "tracker.com", "(DNS_QUERY)", "DNS", "DNS_TRACKED", 0)
             )
             conn.execute(
                 "INSERT INTO traffic_log (timestamp, client_ip, host, path, method, category, flagged) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (time.time(), "192.168.100.10", "passthrough.com", "(SNI_PASSTHROUGH)", "TLS", "SNI_PASSTHROUGH", 0)
+                (time.time(), "192.168.10.10", "passthrough.com", "(SNI_PASSTHROUGH)", "TLS", "SNI_PASSTHROUGH", 0)
             )
             conn.commit()
 
@@ -97,7 +97,7 @@ class TestThrottlingAndLogSegregation(unittest.TestCase):
     def test_throttling_logs_endpoint(self):
         # Insert throttle event and L4 tracking event
         vigilant_addon.log_throttle(
-            client_ip="192.168.100.42",
+            client_ip="192.168.10.42",
             host="heavy-stream.com",
             rpm_now=200.0,
             rpm_base=30.0,
@@ -108,7 +108,7 @@ class TestThrottlingAndLogSegregation(unittest.TestCase):
             conn.execute(
                 "INSERT INTO traffic_log (timestamp, client_ip, host, path, method, category, flagged) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (time.time(), "192.168.100.42", "heavy-stream.com", "(DNS_QUERY)", "DNS", "DNS_TRACKED", 0)
+                (time.time(), "192.168.10.42", "heavy-stream.com", "(DNS_QUERY)", "DNS", "DNS_TRACKED", 0)
             )
             conn.commit()
 
@@ -125,7 +125,7 @@ class TestThrottlingAndLogSegregation(unittest.TestCase):
     def test_dynamic_throttled_devices_aggregation(self):
         # Log a dynamic throttle event
         vigilant_addon.log_throttle(
-            client_ip="192.168.100.55",
+            client_ip="192.168.10.55",
             host="video-site.com",
             rpm_now=350.0,
             rpm_base=50.0,
@@ -138,12 +138,12 @@ class TestThrottlingAndLogSegregation(unittest.TestCase):
         data = res.get_json()
         throttled = data["throttled_devices"]
         self.assertEqual(len(throttled), 1)
-        self.assertEqual(throttled[0]["client_ip"], "192.168.100.55")
+        self.assertEqual(throttled[0]["client_ip"], "192.168.10.55")
         self.assertTrue(throttled[0]["is_throttled"])
 
     def test_csv_log_exporter_throttling_type(self):
         vigilant_addon.log_throttle(
-            client_ip="192.168.100.88",
+            client_ip="192.168.10.88",
             host="test-export.com",
             rpm_now=120.0,
             rpm_base=20.0,
@@ -155,7 +155,7 @@ class TestThrottlingAndLogSegregation(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertIn('text/csv', res.headers['Content-Type'])
         csv_content = res.get_data(as_text=True)
-        self.assertIn("192.168.100.88", csv_content)
+        self.assertIn("192.168.10.88", csv_content)
         self.assertIn("TLS_THROTTLE_APPLIED", csv_content)
 
     def test_service_statuses_and_load_config(self):

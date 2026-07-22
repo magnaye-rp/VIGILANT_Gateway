@@ -7,4 +7,4 @@ network:
     wlp1s0:
       dhcp4: no
       addresses:
-        - 192.168.100.88/24
+        - 192.168.10.1/24

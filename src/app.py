@@ -91,9 +91,9 @@ except Exception as exc:
 DEFAULT_CONFIG = {
     "upstream_interface": "eth0",
     "distribution_interface": "eth1",
-    "gateway_ip": "192.168.100.88",
-    "dhcp_start": "192.168.100.10",
-    "dhcp_end": "192.168.100.50",
+    "gateway_ip": "192.168.10.1",
+    "dhcp_start": "192.168.10.10",
+    "dhcp_end": "192.168.10.50",
     "upstream_dns": "8.8.8.8\n8.8.4.4",
     "nlp_enabled": "true",
     "nlp_accuracy": "balanced",
@@ -293,7 +293,7 @@ def _managed_ip_prefix(config: dict | None = None) -> str:
         if prefix:
             return prefix
 
-    return "192.168.100.%"
+    return "192.168.10.%"
 
 
 def _matches_managed_prefix(ip_address: str, managed_prefix: str | None = None) -> bool:
@@ -453,9 +453,9 @@ def _parse_dnsmasq_config() -> dict:
     
     settings = {
         "interface": "eth1",
-        "listen_address": "192.168.100.88",
-        "dhcp_start": "192.168.100.10",
-        "dhcp_end": "192.168.100.50",
+        "listen_address": "192.168.10.1",
+        "dhcp_start": "192.168.10.10",
+        "dhcp_end": "192.168.10.50",
         "dns_servers": ["8.8.8.8", "8.8.4.4"]
     }
     
@@ -492,7 +492,7 @@ def _parse_netplan_config() -> dict:
     settings = {
         "upstream_interface": "eth0",
         "distribution_interface": "eth1",
-        "lan_address": "192.168.100.88/24"
+        "lan_address": "192.168.10.1/24"
     }
     
     if yaml is None or not config_path.exists():
@@ -508,7 +508,7 @@ def _parse_netplan_config() -> dict:
                         settings["upstream_interface"] = iface_name
                     elif "addresses" in iface_config:
                         settings["distribution_interface"] = iface_name
-                        settings["lan_address"] = iface_config["addresses"][0] if iface_config["addresses"] else f"{SERVER_IP}/24"
+                        settings["lan_address"] = iface_config["addresses"][0] if iface_config["addresses"] else "192.168.10.1/24"
     except Exception as exc:
         app.logger.warning("Failed to parse netplan-config.yaml: %s", exc)
     
@@ -521,9 +521,9 @@ def _get_network_config() -> dict:
     return {
         "upstream_interface": netplan_settings.get("upstream_interface", "eth0"),
         "distribution_interface": dnsmasq_settings.get("interface", netplan_settings.get("distribution_interface", "eth1")),
-        "gateway_ip": dnsmasq_settings.get("listen_address", SERVER_IP),
-        "dhcp_start": dnsmasq_settings.get("dhcp_start", "192.168.100.10"),
-        "dhcp_end": dnsmasq_settings.get("dhcp_end", "192.168.100.50"),
+        "gateway_ip": dnsmasq_settings.get("listen_address", "192.168.10.1"),
+        "dhcp_start": dnsmasq_settings.get("dhcp_start", "192.168.10.10"),
+        "dhcp_end": dnsmasq_settings.get("dhcp_end", "192.168.10.50"),
         "upstream_dns": "\n".join(dnsmasq_settings.get("dns_servers", ["8.8.8.8", "8.8.4.4"]))
     }
 
@@ -555,10 +555,10 @@ def _write_dnsmasq_config(config: dict) -> bool:
         
         new_config.append("# VIGILANT Gateway dnsmasq configuration\n")
         new_config.append(f"interface={config.get('distribution_interface', 'eth1')}\n")
-        new_config.append(f"dhcp-range={config.get('dhcp_start', '192.168.100.10')},{config.get('dhcp_end', '192.168.100.50')},12h\n")
-        new_config.append(f"dhcp-option=3,{config.get('gateway_ip', '192.168.100.88')}\n")
-        new_config.append(f"dhcp-option=6,{config.get('gateway_ip', '192.168.100.88')}\n")
-        new_config.append(f"listen-address={config.get('gateway_ip', '192.168.100.88')}\n")
+        new_config.append(f"dhcp-range={config.get('dhcp_start', '192.168.10.10')},{config.get('dhcp_end', '192.168.10.50')},12h\n")
+        new_config.append(f"dhcp-option=3,{config.get('gateway_ip', '192.168.10.1')}\n")
+        new_config.append(f"dhcp-option=6,{config.get('gateway_ip', '192.168.10.1')}\n")
+        new_config.append(f"listen-address={config.get('gateway_ip', '192.168.10.1')}\n")
         for dns in dns_servers:
             new_config.append(f"server={dns.strip()}\n")
         new_config.append("cache-size=1000\n")
@@ -609,7 +609,7 @@ def _write_netplan_config(config: dict) -> bool:
                 "version": 2,
                 "ethernets": {
                     config.get("upstream_interface", "eth0"): {"dhcp4": True, "dhcp4-overrides": {"use-dns": False}},
-                    config.get("distribution_interface", "eth1"): {"addresses": [f"{config.get('gateway_ip', '192.168.100.88')}/24"], "dhcp4": False}
+                    config.get("distribution_interface", "eth1"): {"addresses": [f"{config.get('gateway_ip', '192.168.10.1')}/24"], "dhcp4": False}
                 }
             }
         }
