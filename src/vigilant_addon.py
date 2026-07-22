@@ -30,7 +30,7 @@ MIN_REQUESTS_BASELINE = 10
 # Default values (will be overridden by database config)
 DEFAULT_VELOCITY_THRESHOLD = 1.5
 DEFAULT_THROTTLE_RATE = "512kbit"
-DEFAULT_PINNED_DOMAINS = "instagram.com, facebook.com,tiktok.com,x.com,twitter.co, youtube.com"
+DEFAULT_PINNED_DOMAINS = "cdninstagram.com, facebook.com,tiktok.com,x.com,twitter.co, youtube.com"
 
 # Global asset whitelist
 GLOBAL_WHITELIST = {
@@ -55,7 +55,7 @@ DEFAULT_SOCIAL_DOMAINS = {
     "tiktok.com", "www.tiktok.com",
     "instagram.com", "www.instagram.com",
     "reddit.com", "www.reddit.com",
-    # "youtube.com", "www.youtube.com",
+    "youtube.com", "www.youtube.com",
 }
 
 CATEGORY_KEYWORDS = {
@@ -865,6 +865,7 @@ class VIGILANTAddon:
         self._cache_lock = threading.Lock()
         self._last_cache_refresh = 0.0
         _active_addon = self
+        self.pinned_hosts = set()
         self._refresh_rule_cache()
         print("[VIGILANT] Addon loaded. DB initialised. NLP model ready.")
 
@@ -916,59 +917,71 @@ class VIGILANTAddon:
                 stale = (time.time() - self._last_cache_refresh) >= CACHE_REFRESH_INTERVAL
 
             if reload_requested or stale:
-                self._refresh_rule_cache()
-
-    def tls_clienthello(self, data):
-        """TLS ClientHello hook for transparent SNI domain logging with full decryption capability"""
+                self._refresh_rule_cache()  
+            
+    def tls_clienthello(self, data: tls.ClientHelloData):
+        """Unified TLS ClientHello hook: Dynamic SSL Pinning Bypass + SNI Logging."""
         try:
-            # Check if SNI filtering is enabled
-            config = load_proxy_config()
-            sni_filtering_enabled = config.get('sni_filtering_enabled', 'true').lower() == 'true'
-            
-            if not sni_filtering_enabled:
-                # SNI tracking disabled, skip behavioral analysis
-                return
-            
-            # 1. Direct attribute access for modern mitmproxy
-            sni = data.sni
+            # 1. Safely extract SNI name across mitmproxy API versions
+            server_name = getattr(data, "sni", None)
+            if not server_name and hasattr(data, "context") and hasattr(data.context, "server_conn"):
+                server_name = data.context.server_conn.sni
 
-            # 2. Safely bypass internal Apple ecosystem traffic to prevent device lockups
-            if sni and any(domain in sni for domain in ["apple.com", "icloud.com"]):
+            if not server_name:
+                return
+
+            # 2. Certificate Pinning Dynamic Bypass
+            if server_name in self.pinned_hosts:
+                data.ignore_connection = True
+                print(f"[VIGILANT] Dynamic L4 Passthrough activated for pinned SNI: {server_name}")
+                return
+
+            # 3. Bypass core internal Apple traffic to prevent OS-level freezes
+            if any(domain in server_name for domain in ["apple.com", "icloud.com", "mzstatic.com"]):
                 data.ignore_connection = True
                 return
 
-            # 3. Use the verified modern mitmproxy peername path
-            client_ip = data.context.client_conn.peername[0]
+            # 4. Extract Client IP
+            client_ip = "127.0.0.1"
+            if hasattr(data, "context") and hasattr(data.context, "client_conn"):
+                client_ip = data.context.client_conn.peername[0]
 
-            if sni:
-                # Log ALL SNI domains immediately to dashboard database
-                self.log_to_dashboard(client_ip, sni)
+            # 5. SNI Filtering & Behavioral Checks
+            config = load_proxy_config()
+            sni_filtering_enabled = config.get('sni_filtering_enabled', 'true').lower() == 'true'
 
-                # NOTE: Removed `data.ignore_connection = True` from here.
-                # This allows mitmproxy to step forward and complete the TLS handshake
-                # using the trusted certificate you installed via AirDrop.
+            if sni_filtering_enabled:
+                self.log_to_dashboard(client_ip, server_name)
 
-                clean_sni = sni.lstrip("www.")
-                base = ".".join(clean_sni.split(".")[-2:])
-
-                flagged, rpm_now, rpm_base = should_throttle(client_ip, sni)
-
+                flagged, rpm_now, rpm_base = should_throttle(client_ip, server_name)
                 if flagged and client_ip not in throttled_clients:
                     throttled_clients.add(client_ip)
-                    log_throttle(client_ip, sni, rpm_now, rpm_base, "TLS_THROTTLE_APPLIED")
+                    log_throttle(client_ip, server_name, rpm_now, rpm_base, "TLS_THROTTLE_APPLIED")
                     apply_throttle(client_ip)
-                    print(f"[VIGILANT] TLS DOOMSCROLL DETECTED {client_ip} @ {sni} "
+                    print(f"[VIGILANT] TLS DOOMSCROLL DETECTED {client_ip} @ {server_name} "
                           f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
 
                 social_domains = load_social_domains()
+                clean_sni = server_name.lstrip("www.")
+                base = ".".join(clean_sni.split(".")[-2:])
                 if any(base in d for d in social_domains):
-                    log_request(client_ip, sni, "(TLS_SNI)", "TLS", "Mobile_Bypass", False, [])
-                    print(f"[VIGILANT] TLS SNI bypass logged: {client_ip} -> {sni}")
+                    log_request(client_ip, server_name, "(TLS_SNI)", "TLS", "Mobile_Bypass", False, [])
 
         except (AttributeError, IndexError, TypeError) as e:
-            print(f"[VIGILANT] TLS ClientHello: Failed to extract client IP or data structures: {e}")
+            print(f"[VIGILANT] TLS ClientHello data structure parsing issue: {e}")
         except Exception as e:
-            print(f"[VIGILANT] TLS ClientHello global framework error: {e}")
+            print(f"[VIGILANT] TLS ClientHello error: {e}")
+
+    def tls_failed_clienthandshake(self, data: tls.TLSErrorData):
+        """Automatically catch TLS pinning rejections and register for dynamic passthrough."""
+        server_name = getattr(data, "sni", None)
+        if not server_name and hasattr(data, "context") and hasattr(data.context, "server_conn"):
+            server_name = data.context.server_conn.sni
+
+        if server_name:
+            print(f"[VIGILANT] Detected TLS Certificate Pinning on {server_name}. Registering for L4 bypass.")
+            self.pinned_hosts.add(server_name)
+
 
     def log_to_dashboard(self, client_ip: str, sni: str):
         """Log SNI domain to dashboard database for transparent passthrough tracking using TF-IDF classification"""
@@ -1079,7 +1092,7 @@ class VIGILANTAddon:
                     matched = scan_text_for_keywords(request_body, keywords)
                     if matched:
                         print(f"[VIGILANT] REQUEST KEYWORD BLOCKED: {matched} in request body from {host}")
-                        log_request(client_ip, host, path, method, "Harmful", True, [])
+                        log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [])
                         flow.response = http.Response.make(
                             403,
                             render_block_page(host, "Harmful"),

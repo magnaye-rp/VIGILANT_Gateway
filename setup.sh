@@ -380,12 +380,13 @@ EOF
 
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 80 -j REDIRECT --to-ports 8080
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 443 -j REDIRECT --to-ports 8080
-
-    iptables -A FORWARD -i "$LAN_INTERFACE" -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable
-    iptables -A FORWARD -i "$LAN_INTERFACE" -p udp --dport 80 -j REJECT --reject-with icmp-port-unreachable
+    
+    iptables -A FORWARD -i "$LAN_INTERFACE" -p udp --dport 443 -j DROP
+    iptables -A FORWARD -i "$LAN_INTERFACE" -p udp --dport 80 -j DROP
     iptables -A FORWARD -i "$LAN_INTERFACE" -p tcp --dport 853 -j REJECT
     iptables -A FORWARD -i "$LAN_INTERFACE" -p udp --dport 853 -j REJECT
     iptables -A OUTPUT -p udp --dport 443 -j DROP
+    iptables -A OUTPUT -p udp --dport 80 -j DROP
     ip6tables -P FORWARD DROP
 
     iptables -A FORWARD -i "$LAN_INTERFACE" -o "$WAN_INTERFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
@@ -461,7 +462,7 @@ ExecStart=/home/vigilant_admin/vigilant/venv/bin/mitmdump \
     --listen-host 0.0.0.0 \
     --listen-port 8080 \
     --set block_global=false \
-    --set ignore_hosts="^(.*\.)?(facebook|twitter|x|tiktok|instagram|reddit|youtube|google|apple|icloud|duckduckgo)\.com(:[0-9]+)?$" \
+    --set connection_strategy=lazy \
     -s /home/vigilant_admin/vigilant/addons/vigilant_addon.py
 Restart=always
 RestartSec=5
