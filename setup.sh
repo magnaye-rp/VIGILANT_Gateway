@@ -182,10 +182,12 @@ stage_3_python_env() {
     source "$VIGILANT_HOME/venv/bin/activate"
     pip install --upgrade pip > /dev/null 2>&1
     
-    # Copy requirements.txt to venv directory for clean installation
-    cp "$REPO_DIR/requirements.txt" "$VIGILANT_HOME/requirements.txt"
+    # Only copy requirements.txt if repo and home paths differ
+    if [ "$REPO_DIR" != "$VIGILANT_HOME" ]; then
+        cp "$REPO_DIR/requirements.txt" "$VIGILANT_HOME/requirements.txt"
+    fi
     
-    # Install from requirements file to avoid shell quoting issues
+    # Install from requirements file
     pip install -r "$VIGILANT_HOME/requirements.txt" > /dev/null 2>&1
     
     # Install additional packages not in requirements.txt
