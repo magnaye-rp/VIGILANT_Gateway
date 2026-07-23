@@ -117,8 +117,9 @@ ALLOWED_CONFIG_KEYS = set(CONFIG_DEFAULTS) | {
     "physical_scroll_custom", "sni_filtering_enabled", "request_threshold"
 }
 BOOLEAN_CONFIG_KEYS = {"block_harmful", "block_distracting", "nlp_enabled", "throttle_enabled", "enable_https", "sni_filtering_enabled"}
-INTEGER_CONFIG_KEYS = {"network_velocity_threshold", "physical_scroll_threshold", "throttle_rate", "throttle_duration", "log_retention", "network_velocity_custom", "physical_scroll_custom", "request_threshold"}
-STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "upstream_dns", "nlp_accuracy", "ui_theme", "network_velocity_preset", "physical_scroll_preset", "tfidf_classification_threshold", "tfidf_url_threshold", "tfidf_body_threshold"}
+FLOAT_CONFIG_KEYS = {"network_velocity_threshold", "tfidf_classification_threshold", "tfidf_url_threshold", "tfidf_body_threshold"}
+INTEGER_CONFIG_KEYS = {"physical_scroll_threshold", "throttle_rate", "throttle_duration", "log_retention", "network_velocity_custom", "physical_scroll_custom", "request_threshold"}
+STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "upstream_dns", "nlp_accuracy", "ui_theme", "network_velocity_preset", "physical_scroll_preset"}
 TRAFFIC_CATEGORIES = ("Educational", "Productive", "Distracting", "Harmful")
 L4_TRAFFIC_CATEGORIES = ("DNS_TRACKED", "SNI_PASSTHROUGH")
 DEFAULT_THROTTLE_DURATION = 300
@@ -256,11 +257,25 @@ def _coerce_int(value):
     return integer_value
 
 
+def _coerce_float(value):
+    if isinstance(value, bool):
+        raise ValueError("Invalid float value")
+    try:
+        float_value = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("Invalid float value")
+    if float_value < 0.0:
+        raise ValueError("Float value must be non-negative")
+    return float_value
+
+
 def _coerce_config_value(key: str, value):
     if key in BOOLEAN_CONFIG_KEYS:
         return _coerce_bool(value)
     if key in INTEGER_CONFIG_KEYS:
         return _coerce_int(value)
+    if key in FLOAT_CONFIG_KEYS:
+        return _coerce_float(value)
     if key in STRING_CONFIG_KEYS:
         return str(value).strip()
     raise ValueError(f"Unsupported configuration key: {key}")
@@ -280,8 +295,8 @@ def _extract_ipv4_prefix(value) -> str | None:
     return ".".join(octets[:3]) + ".%"
 
 
-def _managed_ip_prefix(config: dict | None = None) -> str:
-    config = config or load_config()
+def _managed_ip_prefix(config: dict | None = None, connection: sqlite3.Connection | None = None) -> str:
+    config = config or load_config(connection)
     for key in ("dhcp_start", "gateway_ip", "dhcp_end"):
         prefix = _extract_ipv4_prefix(config.get(key))
         if prefix:
@@ -296,13 +311,13 @@ def _managed_ip_prefix(config: dict | None = None) -> str:
     return "192.168.10.%"
 
 
-def _matches_managed_prefix(ip_address: str, managed_prefix: str | None = None) -> bool:
-    prefix = (managed_prefix or _managed_ip_prefix()).rstrip("%")
+def _matches_managed_prefix(ip_address: str, managed_prefix: str | None = None, connection: sqlite3.Connection | None = None) -> bool:
+    prefix = (managed_prefix or _managed_ip_prefix(connection=connection)).rstrip("%")
     return bool(ip_address) and str(ip_address).startswith(prefix)
 
 
-def _current_throttle_duration(config: dict | None = None) -> int:
-    config = config or load_config()
+def _current_throttle_duration(config: dict | None = None, connection: sqlite3.Connection | None = None) -> int:
+    config = config or load_config(connection)
     try:
         return max(60, int(config.get("throttle_duration", DEFAULT_THROTTLE_DURATION)))
     except (TypeError, ValueError):
@@ -350,45 +365,84 @@ def _systemctl_service_state(unit_name: str) -> str | None:
     return None
 
 
+_psutil_failed_logged = False
+
+
 def _process_service_state(*markers: str, exclude_current_pid: bool = False) -> str:
+    global _psutil_failed_logged
     if psutil is None:
         return "offline"
 
     current_pid = os.getpid()
     lowered_markers = tuple(marker.lower() for marker in markers if marker)
 
-    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
-        try:
-            info = proc.info
-            if exclude_current_pid and info.get("pid") == current_pid:
-                continue
+    try:
+        for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+            try:
+                info = proc.info
+                if exclude_current_pid and info.get("pid") == current_pid:
+                    continue
 
-            searchable = " ".join(
-                [
-                    str(info.get("name") or "").lower(),
-                    " ".join(str(item).lower() for item in (info.get("cmdline") or [])),
-                ]
-            )
-            if any(marker in searchable for marker in lowered_markers):
-                return "active"
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            continue
+                searchable = " ".join(
+                    [
+                        str(info.get("name") or "").lower(),
+                        " ".join(str(item).lower() for item in (info.get("cmdline") or [])),
+                    ]
+                )
+                if any(marker in searchable for marker in lowered_markers):
+                    return "active"
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+    except Exception as exc:
+        if not _psutil_failed_logged:
+            app.logger.debug("Failed to iterate processes via psutil: %s", exc)
+            _psutil_failed_logged = True
+        return "offline"
 
     return "offline"
 
 
+def _get_service_state(service_name: str, systemd_unit: str, *process_markers: str) -> str:
+    # 1. Environment override check
+    env_keys = [f"VIGILANT_{service_name.upper()}_STATE"]
+    if service_name.upper() == "DNSMASQ":
+        env_keys.append("VIGILANT_DNS_STATE")
+    for env_key in env_keys:
+        if env_key in os.environ:
+            val = os.environ[env_key].strip().lower()
+            if val in {"active", "inactive", "offline", "failed"}:
+                return val
+            
+    # 2. Systemd check
+    state = _systemctl_service_state(systemd_unit)
+    if state == "active":
+        return "active"
+        
+    # 3. Process check
+    if process_markers:
+        proc_state = _process_service_state(*process_markers)
+        if proc_state == "active":
+            return "active"
+            
+    # 4. Fallback for dashboard
+    if service_name == "dashboard":
+        return "active"
+        
+    return "offline"
+
+
 def _service_statuses() -> dict:
-    """Return cached service states with systemd-first checks and process fallbacks."""
+    """Return cached service states with environment overrides, systemd checks, and process fallbacks."""
     global _service_status_cache, _service_cache_time
     now = time.time()
     
     if _service_status_cache and (now - _service_cache_time < CACHE_TTL):
         return _service_status_cache
 
-    proxy_state = _systemctl_service_state("vigilant-proxy") or _process_service_state("mitmdump", "mitmproxy", "vigilant_addon")
-    dashboard_state = _systemctl_service_state("vigilant-dashboard") or _process_service_state("app.py", "vigilant-dashboard") or "active"
-    firewall_state = _systemctl_service_state("vigilant-firewall") or _process_service_state("iptables", "nftables", "ufw") or "active"
-    dns_state = _systemctl_service_state("dnsmasq") or _process_service_state("dnsmasq")
+    proxy_state = _get_service_state("proxy", "vigilant-proxy", "mitmdump", "mitmproxy", "vigilant_addon")
+    dashboard_state = _get_service_state("dashboard", "vigilant-dashboard", "app.py", "vigilant-dashboard")
+    firewall_state = _get_service_state("firewall", "vigilant-firewall", "iptables", "nftables", "ufw")
+    dns_state = _get_service_state("dnsmasq", "dnsmasq", "dnsmasq")
 
     _service_status_cache = {
         "vigilant_proxy": proxy_state,
@@ -630,28 +684,34 @@ def _write_netplan_config(config: dict) -> bool:
 
 
 def get_system_interfaces() -> list:
+    """Retrieve system network interfaces, excluding loopback, virtual, and docker interfaces."""
+    iface_names = []
+    # Method 1: Use standard library socket (no external dependency, very fast)
     try:
         interfaces = socket.if_nameindex()
         iface_names = [name for index, name in interfaces]
+    except Exception as exc:
+        app.logger.debug("Failed to get network interfaces via socket: %s", exc)
+
+    # Method 2: Fallback to psutil if socket failed or returned empty
+    if not iface_names and psutil is not None:
+        try:
+            iface_names = list(psutil.net_if_addrs().keys())
+        except Exception as exc:
+            app.logger.debug("Failed to get network interfaces via psutil: %s", exc)
+
+    # Filter interfaces
+    if iface_names:
         filtered = [iface for iface in iface_names if not iface.startswith(('lo', 'veth', 'docker'))]
         if filtered:
             return sorted(filtered)
-    except Exception as exc:
-        app.logger.warning("Failed to get network interfaces: %s", exc)
-        return ['eth0', 'eth1', 'enp0s3', 'enp1s0']
-    return []
+
+    # Static fallback if both methods failed to return any non-filtered interfaces
+    return ['eth0', 'eth1', 'enp0s3', 'enp1s0']
 
 
 def _get_network_interfaces() -> list:
-    if psutil is not None:
-        try:
-            interfaces = list(psutil.net_if_addrs().keys())
-            filtered = [iface for iface in interfaces if not iface.startswith(('lo', 'veth', 'docker'))]
-            if filtered:
-                return sorted(filtered)
-        except Exception as exc:
-            app.logger.warning("Failed to get network interfaces via psutil: %s", exc)
-    return []
+    return get_system_interfaces()
 
 
 def init_config_db() -> None:
@@ -720,11 +780,11 @@ def init_category_hints_db() -> None:
         app.logger.debug("init_category_hints_db issue: %s", exc)
 
 
-def load_config() -> dict:
+def load_config(connection: sqlite3.Connection | None = None) -> dict:
     config = dict(CONFIG_DEFAULTS)
     if DB_PATH.exists():
         try:
-            with _open_db() as connection:
+            if connection:
                 if _table_exists(connection, "config_settings"):
                     rows = connection.execute("SELECT key, value FROM config_settings").fetchall()
                     for row in rows:
@@ -735,6 +795,18 @@ def load_config() -> dict:
                             config[key] = _coerce_config_value(key, row[1])
                         except (TypeError, ValueError):
                             config[key] = CONFIG_DEFAULTS.get(key, row[1])
+            else:
+                with _open_db() as conn:
+                    if _table_exists(conn, "config_settings"):
+                        rows = conn.execute("SELECT key, value FROM config_settings").fetchall()
+                        for row in rows:
+                            key = str(row[0])
+                            if key not in ALLOWED_CONFIG_KEYS:
+                                continue
+                            try:
+                                config[key] = _coerce_config_value(key, row[1])
+                            except (TypeError, ValueError):
+                                config[key] = CONFIG_DEFAULTS.get(key, row[1])
         except sqlite3.Error as exc:
             app.logger.warning("load_config failed: %s", exc)
 
@@ -747,6 +819,11 @@ def load_config() -> dict:
         elif k in INTEGER_CONFIG_KEYS:
             try:
                 config[k] = _coerce_int(config[k])
+            except ValueError:
+                pass
+        elif k in FLOAT_CONFIG_KEYS:
+            try:
+                config[k] = _coerce_float(config[k])
             except ValueError:
                 pass
     return config
@@ -932,9 +1009,9 @@ def _apply_device_metadata(connection: sqlite3.Connection, devices: dict) -> Non
 
 
 def _get_current_throttled_devices(connection: sqlite3.Connection, config: dict | None = None) -> list[dict]:
-    config = config or load_config()
-    managed_prefix = _managed_ip_prefix(config)
-    active_since = time.time() - _current_throttle_duration(config)
+    config = config or load_config(connection)
+    managed_prefix = _managed_ip_prefix(config, connection)
+    active_since = time.time() - _current_throttle_duration(config, connection)
 
     devices = _collect_dynamic_throttle_devices(connection, active_since, managed_prefix)
     devices.update({k: v for k, v in _collect_policy_blacklist_devices(connection, managed_prefix).items() if k not in devices})
@@ -979,11 +1056,14 @@ def get_stats():
         category_percentages = {c: 0.0 for c in TRAFFIC_CATEGORIES}
         formatted_recent = []
         throttled_devices = []
-        managed_prefix = _managed_ip_prefix()
+        managed_prefix = ""
+        config = None
         
         if DB_PATH.exists():
             with _open_db() as connection:
-                throttled_devices = _get_current_throttled_devices(connection)
+                config = load_config(connection)
+                managed_prefix = _managed_ip_prefix(config, connection)
+                throttled_devices = _get_current_throttled_devices(connection, config)
                 if _table_exists(connection, "traffic_log"):
                     where_clauses = [_l7_traffic_filter_sql()]
                     params = []
@@ -1050,7 +1130,7 @@ def get_stats():
         
         system_metrics = _system_metrics()
         network_config = _get_network_config()
-        network_config["available_interfaces"] = _get_network_interfaces()
+        network_config["available_interfaces"] = get_system_interfaces()
 
         return jsonify({
             "total": total_reqs,
@@ -1124,14 +1204,17 @@ def dashboard_summary():
     recent_alerts = 0
     recent_entries = []
     dhcp_allocations = []
-    config = load_config()
-    managed_prefix = _managed_ip_prefix(config)
+    config = None
+    managed_prefix = ""
+    throttled_devices = []
     
     if DB_PATH.exists():
         try:
             with _open_db() as conn:
+                config = load_config(conn)
+                managed_prefix = _managed_ip_prefix(config, conn)
                 window_start = int(time.time()) - 86400
-                active_since = time.time() - _current_throttle_duration(config)
+                active_since = time.time() - _current_throttle_duration(config, conn)
                 throttled_devices = _get_current_throttled_devices(conn, config)
                 throttled_count = len(throttled_devices)
 
@@ -1188,6 +1271,9 @@ def dashboard_summary():
                         })
         except sqlite3.Error as e:
             app.logger.warning(f"DB Error in summary: {e}")
+
+    if config is None:
+        config = load_config()
 
     nlp_enabled = _coerce_bool(config.get("nlp_enabled", "true"))
     theme_mode = config.get("ui_theme", "dark")
@@ -1820,11 +1906,30 @@ def delete_category_hint(hint_id):
 def handle_behavioral_config():
     if request.method == "GET":
         config = load_config()
+        try:
+            custom_net = config.get("network_velocity_custom")
+            if custom_net is not None:
+                net_custom = int(float(custom_net))
+            else:
+                threshold_val = float(config.get("network_velocity_threshold", 1.5))
+                net_custom = int(threshold_val * 100)
+        except (TypeError, ValueError):
+            net_custom = 150
+
+        try:
+            custom_scroll = config.get("physical_scroll_custom")
+            if custom_scroll is not None:
+                scroll_custom = int(float(custom_scroll))
+            else:
+                scroll_custom = int(float(config.get("physical_scroll_threshold", 75)))
+        except (TypeError, ValueError):
+            scroll_custom = 75
+
         return jsonify({
             "network_velocity_preset": config.get("network_velocity_preset", "Medium"),
-            "network_velocity_custom": int(config.get("network_velocity_custom", config.get("network_velocity_threshold", 150))),
+            "network_velocity_custom": net_custom,
             "physical_scroll_preset": config.get("physical_scroll_preset", "Medium"),
-            "physical_scroll_custom": int(config.get("physical_scroll_custom", config.get("physical_scroll_threshold", 75))),
+            "physical_scroll_custom": scroll_custom,
             "sni_filtering_enabled": _coerce_bool(config.get("sni_filtering_enabled", "true")),
             "throttle_enabled": _coerce_bool(config.get("throttle_enabled", "true")),
             "throttle_rate": int(config.get("throttle_rate", CONFIG_DEFAULTS["throttle_rate"])),
@@ -1836,24 +1941,27 @@ def handle_behavioral_config():
     if "network_velocity_preset" in payload:
         preset = payload["network_velocity_preset"]
         if preset == "High":
-            payload["network_velocity_threshold"] = "2.0"
+            payload["network_velocity_threshold"] = "1.1"
         elif preset == "Medium":
             payload["network_velocity_threshold"] = "1.5"
-        else:  # Low
-            payload["network_velocity_threshold"] = "1.0"
+        elif preset == "Low":
+            payload["network_velocity_threshold"] = "2.0"
     
     if "physical_scroll_preset" in payload:
         preset = payload["physical_scroll_preset"]
         if preset == "High":
-            payload["physical_scroll_threshold"] = "120"
+            payload["physical_scroll_threshold"] = "40"
         elif preset == "Medium":
             payload["physical_scroll_threshold"] = "75"
-        else:  # Low
-            payload["physical_scroll_threshold"] = "50"
+        elif preset == "Low":
+            payload["physical_scroll_threshold"] = "120"
     
     # When custom value changes, update the threshold
     if "network_velocity_custom" in payload:
-        payload["network_velocity_threshold"] = str(payload["network_velocity_custom"])
+        try:
+            payload["network_velocity_threshold"] = str(float(payload["network_velocity_custom"]) / 100.0)
+        except (TypeError, ValueError):
+            payload["network_velocity_threshold"] = "1.5"
     
     if "physical_scroll_custom" in payload:
         payload["physical_scroll_threshold"] = str(payload["physical_scroll_custom"])
@@ -1929,7 +2037,8 @@ def get_throttled_devices():
             })
         
         with _open_db() as connection:
-            throttled_devices = _get_current_throttled_devices(connection)
+            config = load_config(connection)
+            throttled_devices = _get_current_throttled_devices(connection, config)
         
         return jsonify({
             "status": "success",
