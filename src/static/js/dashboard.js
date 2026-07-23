@@ -70,6 +70,9 @@ function switchTab(tabId) {
   if (tabId === 'behavioral-control') {
     loadBehavioralSettings();
   }
+  if (tabId === 'sni-monitoring') {
+    loadSNIDashboard();
+  }
   if (tabId === 'restraints') {
     loadRestraintsRegistry();
   }
@@ -85,26 +88,66 @@ window.loadThrottledDevices = async function() {
     const throttledDevices = data.throttled_devices || [];
 
     if (throttledDevices.length === 0) {
-      tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No throttled devices</td></tr>';
+      tableBody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No throttled devices</td></tr>';
       return;
     }
 
     tableBody.innerHTML = throttledDevices.map(device => {
       const hostname = device.hostname || device.custom_name || 'Unknown Device';
       const ip = device.client_ip || device.ip_address || '—';
+      const throttleState = device.throttle_state || 'unknown';
+      const throttleStateClass = getThrottleStateClass(throttleState);
       
       return `
         <tr>
           <td style="font-weight: 500;">${hostname}</td>
           <td style="font-family: monospace; font-size: 0.9rem;">${ip}</td>
+          <td><span class="badge ${throttleStateClass}">${throttleState}</span></td>
+          <td>
+            <button class="btn-secondary" style="padding: 0.25rem 0.75rem; font-size: 0.85rem;" onclick="releaseThrottle('${ip}')">Release</button>
+          </td>
         </tr>
       `;
     }).join('');
   } catch (error) {
     console.error('Error loading throttled devices:', error);
-    tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading throttled devices</td></tr>';
+    tableBody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading throttled devices</td></tr>';
   }
 };
+
+function getThrottleStateClass(state) {
+  const stateMap = {
+    'throttled': 'bg-danger',
+    'recovering': 'bg-warning',
+    'released': 'bg-success'
+  };
+  return stateMap[state] || 'bg-secondary';
+}
+
+async function releaseThrottle(ipAddress) {
+  if (!confirm(`Release throttle for ${ipAddress}?`)) {
+    return;
+  }
+
+  try {
+    const response = await fetch('/api/devices/release-throttle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip_address: ipAddress })
+    });
+
+    if (response.ok) {
+      showToast('Throttle released successfully', 'success');
+      loadThrottledDevices();
+    } else {
+      const data = await response.json();
+      showToast(data.error || 'Failed to release throttle', 'danger');
+    }
+  } catch (error) {
+    console.error('Error releasing throttle:', error);
+    showToast('Error releasing throttle', 'danger');
+  }
+}
 
 window.loadActiveDevices = async function() {
   const tableBody = document.getElementById('active-tbody');
@@ -924,6 +967,7 @@ async function loadTrafficLogs() {
     const categoryFilter = document.getElementById('traffic-filter-category')?.value || '';
     const clientFilter = document.getElementById('traffic-filter-client')?.value || '';
     const domainFilter = document.getElementById('traffic-filter-domain')?.value || '';
+    const blockReasonFilter = document.getElementById('block-reason-filter')?.value || '';
     
     // Combine search filters (client IP or domain)
     const searchFilter = clientFilter || domainFilter;
@@ -936,6 +980,9 @@ async function loadTrafficLogs() {
     if (searchFilter) {
       url += `&search=${encodeURIComponent(searchFilter)}`;
     }
+    if (blockReasonFilter) {
+      url += `&block_reason=${encodeURIComponent(blockReasonFilter)}`;
+    }
     
     const response = await fetch(url);
     const data = await response.json();
@@ -944,17 +991,30 @@ async function loadTrafficLogs() {
     let trafficHtml = '';
     recentRows.forEach(r => {
       const categoryClass = `category-badge ${String(r.category || 'unclassified').toLowerCase()}`;
+      
+      // Generate block reason badges
+      let blockReasonHtml = '';
+      if (r.block_reasons && r.block_reasons.length > 0) {
+        blockReasonHtml = r.block_reasons.map(reason => {
+          const reasonClass = getBlockReasonClass(reason);
+          return `<span class="badge ${reasonClass} me-1">${reason}</span>`;
+        }).join('');
+      } else {
+        blockReasonHtml = '<span class="text-muted">-</span>';
+      }
+      
       trafficHtml += `
         <tr>
           <td>${r.time}</td>
           <td style="font-family: monospace; font-size: 0.9rem;">${r.client_ip}</td>
           <td>${r.host}</td>
           <td><span class="${categoryClass}">${r.category}</span></td>
+          <td>${blockReasonHtml}</td>
           <td>${r.flagged ? '🚫 Blocked' : '✓'}</td>
         </tr>
       `;
     });
-    document.getElementById('traffic-tbody').innerHTML = trafficHtml || '<tr><td colspan="5" class="text-center" style="color: var(--text-secondary); padding: 2rem;">No traffic data yet</td></tr>';
+    document.getElementById('traffic-tbody').innerHTML = trafficHtml || '<tr><td colspan="6" class="text-center" style="color: var(--text-secondary); padding: 2rem;">No traffic data yet</td></tr>';
 
     // Update pagination controls
     if (data.pagination) {
@@ -971,6 +1031,15 @@ async function loadTrafficLogs() {
   } catch (e) {
     showToast('Failed to load traffic logs', 'error');
   }
+}
+
+function getBlockReasonClass(reason) {
+  const reasonMap = {
+    'KEYWORD_MATCH': 'bg-danger',
+    'CATEGORY_BLOCKED': 'bg-danger',
+    'DOMAIN_BLOCKED': 'bg-warning'
+  };
+  return reasonMap[reason] || 'bg-secondary';
 }
 
 function changePage(delta) {
@@ -1322,6 +1391,161 @@ function toggleThemeMode(isDark) {
   const mode = isDark ? 'dark' : 'light';
   toggleTheme(mode);
 }
+
+// ─── SNI Dashboard Functions ───
+let sniScrollChart = null;
+let sniDomainChart = null;
+
+async function loadSNIDashboard() {
+  try {
+    const timeWindow = document.getElementById('sni-time-window').value;
+    const clientIP = document.getElementById('sni-client-filter').value;
+    
+    // Load scroll rates
+    const scrollResponse = await fetch(`/api/sni/scroll-rates?time_window=${timeWindow}&client_ip=${clientIP}`);
+    const scrollData = await scrollResponse.json();
+    
+    if (scrollData.status === 'success') {
+      updateSNICharts(scrollData.scroll_rates);
+    }
+    
+    // Load SNI logs
+    const logsResponse = await fetch(`/api/sni/requests?limit=20&client_ip=${clientIP}`);
+    const logsData = await logsResponse.json();
+    
+    if (logsData.status === 'success') {
+      updateSNILogTable(logsData.logs);
+    }
+    
+    // Load client filter options
+    await loadSNIClientFilter();
+    
+  } catch (error) {
+    console.error('Error loading SNI dashboard:', error);
+    showToast('Error loading SNI dashboard', 'danger');
+  }
+}
+
+function updateSNICharts(scrollRates) {
+  const domains = scrollRates.map(r => r.domain);
+  const avgVelocities = scrollRates.map(r => r.avg_velocity_rps);
+  const requestCounts = scrollRates.map(r => r.total_requests);
+  
+  // Scroll Rate Chart
+  const scrollCtx = document.getElementById('sni-scroll-chart').getContext('2d');
+  if (sniScrollChart) {
+    sniScrollChart.destroy();
+  }
+  sniScrollChart = new Chart(scrollCtx, {
+    type: 'line',
+    data: {
+      labels: domains,
+      datasets: [{
+        label: 'Avg Velocity (RPS)',
+        data: avgVelocities,
+        borderColor: '#43B3AE',
+        backgroundColor: 'rgba(67, 179, 174, 0.1)',
+        fill: true,
+        tension: 0.4
+      }]
+    },
+    options: {
+      responsive: true,
+      scales: {
+        y: {
+          beginAtZero: true,
+          title: {
+            display: true,
+            text: 'Requests per Second'
+          }
+        }
+      }
+    }
+  });
+  
+  // Domain Chart
+  const domainCtx = document.getElementById('sni-domain-chart').getContext('2d');
+  if (sniDomainChart) {
+    sniDomainChart.destroy();
+  }
+  sniDomainChart = new Chart(domainCtx, {
+    type: 'bar',
+    data: {
+      labels: domains,
+      datasets: [{
+        label: 'Request Count',
+        data: requestCounts,
+        backgroundColor: '#43B3AE'
+      }]
+    },
+    options: {
+      responsive: true,
+      scales: {
+        y: {
+          beginAtZero: true
+        }
+      }
+    }
+  });
+}
+
+function updateSNILogTable(logs) {
+  const tableBody = document.getElementById('sni-log-table');
+  
+  if (logs.length === 0) {
+    tableBody.innerHTML = '<tr><td colspan="4" class="text-center">No SNI requests found</td></tr>';
+    return;
+  }
+  
+  tableBody.innerHTML = logs.map(log => `
+    <tr>
+      <td>${log.formatted_time}</td>
+      <td style="font-family: monospace;">${log.client_ip}</td>
+      <td>${log.domain}</td>
+      <td><span class="badge bg-info">${log.velocity_rps.toFixed(2)} RPS</span></td>
+    </tr>
+  `).join('');
+}
+
+async function loadSNIClientFilter() {
+  try {
+    const response = await fetch('/api/sni/requests');
+    const data = await response.json();
+    
+    if (data.status === 'success') {
+      const clientIPs = [...new Set(data.logs.map(log => log.client_ip))];
+      const select = document.getElementById('sni-client-filter');
+      
+      // Keep current selection
+      const currentValue = select.value;
+      
+      select.innerHTML = '<option value="">All Clients</option>' + 
+        clientIPs.map(ip => `<option value="${ip}">${ip}</option>`).join('');
+      
+      select.value = currentValue;
+    }
+  } catch (error) {
+    console.error('Error loading SNI client filter:', error);
+  }
+}
+
+function refreshSNI() {
+  loadSNIDashboard();
+  showToast('SNI dashboard refreshed', 'success');
+}
+
+// Event listeners for SNI dashboard
+document.addEventListener('DOMContentLoaded', () => {
+  const sniTimeWindow = document.getElementById('sni-time-window');
+  const sniClientFilter = document.getElementById('sni-client-filter');
+  
+  if (sniTimeWindow) {
+    sniTimeWindow.addEventListener('change', loadSNIDashboard);
+  }
+  if (sniClientFilter) {
+    sniClientFilter.addEventListener('change', loadSNIDashboard);
+  }
+});
 
 // ─── Unified Polling Engine ───
 let dashboardPollInterval = null;

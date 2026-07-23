@@ -1093,6 +1093,30 @@ def _get_current_throttled_devices(connection: sqlite3.Connection, config: dict 
         device["formatted_time"] = formatted_time
         device["timestamp"] = iso_timestamp
 
+        # Add throttle_state if the column exists in throttle_events table
+        if _table_exists(connection, "throttle_events"):
+            try:
+                client_ip = device.get("client_ip") or device.get("ip_address")
+                if client_ip:
+                    query = """
+                        SELECT throttle_state
+                        FROM throttle_events
+                        WHERE client_ip = ?
+                        ORDER BY timestamp DESC
+                        LIMIT 1
+                    """
+                    result = connection.execute(query, (client_ip,)).fetchone()
+                    if result:
+                        device["throttle_state"] = result[0] or "throttled"
+                    else:
+                        device["throttle_state"] = "throttled"
+                else:
+                    device["throttle_state"] = "throttled"
+            except sqlite3.Error:
+                device["throttle_state"] = "throttled"
+        else:
+            device["throttle_state"] = "throttled"
+
     return throttled_devices
 
 
@@ -2280,11 +2304,11 @@ def get_throttled_devices():
                 "status": "success",
                 "throttled_devices": []
             })
-        
+
         with _open_db() as connection:
             config = load_config(connection)
             throttled_devices = _get_current_throttled_devices(connection, config)
-        
+
         return jsonify({
             "status": "success",
             "throttled_devices": throttled_devices
@@ -2295,6 +2319,34 @@ def get_throttled_devices():
     except Exception as e:
         app.logger.error("Error in get_throttled_devices: %s", e, exc_info=True)
         return jsonify({"error": "Internal server error", "details": str(e)}), 500
+
+
+@app.route("/api/devices/release-throttle", methods=["POST"])
+def release_throttle():
+    """Manually release throttle for a specific device."""
+    try:
+        data = request.json or {}
+        ip_address = data.get("ip_address")
+
+        if not ip_address:
+            return jsonify({"error": "IP address is required"}), 400
+
+        # Import and use the addon's remove_throttle function
+        try:
+            from vigilant_addon import remove_throttle
+            remove_throttle(ip_address)
+            app.logger.info(f"Manually released throttle for {ip_address}")
+            return jsonify({"status": "success", "message": f"Throttle released for {ip_address}"})
+        except ImportError:
+            # If addon is not available, try to remove via TC directly
+            import subprocess
+            subprocess.run(['tc', 'qdisc', 'del', 'dev', 'eth0', 'root'], check=False)
+            app.logger.warning(f"Addon not available, attempted TC cleanup for {ip_address}")
+            return jsonify({"status": "success", "message": f"Throttle released for {ip_address} (TC cleanup)"})
+
+    except Exception as e:
+        app.logger.error("Error releasing throttle: %s", e, exc_info=True)
+        return jsonify({"error": "Failed to release throttle", "details": str(e)}), 500
 
 
 @app.route("/api/devices/policy", methods=["POST"])

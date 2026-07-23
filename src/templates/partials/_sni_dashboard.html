@@ -1,0 +1,53 @@
+<div id="sni-dashboard" class="tab-pane fade" role="tabpanel">
+    <div class="card mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">SNI Monitoring</h5>
+            <div class="d-flex gap-2">
+                <select id="sni-time-window" class="form-select form-select-sm" style="width: auto;">
+                    <option value="1m">Last 1 minute</option>
+                    <option value="5m" selected>Last 5 minutes</option>
+                    <option value="15m">Last 15 minutes</option>
+                    <option value="1h">Last 1 hour</option>
+                </select>
+                <select id="sni-client-filter" class="form-select form-select-sm" style="width: auto;">
+                    <option value="">All Clients</option>
+                </select>
+                <button class="btn btn-sm btn-primary" onclick="refreshSNI()">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh
+                </button>
+            </div>
+        </div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-6">
+                    <h6>Scroll Rate by Domain</h6>
+                    <canvas id="sni-scroll-chart"></canvas>
+                </div>
+                <div class="col-md-6">
+                    <h6>Top Domains by Request Count</h6>
+                    <canvas id="sni-domain-chart"></canvas>
+                </div>
+            </div>
+            <div class="row mt-4">
+                <div class="col-12">
+                    <h6>SNI Request Log</h6>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Time</th>
+                                    <th>Client IP</th>
+                                    <th>Domain</th>
+                                    <th>Velocity (RPS)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="sni-log-table">
+                                <tr><td colspan="4" class="text-center">Loading...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

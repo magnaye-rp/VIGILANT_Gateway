@@ -978,6 +978,10 @@
         <div class="nav-icon"><i class="fa-solid fa-eye"></i></div>
         <span>Behavioral Control</span>
       </div>
+      <div class="nav-item" onclick="switchTab('sni-monitoring')">
+        <div class="nav-icon"><i class="fa-solid fa-shield-halved"></i></div>
+        <span>SNI Monitoring</span>
+      </div>
       <div class="nav-item" onclick="switchTab('settings')">
         <div class="nav-icon"><i class="fa-solid fa-gear"></i></div>
         <span>Setup</span>
@@ -1014,6 +1018,7 @@
       {% include 'partials/_device_management.html' %}
       {% include 'partials/_settings_form.html' %}
       {% include 'partials/_traffic_logs.html' %}
+      {% include 'partials/_sni_dashboard.html' %}
 
       <!-- System Tab -->
       <div id="tab-system" class="tab-content active">

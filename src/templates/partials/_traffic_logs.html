@@ -25,6 +25,12 @@
               <option value="Distracting">Distracting</option>
               <option value="Harmful">Harmful</option>
             </select>
+            <select id="block-reason-filter" onchange="applyFilters()">
+              <option value="">All Block Reasons</option>
+              <option value="KEYWORD_MATCH">Keyword Match</option>
+              <option value="CATEGORY_BLOCKED">Category Blocked</option>
+              <option value="DOMAIN_BLOCKED">Domain Blocked</option>
+            </select>
           </div>
 
           <div style="overflow-x: auto;">
@@ -35,6 +41,7 @@
                   <th>Client IP</th>
                   <th>Domain</th>
                   <th>Category</th>
+                  <th>Block Reason</th>
                   <th>Blocked</th>
                 </tr>
               </thead>
