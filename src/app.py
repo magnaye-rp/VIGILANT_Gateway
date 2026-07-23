@@ -51,15 +51,15 @@ CACHE_TTL = 3.0  # Cache psutil process scans for 3 seconds
 BASE_DIR = Path(__file__).resolve().parent
 if BASE_DIR.name == "src":
     BASE_DIR = BASE_DIR.parent
-STATIC_DIR = BASE_DIR / "static"
-TEMPLATE_DIR = BASE_DIR / "templates"
+TEMPLATE_DIR = BASE_DIR / "src" / "templates"
+STATIC_DIR = BASE_DIR / "src" / "static"
 LOG_DIR = BASE_DIR / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 app = Flask(
     __name__,
-    static_folder=str(STATIC_DIR),
     template_folder=str(TEMPLATE_DIR),
+    static_folder=str(STATIC_DIR)
 )
 CORS(app, resources={r"/*": {"origins": "*"}})
 app.secret_key = "super_secret_vigilant_key"
