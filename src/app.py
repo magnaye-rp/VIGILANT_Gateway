@@ -65,7 +65,7 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 app.secret_key = "super_secret_vigilant_key"
 
 SERVER_IP = "192.168.10.1"
-PRODUCTION_DB_PATH = Path("/home/vigilant-admin/vigilant_gateway/logs/vigilant.db")
+PRODUCTION_DB_PATH = Path("/home/vigilant-admin/vigilant-gateway/logs/vigilant.db")
 LOCAL_DB_PATH = LOG_DIR / "vigilant.db"
 DB_TIMEOUT = 30.0
 
@@ -2277,7 +2277,7 @@ def _read_dnsmasq_leases() -> list:
     lease_paths = [
         "/var/lib/misc/dnsmasq.leases",
         "/var/lib/dnsmasq/dnsmasq.leases",
-        "/home/vigilant_admin/vigilant/logs/dnsmasq.leases"
+        "/home/vigilant-admin/vigilant/logs/dnsmasq.leases"
     ]
     
     for lease_path in lease_paths:
