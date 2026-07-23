@@ -1,2 +1,5 @@
 .venv/
 venv/
+.idea/
+src/logs/vigilant.db
+logs/
