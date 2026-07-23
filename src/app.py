@@ -191,6 +191,13 @@ def init_db() -> None:
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp REAL, client_ip TEXT, "
                 "host TEXT, path TEXT, method TEXT, category TEXT, flagged INTEGER DEFAULT 0, entities TEXT)"
             )
+            if _table_exists(connection, "traffic_log"):
+                if not _column_exists(connection, "traffic_log", "path"):
+                    connection.execute("ALTER TABLE traffic_log ADD COLUMN path TEXT")
+                if not _column_exists(connection, "traffic_log", "method"):
+                    connection.execute("ALTER TABLE traffic_log ADD COLUMN method TEXT")
+                if not _column_exists(connection, "traffic_log", "entities"):
+                    connection.execute("ALTER TABLE traffic_log ADD COLUMN entities TEXT")
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS config_settings (key TEXT PRIMARY KEY, value TEXT, updated_at REAL)"
             )

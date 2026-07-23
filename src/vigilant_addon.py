@@ -30,7 +30,7 @@ except ImportError:
 import os
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 PRODUCTION_DB_PATH = Path("/home/vigilant-admin/vigilant_gateway/logs/vigilant.db")
 LOCAL_DB_PATH = BASE_DIR / "logs" / "vigilant.db"
 
@@ -264,6 +264,19 @@ def init_db():
             entities    TEXT
         )
     """)
+    # Ensure all columns exist in traffic_log (handles legacy 6-column tables from setup.sh)
+    try:
+        columns = [row[1] for row in c.execute("PRAGMA table_info(traffic_log)").fetchall()]
+        if columns:
+            if "path" not in columns:
+                c.execute("ALTER TABLE traffic_log ADD COLUMN path TEXT")
+            if "method" not in columns:
+                c.execute("ALTER TABLE traffic_log ADD COLUMN method TEXT")
+            if "entities" not in columns:
+                c.execute("ALTER TABLE traffic_log ADD COLUMN entities TEXT")
+    except sqlite3.Error as e:
+        print(f"[VIGILANT] Migration error for traffic_log columns in init_db: {e}")
+
     c.execute("""
         CREATE TABLE IF NOT EXISTS throttle_events (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -453,7 +466,8 @@ def log_request(client_ip, host, path, method, category, flagged, entities):
         with db_lock:
             conn = _connect_db()
             conn.execute(
-                "INSERT INTO traffic_log VALUES (NULL,?,?,?,?,?,?,?,?)",
+                "INSERT INTO traffic_log (timestamp, client_ip, host, path, method, category, flagged, entities) "
+                "VALUES (?,?,?,?,?,?,?,?)",
                 (time.time(), client_ip, host, path, method,
                  category, int(flagged), str(entities))
             )

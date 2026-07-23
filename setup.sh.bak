@@ -574,8 +574,11 @@ def init_database():
             timestamp REAL,
             client_ip TEXT,
             host TEXT,
+            path TEXT,
+            method TEXT,
             category TEXT,
-            flagged INTEGER DEFAULT 0
+            flagged INTEGER DEFAULT 0,
+            entities TEXT
         )
     ''')
     
