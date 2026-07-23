@@ -14,8 +14,8 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # ─── Configuration ──────────────────────────────────────────────────────────
-VIGILANT_USER="vigilant-admin"
-VIGILANT_HOME="/home/$VIGILANT_USER/vigilant_gateway"
+VIGILANT_USER="vigilant_admin"
+VIGILANT_HOME="/home/$VIGILANT_USER/vigilant"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WAN_INTERFACE=""
 LAN_INTERFACE=""
@@ -132,7 +132,7 @@ stage_1_dependencies() {
         python3 python3-pip python3-venv \
         dnsmasq iptables iptables-persistent \
         netfilter-persistent \
-        git curl wget nano acl \
+        git curl wget nano \
         > /dev/null 2>&1
     
     log_success "System packages installed"
@@ -155,17 +155,9 @@ stage_2_directories() {
     
     log_info "Creating directory structure..."
     mkdir -p "$VIGILANT_HOME"/{addons,templates,static,scripts,logs,certs}
-    
-    # Secure permissions across operational system accounts
-    REAL_SUDO_USER="${SUDO_USER:-$USER}"
-    log_info "Setting cross-user directory access configurations for /home/${REAL_SUDO_USER}..."
-    chmod 755 "/home/${REAL_SUDO_USER}" 2>/dev/null || true
-    chmod 755 "/home/${REAL_SUDO_USER}/vigilant_gateway" 2>/dev/null || true
-    chmod 755 "/home/${REAL_SUDO_USER}/vigilant_gateway/src" 2>/dev/null || true
-    
     chown -R "$VIGILANT_USER:$VIGILANT_USER" "$VIGILANT_HOME"
     chmod -R 755 "$VIGILANT_HOME"
-    log_success "Directories and home parameters secured"
+    log_success "Directories created"
 }
 
 # ─── Stage 3: Python Virtual Environment ────────────────────────────────────
@@ -182,16 +174,15 @@ stage_3_python_env() {
     source "$VIGILANT_HOME/venv/bin/activate"
     pip install --upgrade pip > /dev/null 2>&1
     
-    # Only copy requirements.txt if repo and home paths differ
-    if [ "$REPO_DIR" != "$VIGILANT_HOME" ]; then
-        cp "$REPO_DIR/requirements.txt" "$VIGILANT_HOME/requirements.txt"
-    fi
-    
-    # Install from requirements file
-    pip install -r "$VIGILANT_HOME/requirements.txt" > /dev/null 2>&1
-    
-    # Install additional packages not in requirements.txt
-    pip install mitmproxy==9.0.1 spacy > /dev/null 2>&1
+    # FIX: Pin dependencies to prevent breaking upstream API alterations
+    pip install \
+        flask \
+        flask-cors \
+        mitmproxy==9.0.1 \
+        spacy \
+        psutil \
+        "bcrypt<4.1.0" \
+        > /dev/null 2>&1
     
     log_info "Downloading spaCy model (en_core_web_sm)..."
     python -m spacy download en_core_web_sm > /dev/null 2>&1
@@ -207,24 +198,10 @@ stage_4_copy_files() {
     log_info "═══════════════════════════════════════════"
     log_info "STAGE 4: COPYING APPLICATION FILES"
     log_info "═══════════════════════════════════════════"
-
-    log_info "Wiping old Python bytecode cache to force code reload..."
-    find "$VIGILANT_HOME" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-    find "$REPO_DIR" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
     
     log_info "Copying Python files..."
     cp "$REPO_DIR/src/app.py" "$VIGILANT_HOME/"
-    
-    # Establish operational symlink from active work tree
-    SRC_ADDON="$REPO_DIR/src/vigilant_addon.py"
-    if [ ! -f "$SRC_ADDON" ]; then
-        log_error "Source addon file not found at $SRC_ADDON!"
-        exit 1
-    fi
-    chmod 644 "$SRC_ADDON"
-    rm -f "$VIGILANT_HOME/addons/vigilant_addon.py"
-    ln -s "$SRC_ADDON" "$VIGILANT_HOME/addons/vigilant_addon.py"
-    log_success "Dynamic engine symlink mapped to repository source target"
+    cp "$REPO_DIR/src/vigilant_addon.py" "$VIGILANT_HOME/addons/"
     
     log_info "Copying templates..."
     cp -a "$REPO_DIR/src/templates/." "$VIGILANT_HOME/templates/"
@@ -254,45 +231,14 @@ stage_5_network_config() {
     log_info "Backing up netplan config..."
     cp /etc/netplan/00-installer-config.yaml \
        /etc/netplan/00-installer-config.yaml.bak 2>/dev/null || true
-
-    log_info "Configuring Netplan for WAN ($WAN_INTERFACE) and LAN ($LAN_INTERFACE)..."
     
-    # Netplan handles both ethernet and wifi interfaces under the hood for static assignment
-    cat > /etc/netplan/00-installer-config.yaml << EOF
-network:
-  version: 2
-  renderer: networkd
-  ethernets:
-    $WAN_INTERFACE:
-      dhcp4: true
-EOF
-
-    # If LAN is Wi-Fi, set under wifis section; if Ethernet, set under ethernets
-    if [[ "$LAN_INTERFACE" == wl* ]]; then
-        cat >> /etc/netplan/00-installer-config.yaml << EOF
-  wifis:
-    $LAN_INTERFACE:
-      dhcp4: no
-      addresses:
-        - 192.168.10.1/24
-      ignore-carrier: true
-EOF
-    else
-        cat >> /etc/netplan/00-installer-config.yaml << EOF
-    $LAN_INTERFACE:
-      dhcp4: no
-      addresses:
-        - 192.168.10.1/24
-      ignore-carrier: true
-EOF
-    fi
-
+    log_info "Applying netplan configuration..."
+    cp "$REPO_DIR/src/config/netplan-config.yaml" /etc/netplan/00-installer-config.yaml
+    
     log_info "Applying netplan changes..."
     netplan generate > /dev/null 2>&1
     netplan apply > /dev/null 2>&1
-    systemctl restart systemd-networkd > /dev/null 2>&1 || true
-    
-    log_success "Network configured: $WAN_INTERFACE (DHCP WAN), $LAN_INTERFACE (Static 192.168.10.1 LAN)"
+    log_success "Network configured"
 }
 
 # ─── Stage 6: DNS/DHCP Setup ────────────────────────────────────────────────
@@ -303,7 +249,7 @@ stage_6_dns_dhcp() {
     log_info "═══════════════════════════════════════════"
     
     log_info "Backing up dnsmasq.conf..."
-    cp /etc/dnsmasq.conf /etc/dnsmasq.conf.bak 2>/dev/null || true
+    cp /etc/dnsmasq.conf /etc/dnsmasq.conf.bak
     
     log_info "Generating dnsmasq.conf with dynamic interface..."
     sed "s/interface=enp0s6/interface=$LAN_INTERFACE/g" "$REPO_DIR/src/config/dnsmasq.conf" > /tmp/dnsmasq-vigilant.conf
@@ -314,6 +260,7 @@ stage_6_dns_dhcp() {
     systemctl restart dnsmasq
     
     log_info "Setting up dnsmasq log with proper permissions for VIGILANT addon..."
+    # Create log file with world-readable permissions so vigilant_admin can access it
     touch /var/log/dnsmasq.log
     chmod 644 /var/log/dnsmasq.log
     log_success "dnsmasq.log permissions set (644)"
@@ -329,9 +276,11 @@ stage_6_dns_dhcp() {
     missingok
     notifempty
     postrotate
+        # Ensure dnsmasq.log remains world-readable after rotation (fixes Permission denied for vigilant_admin)
         if [ -f /var/log/dnsmasq.log ]; then
             chmod 644 /var/log/dnsmasq.log
         fi
+        # Optionally signal dnsmasq to reopen its log file
         systemctl reload dnsmasq > /dev/null 2>&1 || true
     endscript
 }
@@ -355,6 +304,7 @@ stage_7_firewall() {
     log_info "STAGE 7: FIREWALL RULES"
     log_info "═══════════════════════════════════════════"
     
+    # FIX: Save the chosen interfaces to an environment file for Systemd to read later
     log_info "Saving network interface environment variables for systemd..."
     cat << EOF > "$VIGILANT_HOME/.env"
 WAN_INTERFACE=$WAN_INTERFACE
@@ -366,34 +316,44 @@ EOF
     WAN_INTERFACE="$WAN_INTERFACE" LAN_INTERFACE="$LAN_INTERFACE" bash "$VIGILANT_HOME/scripts/setup-iptables.sh"
     log_success "Firewall rules applied"
     
+    # Enable IPv4 packet forwarding
     log_info "Enabling IPv4 packet forwarding..."
     sysctl -w net.ipv4.ip_forward=1
     
+    # Make forwarding persistent
     if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
         echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
     fi
     log_success "IPv4 forwarding enabled and persistent"
     
+    # ─── NAT & Interception Rules ──────────────────────────────────────────
     log_info "Applying NAT routing rules..."
     iptables -t nat -A POSTROUTING -o "$WAN_INTERFACE" -j MASQUERADE
 
+    # Force external DNS traffic directly to your local dnsmasq instance
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p udp --dport 53 -j REDIRECT --to-ports 53
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 53 -j REDIRECT --to-ports 53
 
+    # **CRITICAL** - Ensure your original transparent proxy interceptions are still here!
+    # Without these, your clients will connect directly over TCP instead of routing to mitmproxy.
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 80 -j REDIRECT --to-ports 8080
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 443 -j REDIRECT --to-ports 8080
-    
-    iptables -A FORWARD -i "$LAN_INTERFACE" -p udp --dport 443 -j DROP
-    iptables -A FORWARD -i "$LAN_INTERFACE" -p udp --dport 80 -j DROP
+
+    # ─── Forwarding Rule Tree ──────────────────────────────────────────────
+    # 1. BLOCK UNWANTED PORTS FIRST
+    iptables -A FORWARD -i "$LAN_INTERFACE" -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable
+    iptables -A FORWARD -i "$LAN_INTERFACE" -p udp --dport 80 -j REJECT --reject-with icmp-port-unreachable
     iptables -A FORWARD -i "$LAN_INTERFACE" -p tcp --dport 853 -j REJECT
     iptables -A FORWARD -i "$LAN_INTERFACE" -p udp --dport 853 -j REJECT
     iptables -A OUTPUT -p udp --dport 443 -j DROP
-    iptables -A OUTPUT -p udp --dport 80 -j DROP
     ip6tables -P FORWARD DROP
 
+    # 2. ALLOW CLEAN SYSTEM TRAFFIC
     iptables -A FORWARD -i "$LAN_INTERFACE" -o "$WAN_INTERFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
     iptables -A FORWARD -i "$LAN_INTERFACE" -o "$WAN_INTERFACE" -j ACCEPT
 
+    
+    # Save rules persistently
     log_info "Saving iptables rules persistently..."
     if command -v netfilter-persistent &>/dev/null; then
         netfilter-persistent save
@@ -403,6 +363,9 @@ EOF
     log_success "NAT routing rules applied and saved persistently"
 }
 
+
+
+
 # ─── Stage 8: Certificates ──────────────────────────────────────────────────
 stage_8_certificates() {
     echo ""
@@ -411,6 +374,7 @@ stage_8_certificates() {
     log_info "═══════════════════════════════════════════"
     
     log_info "Generating mitmproxy certificates..."
+    # FIX: Explicitly run in the corrected virtual environment context
     sudo -u "$VIGILANT_USER" bash -c "
         source $VIGILANT_HOME/venv/bin/activate
         mitmdump --version > /dev/null 2>&1 || true
@@ -427,6 +391,7 @@ stage_9_systemd_services() {
     
     log_info "Generating custom systemd service files dynamically..."
 
+    # 1. Generate vigilant-firewall.service with dynamic EnvironmentFile link
     log_info "Creating vigilant-firewall.service..."
     cat << EOF > /etc/systemd/system/vigilant-firewall.service
 [Unit]
@@ -443,27 +408,27 @@ ExecStart=/usr/bin/bash $VIGILANT_HOME/scripts/setup-iptables.sh
 WantedBy=multi-user.target
 EOF
 
+    # 2. Generate vigilant-proxy.service with properly escaped Systemd literals
     log_info "Creating vigilant-proxy.service..."
-    cat << EOF > /etc/systemd/system/vigilant-proxy.service
+    # Note the 'EOF' around the identifier ensures the content inside is kept literally untouched
+    cat << 'EOF' > /etc/systemd/system/vigilant-proxy.service
 [Unit]
 Description=VIGILANT Transparent Proxy (mitmproxy)
 After=network.target vigilant-firewall.service
 
 [Service]
 Type=simple
-User=$VIGILANT_USER
-WorkingDirectory=$VIGILANT_HOME
+User=vigilant_admin
+WorkingDirectory=/home/vigilant_admin/vigilant
 Environment=PYTHONUNBUFFERED=1
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-ExecStart=$VIGILANT_HOME/venv/bin/mitmdump \
+ExecStart=/home/vigilant_admin/vigilant/venv/bin/mitmdump \
     --mode transparent \
     --showhost \
     --listen-host 0.0.0.0 \
     --listen-port 8080 \
     --set block_global=false \
-    --set connection_strategy=lazy \
-    -s $VIGILANT_HOME/src/vigilant_addon.py
+    --set ignore_hosts="^(.*\\.)?(facebook|twitter|x|tiktok|instagram|reddit|youtube)\\.com$" \
+    -s /home/vigilant_admin/vigilant/addons/vigilant_addon.py
 Restart=always
 RestartSec=5
 
@@ -471,6 +436,7 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
+    # 3. Generate vigilant-dashboard.service with strict working directory context
     log_info "Creating vigilant-dashboard.service..."
     cat << EOF > /etc/systemd/system/vigilant-dashboard.service
 [Unit]
@@ -479,7 +445,7 @@ After=network.target vigilant-proxy.service
 
 [Service]
 Type=simple
-User=$VIGILANT_USER
+User=vigilant_admin
 WorkingDirectory=$VIGILANT_HOME
 Environment=PYTHONUNBUFFERED=1
 ExecStart=$VIGILANT_HOME/venv/bin/python3 $VIGILANT_HOME/app.py
@@ -493,6 +459,7 @@ EOF
     log_info "Syncing the latest backend app.py into the runtime directory..."
     cp "$REPO_DIR/src/app.py" "$VIGILANT_HOME/app.py"
 
+    # 4. Correct runtime directory permissions
     log_info "Validating security context permissions for $VIGILANT_USER..."
     mkdir -p /home/$VIGILANT_USER/.mitmproxy
     chown -R "$VIGILANT_USER:$VIGILANT_USER" /home/$VIGILANT_USER/.mitmproxy
@@ -502,21 +469,8 @@ EOF
     systemctl daemon-reload
     
     log_info "Configuring passwordless systemctl permissions for dashboard management..."
-    # Clean up legacy/drift file if exists
-    rm -f /etc/sudoers.d/vigilant-dashboard
-    
-    cat << EOF > /etc/sudoers.d/vigilant
-$VIGILANT_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart vigilant-proxy, /bin/systemctl restart vigilant-proxy
-$VIGILANT_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl reload dnsmasq, /bin/systemctl reload dnsmasq
-$VIGILANT_USER ALL=(ALL) NOPASSWD: /usr/sbin/iptables-restore /etc/iptables/rules.v4, /sbin/iptables-restore /etc/iptables/rules.v4
-$VIGILANT_USER ALL=(ALL) NOPASSWD: /usr/bin/pkill -f mitmdump, /bin/pkill -f mitmdump
-$VIGILANT_USER ALL=(ALL) NOPASSWD: /usr/bin/pkill -HUP dnsmasq, /bin/pkill -HUP dnsmasq
-$VIGILANT_USER ALL=(ALL) NOPASSWD: /usr/sbin/netplan apply, /sbin/netplan apply
-$VIGILANT_USER ALL=(ALL) NOPASSWD: /usr/sbin/tc, /sbin/tc
-$VIGILANT_USER ALL=(ALL) NOPASSWD: /usr/sbin/iptables, /sbin/iptables, /usr/bin/iptables, /bin/iptables
-EOF
-    chmod 0440 /etc/sudoers.d/vigilant
-    visudo -c
+    echo "$VIGILANT_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart vigilant-proxy.service, /usr/bin/systemctl restart vigilant-dashboard.service, /usr/sbin/netplan apply, /sbin/tc, /sbin/iptables" | tee /etc/sudoers.d/vigilant-dashboard > /dev/null
+    chmod 0440 /etc/sudoers.d/vigilant-dashboard
     log_success "Passwordless sudo permissions configured"
     
     log_info "Enabling services for auto-start..."
@@ -529,7 +483,6 @@ EOF
 
     log_success "Services installed and enabled dynamically"
 }
-
 # ─── Stage 9.5: SQLite Database Initialization ───────────────────────────────
 stage_9_5_database_init() {
     echo ""
@@ -539,6 +492,7 @@ stage_9_5_database_init() {
     
     log_info "Running Python bootstrap routine to initialize database..."
     
+    # Create Python bootstrap script
     cat << 'EOF' > "$VIGILANT_HOME/init_db.py"
 #!/usr/bin/env python3
 import sqlite3
@@ -547,9 +501,13 @@ import os
 DB_PATH = os.path.join(os.path.dirname(__file__), 'logs', 'vigilant.db')
 
 def init_database():
+    """Initialize SQLite database with default configurations"""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+    
+    # Create config_settings table if not exists
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS config_settings (
             key TEXT PRIMARY KEY,
@@ -557,6 +515,8 @@ def init_database():
             updated_at REAL
         )
     ''')
+    
+    # Default configuration values matching UI
     default_configs = {
         'nlp_enabled': 'true',
         'keywords': 'tiktok, instagram, facebook, scroll, short',
@@ -567,16 +527,17 @@ def init_database():
         'sni_filtering_enabled': 'true',
         'upstream_interface': 'eth0',
         'distribution_interface': 'wlan0',
-        'theme_mode': 'dark',
-        'tfidf_classification_threshold': '0.05',
-        'tfidf_url_threshold': '0.3',
-        'tfidf_body_threshold': '0.15'
+        'theme_mode': 'dark'
     }
+    
+    # Insert defaults only if they don't exist
     for key, value in default_configs.items():
         cursor.execute('''
             INSERT OR IGNORE INTO config_settings (key, value, updated_at)
             VALUES (?, ?, ?)
         ''', (key, value, 0))
+    
+    # Create keyword_blacklist table if not exists
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS keyword_blacklist (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -584,11 +545,15 @@ def init_database():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    
+    # Initialize default keywords if table is empty
     cursor.execute('SELECT COUNT(*) FROM keyword_blacklist')
     if cursor.fetchone()[0] == 0:
         default_keywords = ['tiktok', 'instagram', 'facebook']
         for kw in default_keywords:
             cursor.execute('INSERT OR IGNORE INTO keyword_blacklist (keyword) VALUES (?)', (kw,))
+    
+    # Create network_devices table if not exists
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS network_devices (
             ip_address TEXT PRIMARY KEY,
@@ -601,6 +566,8 @@ def init_database():
             updated_at REAL
         )
     ''')
+    
+    # Create traffic_log table if not exists
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS traffic_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -611,8 +578,10 @@ def init_database():
             flagged INTEGER DEFAULT 0
         )
     ''')
+    
     conn.commit()
     conn.close()
+    
     print("Database initialized successfully with default configurations")
 
 if __name__ == '__main__':
@@ -621,11 +590,15 @@ EOF
     
     chmod +x "$VIGILANT_HOME/init_db.py"
     
+    # Run the bootstrap script in the virtual environment
     sudo -u "$VIGILANT_USER" bash -c "
         source $VIGILANT_HOME/venv/bin/activate
         python3 $VIGILANT_HOME/init_db.py
     "
+    
+    # Clean up bootstrap script
     rm "$VIGILANT_HOME/init_db.py"
+    
     log_success "SQLite database initialized with default configurations"
 }
 
@@ -669,18 +642,7 @@ stage_11_start_services() {
     log_info "═══════════════════════════════════════════"
     log_info "STAGE 11: STARTING SERVICES"
     log_info "═══════════════════════════════════════════"
-
-    log_info "Force-killing old ghost proxy and dashboard instances..."
-    # This ensures any hanging zombie python/mitm processes are entirely wiped from memory
-    sudo killall mitmdump python3 2>/dev/null || true
-    sleep 1
-
-    log_info "Reloading systemd and restarting updated engines..."
-    sudo systemctl daemon-reload
-    sudo systemctl restart vigilant-firewall
-    sudo systemctl restart vigilant-proxy
-    sudo systemctl restart vigilant-dashboard
-        
+    
     log_info "Starting firewall service..."
     systemctl start vigilant-firewall
     sleep 1
