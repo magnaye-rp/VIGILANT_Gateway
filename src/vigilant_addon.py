@@ -315,6 +315,17 @@ def init_db():
     c.execute("CREATE INDEX IF NOT EXISTS idx_sni_client_ip ON sni_requests(client_ip)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_sni_domain ON sni_requests(domain)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_sni_client_domain ON sni_requests(client_ip, domain)")
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS throttle_state (
+            client_ip   TEXT PRIMARY KEY,
+            is_throttled INTEGER DEFAULT 0,
+            applied_at  REAL,
+            recovery_at REAL,
+            cycle_count INTEGER DEFAULT 0
+        )
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_throttle_state_client ON throttle_state(client_ip)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_throttle_state_recovery ON throttle_state(recovery_at)")
     conn.commit()
     conn.close()
 
@@ -774,10 +785,19 @@ def get_distribution_interface():
     except Exception:
         return "eth1"
 
-def apply_throttle(client_ip):
-    """Apply Linux tc traffic control to throttle client bandwidth"""
+def apply_throttle(client_ip, rate=None):
+    """
+    Apply Linux traffic control (tc) rules to throttle bandwidth for a given client IP.
+    
+    Args:
+        client_ip: Client IP address to throttle
+        rate: Throttle rate (e.g., "256kbit", "10%"). If None, uses config default.
+    
+    Returns:
+        bool: True if throttle applied successfully, False otherwise
+    """
     config = load_proxy_config()
-    throttle_rate = config['throttle_rate']
+    throttle_rate = rate or config['throttle_rate']
     interface = get_distribution_interface()
 
     try:
@@ -804,19 +824,271 @@ def apply_throttle(client_ip):
         return False
 
 def remove_throttle(client_ip):
-    """Remove traffic control throttling for client IP"""
+    """
+    Remove traffic control throttling for client IP with full cleanup.
+    
+    Args:
+        client_ip: Client IP address to unthrottle
+    
+    Returns:
+        bool: True if throttle removed successfully, False otherwise
+    """
     interface = get_distribution_interface()
     try:
-        subprocess.run(
+        # Remove filter
+        result = subprocess.run(
             ["tc", "filter", "del", "dev", interface, "protocol", "ip", "parent", "1:0",
              "prio", "1", "u32", "match", "ip", "src", client_ip, "flowid", "1:10"],
             check=False, capture_output=True
         )
-        print(f"[VIGILANT] Throttling removed for {client_ip} on {interface}")
+        if result.returncode != 0 and result.stderr:
+            print(f"[VIGILANT] Filter removal message for {client_ip}: {result.stderr.decode().strip()}")
+
+        # Remove class if no other filters reference it
+        result = subprocess.run(
+            ["tc", "class", "del", "dev", interface, "parent", "1:", "classid", "1:10"],
+            check=False, capture_output=True
+        )
+        if result.returncode != 0 and result.stderr:
+            print(f"[VIGILANT] Class removal message for {client_ip}: {result.stderr.decode().strip()}")
+
+        # Remove qdisc if no classes remain
+        result = subprocess.run(
+            ["tc", "qdisc", "del", "dev", interface, "root"],
+            check=False, capture_output=True
+        )
+        if result.returncode != 0 and result.stderr:
+            print(f"[VIGILANT] Qdisc removal message for {client_ip}: {result.stderr.decode().strip()}")
+
+        print(f"[VIGILANT] Full throttle cleanup completed for {client_ip} on {interface}")
         return True
     except Exception as e:
-        print(f"[VIGILANT] Throttle removal failed for {client_ip}: {e}")
+        print(f"[VIGILANT] Throttle cleanup failed for {client_ip}: {e}")
         return False
+
+# Throttle cycle tracking
+throttle_timers = {}  # client_ip -> Timer object
+throttle_timers_lock = threading.Lock()
+THROTTLE_CYCLE_DURATION = 120  # 2 minutes in seconds
+
+
+def apply_throttle_cycle(client_ip):
+    """
+    Apply progressive 100% -> 10% -> 100% throttle cycle for doomscrolling detection.
+    
+    Args:
+        client_ip: Client IP address to throttle
+    
+    Returns:
+        bool: True if throttle cycle started successfully, False otherwise
+    """
+    # Cancel any existing timer for this client
+    with throttle_timers_lock:
+        if client_ip in throttle_timers:
+            try:
+                throttle_timers[client_ip].cancel()
+                print(f"[VIGILANT] Cancelled existing throttle timer for {client_ip}")
+            except Exception as e:
+                print(f"[VIGILANT] Error cancelling timer for {client_ip}: {e}")
+
+    # Drop to 10% immediately when doomscrolling detected (256kbit)
+    success = apply_throttle(client_ip, rate="256kbit")
+
+    if success:
+        # Save throttle state to database
+        save_throttle_state(client_ip, is_throttled=True, recovery_at=time.time() + THROTTLE_CYCLE_DURATION)
+
+        # Schedule automatic recovery after 2 minutes
+        recovery_timer = threading.Timer(
+            THROTTLE_CYCLE_DURATION,
+            remove_throttle_cycle,
+            args=[client_ip]
+        )
+
+        with throttle_timers_lock:
+            throttle_timers[client_ip] = recovery_timer
+
+        recovery_timer.start()
+
+        # Log to behavioral throttling table (separate from content filtering)
+        log_throttle(client_ip, "throttle_cycle", 0, 0, "THROTTLE_CYCLE_APPLIED", "Doomscrolling detected - 2-minute throttle cycle")
+
+        print(f"[VIGILANT] Throttle cycle started for {client_ip} - will recover in {THROTTLE_CYCLE_DURATION}s")
+
+    return success
+
+
+def remove_throttle_cycle(client_ip):
+    """
+    Remove throttle and clean up timer for a client IP.
+    
+    Args:
+        client_ip: Client IP address to unthrottle
+    """
+    # Remove TC rules
+    remove_throttle(client_ip)
+
+    # Clean up timer
+    with throttle_timers_lock:
+        if client_ip in throttle_timers:
+            del throttle_timers[client_ip]
+
+    # Clean up from active throttled_clients set
+    throttled_clients.discard(client_ip)
+
+    # Update throttle state
+    save_throttle_state(client_ip, is_throttled=False, recovery_at=0)
+
+    # Log recovery
+    log_throttle(client_ip, "throttle_cycle", 0, 0, "THROTTLE_CYCLE_REMOVED", "Throttle cycle completed - bandwidth restored")
+
+    print(f"[VIGILANT] Throttle cycle completed for {client_ip} - bandwidth restored")
+
+
+def save_throttle_state(client_ip, is_throttled, recovery_at):
+    """
+    Save throttle state to database for persistence across restarts.
+    
+    Args:
+        client_ip: Client IP address
+        is_throttled: Whether client is currently throttled
+        recovery_at: Unix timestamp when throttle should recover
+    """
+    try:
+        with db_lock:
+            conn = _connect_db()
+
+            cursor = conn.execute("SELECT cycle_count FROM throttle_state WHERE client_ip = ?", (client_ip,))
+            existing = cursor.fetchone()
+
+            if existing:
+                cycle_count = existing[0] + 1 if is_throttled else existing[0]
+                conn.execute(
+                    "UPDATE throttle_state SET is_throttled=?, applied_at=?, recovery_at=?, cycle_count=? WHERE client_ip=?",
+                    (int(is_throttled), time.time(), recovery_at, cycle_count, client_ip)
+                )
+            else:
+                cycle_count = 1 if is_throttled else 0
+                conn.execute(
+                    "INSERT INTO throttle_state (client_ip, is_throttled, applied_at, recovery_at, cycle_count) "
+                    "VALUES (?,?,?,?,?)",
+                    (client_ip, int(is_throttled), time.time(), recovery_at, cycle_count)
+                )
+
+            conn.commit()
+            conn.close()
+    except sqlite3.Error as e:
+        print(f"[VIGILANT] Database error in save_throttle_state: {e}")
+    except Exception as e:
+        print(f"[VIGILANT] Unexpected error in save_throttle_state: {e}")
+
+
+def load_throttle_state(client_ip):
+    """
+    Load throttle state from database.
+    
+    Args:
+        client_ip: Client IP address
+    
+    Returns:
+        dict: Throttle state or None
+    """
+    try:
+        with db_lock:
+            conn = _connect_db()
+            cursor = conn.execute(
+                "SELECT is_throttled, applied_at, recovery_at, cycle_count FROM throttle_state WHERE client_ip = ?",
+                (client_ip,)
+            )
+            row = cursor.fetchone()
+            conn.close()
+
+            if row:
+                return {
+                    "is_throttled": bool(row[0]),
+                    "applied_at": row[1],
+                    "recovery_at": row[2],
+                    "cycle_count": row[3]
+                }
+            return None
+    except sqlite3.Error as e:
+        print(f"[VIGILANT] Database error in load_throttle_state: {e}")
+        return None
+    except Exception as e:
+        print(f"[VIGILANT] Unexpected error in load_throttle_state: {e}")
+        return None
+
+
+def cleanup_stale_throttle_states():
+    """
+    Clean up expired throttle states from database.
+    """
+    try:
+        with db_lock:
+            conn = _connect_db()
+            now = time.time()
+            conn.execute(
+                "DELETE FROM throttle_state WHERE recovery_at < ? AND is_throttled = 0",
+                (now,)
+            )
+            deleted_count = conn.total_changes
+            conn.commit()
+            conn.close()
+
+            if deleted_count > 0:
+                print(f"[VIGILANT] Cleaned up {deleted_count} stale throttle states")
+    except sqlite3.Error as e:
+        print(f"[VIGILANT] Database error in cleanup_stale_throttle_states: {e}")
+    except Exception as e:
+        print(f"[VIGILANT] Unexpected error in cleanup_stale_throttle_states: {e}")
+
+
+def restore_throttle_states():
+    """
+    Restore active throttle states from database on proxy startup.
+    Re-applies throttling for clients that were throttled before restart.
+    """
+    time.sleep(5)  # Wait for proxy to fully initialize
+
+    try:
+        with db_lock:
+            conn = _connect_db()
+            now = time.time()
+            cursor = conn.execute(
+                "SELECT client_ip, recovery_at FROM throttle_state WHERE is_throttled = 1 AND recovery_at > ?",
+                (now,)
+            )
+            rows = cursor.fetchall()
+            conn.close()
+
+            for row in rows:
+                client_ip = row[0]
+                recovery_at = row[1]
+                time_remaining = recovery_at - now
+
+                if time_remaining > 0:
+                    print(f"[VIGILANT] Restoring throttle for {client_ip} ({time_remaining:.0f}s remaining)")
+                    apply_throttle(client_ip, rate="256kbit")
+
+                    recovery_timer = threading.Timer(
+                        time_remaining,
+                        remove_throttle_cycle,
+                        args=[client_ip]
+                    )
+
+                    with throttle_timers_lock:
+                        throttle_timers[client_ip] = recovery_timer
+
+                    recovery_timer.start()
+                    throttled_clients.add(client_ip)
+                else:
+                    save_throttle_state(client_ip, False, 0)
+
+            print(f"[VIGILANT] Restored {len(rows)} throttle states from database")
+    except sqlite3.Error as e:
+        print(f"[VIGILANT] Database error in restore_throttle_states: {e}")
+    except Exception as e:
+        print(f"[VIGILANT] Unexpected error in restore_throttle_states: {e}")
 
 # ─── DNS Log Tailing Thread ─────────────────────────────────────────────
 def tail_dnsmasq_log():
@@ -844,10 +1116,9 @@ def tail_dnsmasq_log():
                                     flagged, rpm_now, rpm_base = should_throttle(client_ip, domain)
                                     if flagged and client_ip not in throttled_clients:
                                         throttled_clients.add(client_ip)
-                                        log_throttle(client_ip, domain, rpm_now, rpm_base, "DNS_THROTTLE_APPLIED", "DNS velocity threshold exceeded")
-                                        apply_throttle(client_ip)
+                                        apply_throttle_cycle(client_ip)
                                         print(f"[VIGILANT] DNS DOOMSCROLL DETECTED {client_ip} @ {domain} "
-                                              f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
+                                              f"RPM={rpm_now:.1f} baseline={rpm_base:.1f} - throttle cycle initiated")
 
                                     log_request(client_ip, domain, "(DNS_QUERY)", "DNS", "DNS_Tracked", False, [], None)
                                     break
@@ -1004,6 +1275,10 @@ class VIGILANTAddon:
         dns_thread.start()
         print("[VIGILANT] DNS log tailing thread started")
 
+        restore_thread = threading.Thread(target=restore_throttle_states, daemon=True)
+        restore_thread.start()
+        print("[VIGILANT] Throttle state restoration thread started")
+
     def _refresh_rule_cache(self):
         """Fetch blacklisted keywords and category hints from the database."""
         try:
@@ -1089,10 +1364,9 @@ class VIGILANTAddon:
                 flagged, rpm_now, rpm_base = should_throttle(client_ip, server_name)
                 if flagged and client_ip not in throttled_clients:
                     throttled_clients.add(client_ip)
-                    log_throttle(client_ip, server_name, rpm_now, rpm_base, "TLS_THROTTLE_APPLIED", "SNI/TLS velocity threshold exceeded")
-                    apply_throttle(client_ip)
+                    apply_throttle_cycle(client_ip)
                     print(f"[VIGILANT] TLS DOOMSCROLL DETECTED {client_ip} @ {server_name} "
-                          f"RPM={rpm_now:.1f} baseline={rpm_base:.1f} RPS={velocity_rps:.2f}")
+                          f"RPM={rpm_now:.1f} baseline={rpm_base:.1f} RPS={velocity_rps:.2f} - throttle cycle initiated")
 
                 social_domains = load_social_domains()
                 clean_sni = server_name.lstrip("www.")
@@ -1246,10 +1520,9 @@ class VIGILANTAddon:
         flagged, rpm_now, rpm_base = should_throttle(client_ip, host)
         if flagged and client_ip not in throttled_clients:
             throttled_clients.add(client_ip)
-            log_throttle(client_ip, host, rpm_now, rpm_base, "HTTP_THROTTLE_APPLIED", "HTTP request velocity threshold exceeded")
-            apply_throttle(client_ip)
+            apply_throttle_cycle(client_ip)
             print(f"[VIGILANT] HTTP DOOMSCROLL DETECTED {client_ip} @ {host} "
-                  f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
+                  f"RPM={rpm_now:.1f} baseline={rpm_base:.1f} - throttle cycle initiated")
 
     def response(self, flow: http.HTTPFlow):
         try:

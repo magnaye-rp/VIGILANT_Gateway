@@ -220,6 +220,11 @@ def init_db() -> None:
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp REAL, client_ip TEXT, "
                 "domain TEXT, request_count INTEGER DEFAULT 1, velocity_rps REAL)"
             )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS throttle_state ("
+                "client_ip TEXT PRIMARY KEY, is_throttled INTEGER DEFAULT 0, "
+                "applied_at REAL, recovery_at REAL, cycle_count INTEGER DEFAULT 0)"
+            )
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_timestamp ON traffic_log(timestamp DESC)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_category ON traffic_log(category)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_flagged ON traffic_log(flagged)")
@@ -231,6 +236,8 @@ def init_db() -> None:
             connection.execute("CREATE INDEX IF NOT EXISTS idx_sni_client_ip ON sni_requests(client_ip)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_sni_domain ON sni_requests(domain)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_sni_client_domain ON sni_requests(client_ip, domain)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_throttle_state_client ON throttle_state(client_ip)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_throttle_state_recovery ON throttle_state(recovery_at)")
             connection.commit()
     except sqlite3.Error as exc:
         app.logger.debug("Database initialization encountered locking: %s", exc)
