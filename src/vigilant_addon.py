@@ -31,7 +31,7 @@ import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
-PRODUCTION_DB_PATH = Path("/home/vigilant_admin/vigilant/logs/vigilant.db")
+PRODUCTION_DB_PATH = Path("/home/vigilant-admin/vigilant_gateway/logs/vigilant.db")
 LOCAL_DB_PATH = BASE_DIR / "logs" / "vigilant.db"
 
 if PRODUCTION_DB_PATH.exists() and os.access(PRODUCTION_DB_PATH.parent, os.W_OK):

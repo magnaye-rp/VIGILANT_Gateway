@@ -65,7 +65,7 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 app.secret_key = "super_secret_vigilant_key"
 
 SERVER_IP = "192.168.10.1"
-PRODUCTION_DB_PATH = Path("/home/vigilant-admin/vigilant-gateway/logs/vigilant.db")
+PRODUCTION_DB_PATH = Path("/home/vigilant-admin/vigilant_gateway/logs/vigilant.db")
 LOCAL_DB_PATH = LOG_DIR / "vigilant.db"
 DB_TIMEOUT = 30.0
 
@@ -518,7 +518,7 @@ def _calculate_category_percentages(category_counts: dict) -> dict:
 
 
 def _parse_dnsmasq_config() -> dict:
-    config_path = Path("/home/vigilant_admin/vigilant/src/config/dnsmasq.conf")
+    config_path = Path("/home/vigilant-admin/vigilant/src/config/dnsmasq.conf")
     if not config_path.exists():
         config_path = Path("/etc/dnsmasq.conf")
     
@@ -556,7 +556,7 @@ def _parse_dnsmasq_config() -> dict:
 
 
 def _parse_netplan_config() -> dict:
-    config_path = Path("/home/vigilant_admin/vigilant/src/config/netplan-config.yaml")
+    config_path = Path("/home/vigilant-admin/vigilant/src/config/netplan-config.yaml")
     if not config_path.exists():
         config_path = Path("/etc/netplan/00-installer-config.yaml")
     
@@ -600,7 +600,7 @@ def _get_network_config() -> dict:
 
 
 def _write_dnsmasq_config(config: dict) -> bool:
-    config_path = Path("/home/vigilant_admin/vigilant/src/config/dnsmasq.conf")
+    config_path = Path("/home/vigilant-admin/vigilant/src/config/dnsmasq.conf")
     fallback_path = Path("/etc/dnsmasq.conf")
     
     # Try primary path first, check if directory exists and is writable
@@ -651,7 +651,7 @@ def _write_dnsmasq_config(config: dict) -> bool:
 
 
 def _write_netplan_config(config: dict) -> bool:
-    config_path = Path("/home/vigilant_admin/vigilant/src/config/netplan-config.yaml")
+    config_path = Path("/home/vigilant-admin/vigilant/src/config/netplan-config.yaml")
     fallback_path = Path("/etc/netplan/00-installer-config.yaml")
     if yaml is None:
         app.logger.warning("PyYAML not available, cannot write netplan config")

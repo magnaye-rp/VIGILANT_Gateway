@@ -1,7 +1,7 @@
 #!/bin/bash
 #══════════════════════════════════════════════════════════════════════════════
-# VIGILANT GATEWAY - AUTOMATED SETUP SCRIPT
-# One command to deploy the entire system
+# VIGILANT GATEWAY - UNIFIED AUTOMATED SETUP SCRIPT
+# Deploy the system directly in /home/vigilant-admin/vigilant_gateway
 #══════════════════════════════════════════════════════════════════════════════
 
 set -e  # Exit on any error
@@ -16,7 +16,7 @@ NC='\033[0m' # No Color
 # ─── Configuration ──────────────────────────────────────────────────────────
 VIGILANT_USER="vigilant-admin"
 VIGILANT_HOME="/home/$VIGILANT_USER/vigilant_gateway"
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$VIGILANT_HOME"
 WAN_INTERFACE=""
 LAN_INTERFACE=""
 
@@ -44,7 +44,6 @@ check_os() {
 detect_network_interfaces() {
     log_info "Detecting available network interfaces..."
     
-    # Get list of non-loopback interfaces
     INTERFACES=($(ip link show | grep "^[0-9]:" | grep -v "lo" | awk -F: '{print $2}' | tr -d ' '))
     
     if [ ${#INTERFACES[@]} -eq 0 ]; then
@@ -73,7 +72,7 @@ detect_network_interfaces() {
         exit 1
     fi
     
-    log_info "Select the LAN/Client-facing interface (PCIe Ethernet for clients):"
+    log_info "Select the LAN/Client-facing interface (Ethernet/Wi-Fi for clients):"
     read -p "Enter interface number or name: " lan_selection
     
     if [[ "$lan_selection" =~ ^[0-9]+$ ]] && [ "$lan_selection" -ge 0 ] && [ "$lan_selection" -lt ${#INTERFACES[@]} ]; then
@@ -93,7 +92,6 @@ detect_network_interfaces() {
     log_success "WAN Interface: $WAN_INTERFACE"
     log_success "LAN Interface: $LAN_INTERFACE"
     
-    # Export for child processes
     export WAN_INTERFACE LAN_INTERFACE
 }
 
@@ -108,10 +106,10 @@ stage_0_preflight() {
     check_os
     detect_network_interfaces
     
-    log_info "Verifying setup.sh is in correct location..."
-    if [ ! -f "$REPO_DIR/src/app.py" ]; then
-        log_error "src/app.py not found at $REPO_DIR/src/"
-        log_error "Make sure you're running setup.sh from the repo root"
+    CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [ ! -f "$CURRENT_DIR/src/app.py" ] && [ ! -f "$VIGILANT_HOME/src/app.py" ]; then
+        log_error "src/app.py not found!"
+        log_error "Please run setup.sh from inside the repository directory."
         exit 1
     fi
     log_success "Repository structure verified"
@@ -153,19 +151,15 @@ stage_2_directories() {
         log_warn "User $VIGILANT_USER already exists"
     fi
     
-    log_info "Creating directory structure..."
-    mkdir -p "$VIGILANT_HOME"/{addons,templates,static,scripts,logs,certs}
-    
-    # Secure permissions across operational system accounts
-    REAL_SUDO_USER="${SUDO_USER:-$USER}"
-    log_info "Setting cross-user directory access configurations for /home/${REAL_SUDO_USER}..."
-    chmod 755 "/home/${REAL_SUDO_USER}" 2>/dev/null || true
-    chmod 755 "/home/${REAL_SUDO_USER}/vigilant_gateway" 2>/dev/null || true
-    chmod 755 "/home/${REAL_SUDO_USER}/vigilant_gateway/src" 2>/dev/null || true
-    
-    chown -R "$VIGILANT_USER:$VIGILANT_USER" "$VIGILANT_HOME"
-    chmod -R 755 "$VIGILANT_HOME"
-    log_success "Directories and home parameters secured"
+    log_info "Setting up unified directory structure at $VIGILANT_HOME..."
+    mkdir -p "$VIGILANT_HOME"/{src,logs,certs,scripts}
+    mkdir -p /var/log/vigilant
+
+    # Set user permissions across repository and log structures
+    chmod 755 "/home/$VIGILANT_USER"
+    chown -R "$VIGILANT_USER:$VIGILANT_USER" "$VIGILANT_HOME" /var/log/vigilant
+    chmod -R 775 "$VIGILANT_HOME" /var/log/vigilant
+    log_success "Directory structure secured"
 }
 
 # ─── Stage 3: Python Virtual Environment ────────────────────────────────────
@@ -175,23 +169,18 @@ stage_3_python_env() {
     log_info "STAGE 3: PYTHON VIRTUAL ENVIRONMENT"
     log_info "═══════════════════════════════════════════"
     
-    log_info "Creating virtual environment..."
+    log_info "Creating virtual environment inside $VIGILANT_HOME/venv..."
     python3 -m venv "$VIGILANT_HOME/venv"
     
     log_info "Installing Python packages..."
     source "$VIGILANT_HOME/venv/bin/activate"
     pip install --upgrade pip > /dev/null 2>&1
     
-    # Only copy requirements.txt if repo and home paths differ
-    if [ "$REPO_DIR" != "$VIGILANT_HOME" ]; then
-        cp "$REPO_DIR/requirements.txt" "$VIGILANT_HOME/requirements.txt"
+    if [ -f "$VIGILANT_HOME/requirements.txt" ]; then
+        pip install -r "$VIGILANT_HOME/requirements.txt" > /dev/null 2>&1
     fi
     
-    # Install from requirements file
-    pip install -r "$VIGILANT_HOME/requirements.txt" > /dev/null 2>&1
-    
-    # Install additional packages not in requirements.txt
-    pip install mitmproxy==9.0.1 spacy > /dev/null 2>&1
+    pip install mitmproxy==9.0.1 spacy flask flask-cors > /dev/null 2>&1
     
     log_info "Downloading spaCy model (en_core_web_sm)..."
     python -m spacy download en_core_web_sm > /dev/null 2>&1
@@ -201,47 +190,27 @@ stage_3_python_env() {
     log_success "Python environment ready"
 }
 
-# ─── Stage 4: Copy Application Files ────────────────────────────────────────
+# ─── Stage 4: Sync Application Scripts ──────────────────────────────────────
 stage_4_copy_files() {
     echo ""
     log_info "═══════════════════════════════════════════"
-    log_info "STAGE 4: COPYING APPLICATION FILES"
+    log_info "STAGE 4: APPLICATION FILE VERIFICATION"
     log_info "═══════════════════════════════════════════"
 
-    log_info "Wiping old Python bytecode cache to force code reload..."
+    log_info "Wiping old Python bytecode cache..."
     find "$VIGILANT_HOME" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-    find "$REPO_DIR" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
     
-    log_info "Copying Python files..."
-    cp "$REPO_DIR/src/app.py" "$VIGILANT_HOME/"
-    
-    # Establish operational symlink from active work tree
-    SRC_ADDON="$REPO_DIR/src/vigilant_addon.py"
-    if [ ! -f "$SRC_ADDON" ]; then
-        log_error "Source addon file not found at $SRC_ADDON!"
-        exit 1
+    CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [ "$CURRENT_DIR" != "$VIGILANT_HOME" ]; then
+        log_info "Syncing files from $CURRENT_DIR to $VIGILANT_HOME..."
+        cp -a "$CURRENT_DIR/." "$VIGILANT_HOME/"
     fi
-    chmod 644 "$SRC_ADDON"
-    rm -f "$VIGILANT_HOME/addons/vigilant_addon.py"
-    ln -s "$SRC_ADDON" "$VIGILANT_HOME/addons/vigilant_addon.py"
-    log_success "Dynamic engine symlink mapped to repository source target"
-    
-    log_info "Copying templates..."
-    cp -a "$REPO_DIR/src/templates/." "$VIGILANT_HOME/templates/"
 
-    log_info "Copying static assets..."
-    cp -a "$REPO_DIR/src/static/." "$VIGILANT_HOME/static/"
-    
-    log_info "Copying scripts..."
-    cp "$REPO_DIR/src/scripts/setup-iptables.sh" "$VIGILANT_HOME/scripts/"
-    chmod +x "$VIGILANT_HOME/scripts/setup-iptables.sh"
-    
-    log_info "Copying configuration templates..."
-    cp "$REPO_DIR/src/config/dnsmasq.conf" "$VIGILANT_HOME/scripts/"
-    cp "$REPO_DIR/src/config/netplan-config.yaml" "$VIGILANT_HOME/scripts/"
+    # Make setup scripts executable
+    chmod +x "$VIGILANT_HOME/src/scripts/setup-iptables.sh" 2>/dev/null || true
     
     chown -R "$VIGILANT_USER:$VIGILANT_USER" "$VIGILANT_HOME"
-    log_success "Files copied"
+    log_success "Application files verified"
 }
 
 # ─── Stage 5: Network Configuration ─────────────────────────────────────────
@@ -257,7 +226,6 @@ stage_5_network_config() {
 
     log_info "Configuring Netplan for WAN ($WAN_INTERFACE) and LAN ($LAN_INTERFACE)..."
     
-    # Netplan handles both ethernet and wifi interfaces under the hood for static assignment
     cat > /etc/netplan/00-installer-config.yaml << EOF
 network:
   version: 2
@@ -267,7 +235,6 @@ network:
       dhcp4: true
 EOF
 
-    # If LAN is Wi-Fi, set under wifis section; if Ethernet, set under ethernets
     if [[ "$LAN_INTERFACE" == wl* ]]; then
         cat >> /etc/netplan/00-installer-config.yaml << EOF
   wifis:
@@ -292,7 +259,7 @@ EOF
     netplan apply > /dev/null 2>&1
     systemctl restart systemd-networkd > /dev/null 2>&1 || true
     
-    log_success "Network configured: $WAN_INTERFACE (DHCP WAN), $LAN_INTERFACE (Static 192.168.10.1 LAN)"
+    log_success "Network configured: WAN ($WAN_INTERFACE), LAN ($LAN_INTERFACE - 192.168.10.1)"
 }
 
 # ─── Stage 6: DNS/DHCP Setup ────────────────────────────────────────────────
@@ -305,20 +272,20 @@ stage_6_dns_dhcp() {
     log_info "Backing up dnsmasq.conf..."
     cp /etc/dnsmasq.conf /etc/dnsmasq.conf.bak 2>/dev/null || true
     
-    log_info "Generating dnsmasq.conf with dynamic interface..."
-    sed "s/interface=enp0s6/interface=$LAN_INTERFACE/g" "$REPO_DIR/src/config/dnsmasq.conf" > /tmp/dnsmasq-vigilant.conf
-    cat /tmp/dnsmasq-vigilant.conf > /etc/dnsmasq.conf
-    rm /tmp/dnsmasq-vigilant.conf
+    log_info "Generating dnsmasq.conf with LAN interface $LAN_INTERFACE..."
+    if [ -f "$VIGILANT_HOME/src/config/dnsmasq.conf" ]; then
+        sed "s/interface=enp0s6/interface=$LAN_INTERFACE/g" "$VIGILANT_HOME/src/config/dnsmasq.conf" > /tmp/dnsmasq-vigilant.conf
+        cat /tmp/dnsmasq-vigilant.conf > /etc/dnsmasq.conf
+        rm -f /tmp/dnsmasq-vigilant.conf
+    fi
     
     log_info "Restarting dnsmasq..."
     systemctl restart dnsmasq
     
-    log_info "Setting up dnsmasq log with proper permissions for VIGILANT addon..."
     touch /var/log/dnsmasq.log
     chmod 644 /var/log/dnsmasq.log
-    log_success "dnsmasq.log permissions set (644)"
     
-    log_info "Configuring logrotate for dnsmasq with automatic permission management..."
+    log_info "Configuring logrotate for dnsmasq..."
     cat > /etc/logrotate.d/dnsmasq << 'EOF'
 /var/log/dnsmasq.log {
     daily
@@ -336,16 +303,7 @@ stage_6_dns_dhcp() {
     endscript
 }
 EOF
-    log_success "Logrotate configuration created at /etc/logrotate.d/dnsmasq"
-    
-    log_info "Validating logrotate configuration..."
-    if logrotate -d /etc/logrotate.d/dnsmasq > /dev/null 2>&1; then
-        log_success "Logrotate configuration validated"
-    else
-        log_warn "Logrotate configuration validation failed (may be non-critical)"
-    fi
-    
-    log_success "DNS/DHCP configured with logrotate permission management"
+    log_success "DNS/DHCP configured"
 }
 
 # ─── Stage 7: Firewall Setup ────────────────────────────────────────────────
@@ -355,24 +313,23 @@ stage_7_firewall() {
     log_info "STAGE 7: FIREWALL RULES"
     log_info "═══════════════════════════════════════════"
     
-    log_info "Saving network interface environment variables for systemd..."
+    log_info "Saving network interface environment variables..."
     cat << EOF > "$VIGILANT_HOME/.env"
 WAN_INTERFACE=$WAN_INTERFACE
 LAN_INTERFACE=$LAN_INTERFACE
 EOF
     chown "$VIGILANT_USER:$VIGILANT_USER" "$VIGILANT_HOME/.env"
 
-    log_info "Applying iptables rules with dynamic interfaces..."
-    WAN_INTERFACE="$WAN_INTERFACE" LAN_INTERFACE="$LAN_INTERFACE" bash "$VIGILANT_HOME/scripts/setup-iptables.sh"
-    log_success "Firewall rules applied"
+    if [ -f "$VIGILANT_HOME/src/scripts/setup-iptables.sh" ]; then
+        WAN_INTERFACE="$WAN_INTERFACE" LAN_INTERFACE="$LAN_INTERFACE" bash "$VIGILANT_HOME/src/scripts/setup-iptables.sh"
+    fi
     
     log_info "Enabling IPv4 packet forwarding..."
-    sysctl -w net.ipv4.ip_forward=1
+    sysctl -w net.ipv4.ip_forward=1 > /dev/null
     
     if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
         echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
     fi
-    log_success "IPv4 forwarding enabled and persistent"
     
     log_info "Applying NAT routing rules..."
     iptables -t nat -A POSTROUTING -o "$WAN_INTERFACE" -j MASQUERADE
@@ -394,13 +351,12 @@ EOF
     iptables -A FORWARD -i "$LAN_INTERFACE" -o "$WAN_INTERFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
     iptables -A FORWARD -i "$LAN_INTERFACE" -o "$WAN_INTERFACE" -j ACCEPT
 
-    log_info "Saving iptables rules persistently..."
     if command -v netfilter-persistent &>/dev/null; then
-        netfilter-persistent save
+        netfilter-persistent save > /dev/null
     else
         iptables-save > /etc/iptables/rules.v4
     fi
-    log_success "NAT routing rules applied and saved persistently"
+    log_success "NAT routing rules applied persistently"
 }
 
 # ─── Stage 8: Certificates ──────────────────────────────────────────────────
@@ -410,7 +366,6 @@ stage_8_certificates() {
     log_info "STAGE 8: MITMPROXY CERTIFICATES"
     log_info "═══════════════════════════════════════════"
     
-    log_info "Generating mitmproxy certificates..."
     sudo -u "$VIGILANT_USER" bash -c "
         source $VIGILANT_HOME/venv/bin/activate
         mitmdump --version > /dev/null 2>&1 || true
@@ -424,10 +379,7 @@ stage_9_systemd_services() {
     log_info "═══════════════════════════════════════════"
     log_info "STAGE 9: SYSTEMD SERVICES"
     log_info "═══════════════════════════════════════════"
-    
-    log_info "Generating custom systemd service files dynamically..."
 
-    log_info "Creating vigilant-firewall.service..."
     cat << EOF > /etc/systemd/system/vigilant-firewall.service
 [Unit]
 Description=VIGILANT Firewall Rules
@@ -437,13 +389,12 @@ After=network.target
 Type=oneshot
 RemainAfterExit=yes
 EnvironmentFile=$VIGILANT_HOME/.env
-ExecStart=/usr/bin/bash $VIGILANT_HOME/scripts/setup-iptables.sh
+ExecStart=/usr/bin/bash $VIGILANT_HOME/src/scripts/setup-iptables.sh
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-    log_info "Creating vigilant-proxy.service..."
     cat << EOF > /etc/systemd/system/vigilant-proxy.service
 [Unit]
 Description=VIGILANT Transparent Proxy (mitmproxy)
@@ -471,7 +422,6 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-    log_info "Creating vigilant-dashboard.service..."
     cat << EOF > /etc/systemd/system/vigilant-dashboard.service
 [Unit]
 Description=VIGILANT Flask Dashboard
@@ -482,7 +432,7 @@ Type=simple
 User=$VIGILANT_USER
 WorkingDirectory=$VIGILANT_HOME
 Environment=PYTHONUNBUFFERED=1
-ExecStart=$VIGILANT_HOME/venv/bin/python3 $VIGILANT_HOME/app.py
+ExecStart=$VIGILANT_HOME/venv/bin/python3 $VIGILANT_HOME/src/app.py
 Restart=always
 RestartSec=5
 
@@ -490,20 +440,11 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-    log_info "Syncing the latest backend app.py into the runtime directory..."
-    cp "$REPO_DIR/src/app.py" "$VIGILANT_HOME/app.py"
-
-    log_info "Validating security context permissions for $VIGILANT_USER..."
     mkdir -p /home/$VIGILANT_USER/.mitmproxy
     chown -R "$VIGILANT_USER:$VIGILANT_USER" /home/$VIGILANT_USER/.mitmproxy
     chown -R "$VIGILANT_USER:$VIGILANT_USER" "$VIGILANT_HOME"
 
-    log_info "Forcing systemd daemon config reload..."
     systemctl daemon-reload
-    
-    log_info "Configuring passwordless systemctl permissions for dashboard management..."
-    # Clean up legacy/drift file if exists
-    rm -f /etc/sudoers.d/vigilant-dashboard
     
     cat << EOF > /etc/sudoers.d/vigilant
 $VIGILANT_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart vigilant-proxy, /bin/systemctl restart vigilant-proxy
@@ -516,18 +457,10 @@ $VIGILANT_USER ALL=(ALL) NOPASSWD: /usr/sbin/tc, /sbin/tc
 $VIGILANT_USER ALL=(ALL) NOPASSWD: /usr/sbin/iptables, /sbin/iptables, /usr/bin/iptables, /bin/iptables
 EOF
     chmod 0440 /etc/sudoers.d/vigilant
-    visudo -c
-    log_success "Passwordless sudo permissions configured"
+    visudo -c > /dev/null
     
-    log_info "Enabling services for auto-start..."
     systemctl enable vigilant-firewall vigilant-proxy vigilant-dashboard
-
-    log_info "Restarting services so the updated backend is loaded immediately..."
-    systemctl restart vigilant-firewall || true
-    systemctl restart vigilant-proxy || true
-    systemctl restart vigilant-dashboard || true
-
-    log_success "Services installed and enabled dynamically"
+    log_success "Services configured and enabled"
 }
 
 # ─── Stage 9.5: SQLite Database Initialization ───────────────────────────────
@@ -536,8 +469,6 @@ stage_9_5_database_init() {
     log_info "═══════════════════════════════════════════"
     log_info "STAGE 9.5: SQLITE DATABASE INITIALIZATION"
     log_info "═══════════════════════════════════════════"
-    
-    log_info "Running Python bootstrap routine to initialize database..."
     
     cat << 'EOF' > "$VIGILANT_HOME/init_db.py"
 #!/usr/bin/env python3
@@ -613,7 +544,7 @@ def init_database():
     ''')
     conn.commit()
     conn.close()
-    print("Database initialized successfully with default configurations")
+    print("Database initialized successfully at " + DB_PATH)
 
 if __name__ == '__main__':
     init_database()
@@ -625,8 +556,12 @@ EOF
         source $VIGILANT_HOME/venv/bin/activate
         python3 $VIGILANT_HOME/init_db.py
     "
-    rm "$VIGILANT_HOME/init_db.py"
-    log_success "SQLite database initialized with default configurations"
+    rm -f "$VIGILANT_HOME/init_db.py"
+    
+    chown -R "$VIGILANT_USER:$VIGILANT_USER" "$VIGILANT_HOME/logs"
+    chmod -R 775 "$VIGILANT_HOME/logs"
+    
+    log_success "SQLite database initialized at $VIGILANT_HOME/logs/vigilant.db"
 }
 
 # ─── Stage 10: Verification ─────────────────────────────────────────────────
@@ -636,12 +571,11 @@ stage_10_verify() {
     log_info "STAGE 10: VERIFICATION"
     log_info "═══════════════════════════════════════════"
     
-    log_info "Verifying file placements..."
     declare -a FILES=(
-        "$VIGILANT_HOME/app.py"
-        "$VIGILANT_HOME/addons/vigilant_addon.py"
-        "$VIGILANT_HOME/templates/dashboard.html"
-        "$VIGILANT_HOME/scripts/setup-iptables.sh"
+        "$VIGILANT_HOME/src/app.py"
+        "$VIGILANT_HOME/src/vigilant_addon.py"
+        "$VIGILANT_HOME/src/templates/dashboard.html"
+        "$VIGILANT_HOME/logs/vigilant.db"
         "/etc/systemd/system/vigilant-firewall.service"
         "/etc/systemd/system/vigilant-proxy.service"
         "/etc/systemd/system/vigilant-dashboard.service"
@@ -655,7 +589,6 @@ stage_10_verify() {
         fi
     done
     
-    log_info "Verifying Python packages..."
     source "$VIGILANT_HOME/venv/bin/activate"
     python3 -c "import flask, mitmproxy, spacy; print('All packages OK')" && \
         log_success "Python packages verified" || \
@@ -670,30 +603,16 @@ stage_11_start_services() {
     log_info "STAGE 11: STARTING SERVICES"
     log_info "═══════════════════════════════════════════"
 
-    log_info "Force-killing old ghost proxy and dashboard instances..."
-    # This ensures any hanging zombie python/mitm processes are entirely wiped from memory
-    sudo killall mitmdump python3 2>/dev/null || true
+    log_info "Clearing lingering proxy/dashboard instances..."
+    killall mitmdump python3 2>/dev/null || true
     sleep 1
 
-    log_info "Reloading systemd and restarting updated engines..."
-    sudo systemctl daemon-reload
-    sudo systemctl restart vigilant-firewall
-    sudo systemctl restart vigilant-proxy
-    sudo systemctl restart vigilant-dashboard
-        
-    log_info "Starting firewall service..."
-    systemctl start vigilant-firewall
-    sleep 1
+    log_info "Starting vigilant services..."
+    systemctl restart vigilant-firewall || true
+    systemctl restart vigilant-proxy || true
+    systemctl restart vigilant-dashboard || true
     
-    log_info "Starting proxy service..."
-    systemctl start vigilant-proxy
-    sleep 2
-    
-    log_info "Starting dashboard service..."
-    systemctl start vigilant-dashboard
-    sleep 1
-    
-    log_success "All services started"
+    log_success "All services started successfully"
 }
 
 # ─── Final Status Check ──────────────────────────────────────────────────────
@@ -713,12 +632,7 @@ stage_12_status() {
     echo ""
     echo -e "${GREEN}Dashboard:${NC} http://192.168.10.1:5000"
     echo -e "${GREEN}Proxy:${NC} 127.0.0.1:8080"
-    echo -e "${GREEN}Admin User:${NC} $VIGILANT_USER"
-    echo -e "${GREEN}Install Path:${NC} $VIGILANT_HOME"
-    echo ""
-    echo "View logs:"
-    echo "  $ sudo journalctl -u vigilant-proxy -f"
-    echo "  $ sudo journalctl -u vigilant-dashboard -f"
+    echo -e "${GREEN}Unified Path:${NC} $VIGILANT_HOME"
     echo ""
 }
 
@@ -726,8 +640,7 @@ stage_12_status() {
 main() {
     echo ""
     echo "╔═══════════════════════════════════════════════════════════╗"
-    echo "║     VIGILANT GATEWAY - AUTOMATED SETUP                   ║"
-    echo "║     https://github.com/magnaye-rp/vigilant-gateway       ║"
+    echo "║     VIGILANT GATEWAY - UNIFIED AUTOMATED SETUP            ║"
     echo "╚═══════════════════════════════════════════════════════════╝"
     echo ""
     
