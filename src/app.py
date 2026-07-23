@@ -189,7 +189,7 @@ def init_db() -> None:
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS traffic_log ("
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp REAL, client_ip TEXT, "
-                "host TEXT, path TEXT, method TEXT, category TEXT, flagged INTEGER DEFAULT 0, entities TEXT)"
+                "host TEXT, path TEXT, method TEXT, category TEXT, flagged INTEGER DEFAULT 0, entities TEXT, block_reason TEXT)"
             )
             if _table_exists(connection, "traffic_log"):
                 if not _column_exists(connection, "traffic_log", "path"):
@@ -198,6 +198,8 @@ def init_db() -> None:
                     connection.execute("ALTER TABLE traffic_log ADD COLUMN method TEXT")
                 if not _column_exists(connection, "traffic_log", "entities"):
                     connection.execute("ALTER TABLE traffic_log ADD COLUMN entities TEXT")
+                if not _column_exists(connection, "traffic_log", "block_reason"):
+                    connection.execute("ALTER TABLE traffic_log ADD COLUMN block_reason TEXT")
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS config_settings (key TEXT PRIMARY KEY, value TEXT, updated_at REAL)"
             )
@@ -213,12 +215,22 @@ def init_db() -> None:
             )
             if not _column_exists(connection, "throttle_events", "reason"):
                 connection.execute("ALTER TABLE throttle_events ADD COLUMN reason TEXT")
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS sni_requests ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp REAL, client_ip TEXT, "
+                "domain TEXT, request_count INTEGER DEFAULT 1, velocity_rps REAL)"
+            )
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_timestamp ON traffic_log(timestamp DESC)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_category ON traffic_log(category)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_flagged ON traffic_log(flagged)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_client_ip ON traffic_log(client_ip)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_block_reason ON traffic_log(block_reason)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_throttle_timestamp ON throttle_events(timestamp DESC)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_throttle_client_ip ON throttle_events(client_ip)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_sni_timestamp ON sni_requests(timestamp DESC)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_sni_client_ip ON sni_requests(client_ip)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_sni_domain ON sni_requests(domain)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_sni_client_domain ON sni_requests(client_ip, domain)")
             connection.commit()
     except sqlite3.Error as exc:
         app.logger.debug("Database initialization encountered locking: %s", exc)
@@ -912,6 +924,27 @@ def _decorate_traffic_log_row(row: sqlite3.Row | dict) -> dict:
     log_dict["flagged"] = bool(log_dict.get("flagged", 0))
     log_dict["formatted_time"] = formatted_time
     log_dict["iso_timestamp"] = iso_timestamp
+
+    # Parse block_reason if present
+    block_reason = log_dict.get("block_reason", "")
+    if block_reason:
+        # Convert comma-separated to list for UI
+        log_dict["block_reasons"] = [r.strip() for r in str(block_reason).split(",") if r.strip()]
+    else:
+        log_dict["block_reasons"] = []
+
+    return log_dict
+
+
+def _decorate_sni_request_row(row: sqlite3.Row | dict) -> dict:
+    """Decorate SNI request row with formatted fields."""
+    log_dict = dict(row) if hasattr(row, "keys") else dict(row)
+    formatted_time, iso_timestamp = _format_timestamp_fields(log_dict.get("timestamp"))
+    log_dict.update({
+        "formatted_time": formatted_time,
+        "iso_timestamp": iso_timestamp,
+        "velocity_rps": round(float(log_dict.get("velocity_rps") or 0), 2)
+    })
     return log_dict
 
 
@@ -1431,6 +1464,11 @@ def get_traffic_logs():
             where_clauses.append("timestamp > ?")
             params.append(since_timestamp)
         
+        block_reason_param = request.args.get('block_reason', '').strip()
+        if block_reason_param:
+            where_clauses.append("block_reason LIKE ?")
+            params.append(f"%{block_reason_param}%")
+
         where_sql = " AND ".join(where_clauses)
         
         logs = []
@@ -1444,8 +1482,9 @@ def get_traffic_logs():
                     total_count = connection.execute(count_query, tuple(params)).fetchone()[0] or 0
                     
                     # Fetch logs with pagination
+                    select_block_reason = "block_reason" if _column_exists(connection, "traffic_log", "block_reason") else "NULL AS block_reason"
                     log_query = f"""
-                        SELECT id, timestamp, client_ip, host, path, method, category, flagged, entities
+                        SELECT id, timestamp, client_ip, host, path, method, category, flagged, entities, {select_block_reason}
                         FROM traffic_log
                         WHERE {where_sql}
                         ORDER BY timestamp DESC
@@ -1505,8 +1544,9 @@ def refresh_traffic_logs():
         if DB_PATH.exists():
             with _open_db() as connection:
                 if _table_exists(connection, "traffic_log"):
+                    select_block_reason = "block_reason" if _column_exists(connection, "traffic_log", "block_reason") else "NULL AS block_reason"
                     log_query = f"""
-                        SELECT id, timestamp, client_ip, host, path, method, category, flagged, entities
+                        SELECT id, timestamp, client_ip, host, path, method, category, flagged, entities, {select_block_reason}
                         FROM traffic_log
                         WHERE {where_sql}
                         ORDER BY timestamp DESC
@@ -1584,9 +1624,10 @@ def get_throttling_logs():
                         where_clauses.append("timestamp > ?")
                         params.append(since_timestamp)
 
+                    select_block_reason = "block_reason" if _column_exists(connection, "traffic_log", "block_reason") else "NULL AS block_reason"
                     rows = connection.execute(
                         f"""
-                        SELECT id, timestamp, client_ip, host, path, method, category, flagged, entities
+                        SELECT id, timestamp, client_ip, host, path, method, category, flagged, entities, {select_block_reason}
                         FROM traffic_log
                         WHERE {" AND ".join(where_clauses)}
                         ORDER BY timestamp DESC
@@ -1651,9 +1692,10 @@ def export_logs():
                     throttle_rows.extend(_decorate_throttle_event_row(row) for row in rows)
 
                 if _table_exists(connection, "traffic_log"):
+                    select_block_reason = "block_reason" if _column_exists(connection, "traffic_log", "block_reason") else "NULL AS block_reason"
                     rows = connection.execute(
                         f"""
-                        SELECT id, timestamp, client_ip, host, path, method, category, flagged, entities
+                        SELECT id, timestamp, client_ip, host, path, method, category, flagged, entities, {select_block_reason}
                         FROM traffic_log
                         WHERE {_l4_tracking_filter_sql()}
                         ORDER BY timestamp DESC
@@ -1680,12 +1722,13 @@ def export_logs():
                     ])
                 download_name = "throttling_logs_export.csv"
             else:
-                cw.writerow(['ID', 'Time', 'Client IP', 'Domain', 'Path', 'Method', 'Category', 'Status', 'Entities'])
+                cw.writerow(['ID', 'Time', 'Client IP', 'Domain', 'Path', 'Method', 'Category', 'Status', 'Entities', 'Block Reason'])
                 rows = []
                 if _table_exists(connection, "traffic_log"):
+                    select_block_reason = "block_reason" if _column_exists(connection, "traffic_log", "block_reason") else "NULL AS block_reason"
                     rows = connection.execute(
                         f"""
-                        SELECT id, timestamp, client_ip, host, path, method, category, flagged, entities
+                        SELECT id, timestamp, client_ip, host, path, method, category, flagged, entities, {select_block_reason}
                         FROM traffic_log
                         WHERE {_l7_traffic_filter_sql()}
                         ORDER BY timestamp DESC
@@ -1695,6 +1738,7 @@ def export_logs():
                 for log in (_decorate_traffic_log_row(row) for row in rows):
                     entities = str(log.get('entities') or '').replace('\n', ' ').replace('"', "'")
                     status = 'Blocked' if log.get('flagged') else 'Allowed'
+                    block_reason_val = log.get('block_reason', '')
                     cw.writerow([
                         log.get('id', ''),
                         log.get('formatted_time', 'N/A'),
@@ -1705,6 +1749,7 @@ def export_logs():
                         log.get('category', 'Unclassified'),
                         status,
                         entities,
+                        str(block_reason_val).replace('\n', ' ').replace('"', "'") if block_reason_val else '',
                     ])
 
         byte_stream = io.BytesIO(text_stream.getvalue().encode('utf-8'))
@@ -1722,6 +1767,172 @@ def export_logs():
     except Exception as e:
         app.logger.error("Failed to export logs: %s", e, exc_info=True)
         return jsonify({"error": "Failed to export logs", "details": str(e)}), 500
+
+
+@app.route('/api/sni/requests', methods=["GET"])
+def get_sni_requests():
+    """Fetch SNI request logs with filtering and pagination support."""
+    try:
+        limit = max(1, min(request.args.get('limit', 100, type=int), 1000))
+        offset = max(0, request.args.get('offset', 0, type=int))
+        client_ip = request.args.get('client_ip', '').strip()
+        domain = request.args.get('domain', '').strip()
+        start_time = request.args.get('start_time', type=float)
+        end_time = request.args.get('end_time', type=float)
+
+        where_clauses = ["1=1"]
+        params = []
+
+        if client_ip:
+            where_clauses.append("client_ip = ?")
+            params.append(client_ip)
+
+        if domain:
+            where_clauses.append("domain LIKE ?")
+            params.append(f"%{domain}%")
+
+        if start_time:
+            where_clauses.append("timestamp >= ?")
+            params.append(start_time)
+
+        if end_time:
+            where_clauses.append("timestamp <= ?")
+            params.append(end_time)
+
+        where_sql = " AND ".join(where_clauses)
+
+        sni_logs = []
+        total_count = 0
+
+        if DB_PATH.exists():
+            with _open_db() as connection:
+                if _table_exists(connection, "sni_requests"):
+                    count_query = f"SELECT COUNT(*) FROM sni_requests WHERE {where_sql}"
+                    total_count = connection.execute(count_query, tuple(params)).fetchone()[0] or 0
+
+                    log_query = f"""
+                        SELECT id, timestamp, client_ip, domain, request_count, velocity_rps
+                        FROM sni_requests
+                        WHERE {where_sql}
+                        ORDER BY timestamp DESC
+                        LIMIT ? OFFSET ?
+                    """
+                    log_params = params + [limit, offset]
+
+                    rows = connection.execute(log_query, tuple(log_params)).fetchall()
+                    sni_logs = [_decorate_sni_request_row(row) for row in rows]
+
+        return jsonify({
+            "status": "success",
+            "logs": sni_logs,
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "total_count": total_count,
+                "has_more": (offset + limit) < total_count
+            }
+        })
+    except sqlite3.Error as e:
+        app.logger.error("Database error in get_sni_requests: %s", e, exc_info=True)
+        return jsonify({"error": "Database error", "details": str(e)}), 500
+    except Exception as e:
+        app.logger.error("Error in get_sni_requests: %s", e, exc_info=True)
+        return jsonify({"error": "Internal server error", "details": str(e)}), 500
+
+
+@app.route('/api/sni/scroll-rates', methods=["GET"])
+def get_sni_scroll_rates():
+    """Get aggregated scroll rate data for SNI requests."""
+    try:
+        client_ip = request.args.get('client_ip', '').strip()
+        time_window = request.args.get('time_window', '5m').strip()
+
+        window_seconds = {
+            '1m': 60,
+            '5m': 300,
+            '15m': 900,
+            '1h': 3600
+        }.get(time_window, 300)
+
+        start_time = time.time() - window_seconds
+
+        where_clauses = ["timestamp >= ?"]
+        params = [start_time]
+
+        if client_ip:
+            where_clauses.append("client_ip = ?")
+            params.append(client_ip)
+
+        where_sql = " AND ".join(where_clauses)
+
+        scroll_rates = []
+
+        if DB_PATH.exists():
+            with _open_db() as connection:
+                if _table_exists(connection, "sni_requests"):
+                    query = f"""
+                        SELECT client_ip, domain, COUNT(*) as total_requests, 
+                               AVG(velocity_rps) as avg_velocity, 
+                               MAX(velocity_rps) as max_velocity
+                        FROM sni_requests
+                        WHERE {where_sql}
+                        GROUP BY client_ip, domain
+                        ORDER BY total_requests DESC
+                    """
+
+                    rows = connection.execute(query, tuple(params)).fetchall()
+                    for row in rows:
+                        scroll_rates.append({
+                            "client_ip": row[0],
+                            "domain": row[1],
+                            "total_requests": row[2],
+                            "avg_velocity_rps": round(row[3], 2) if row[3] else 0,
+                            "max_velocity_rps": round(row[4], 2) if row[4] else 0
+                        })
+
+        return jsonify({
+            "status": "success",
+            "scroll_rates": scroll_rates,
+            "time_window": time_window,
+            "window_seconds": window_seconds
+        })
+    except sqlite3.Error as e:
+        app.logger.error("Database error in get_sni_scroll_rates: %s", e, exc_info=True)
+        return jsonify({"error": "Database error", "details": str(e)}), 500
+    except Exception as e:
+        app.logger.error("Error in get_sni_scroll_rates: %s", e, exc_info=True)
+        return jsonify({"error": "Internal server error", "details": str(e)}), 500
+
+
+@app.route('/api/sni/pinned-apps', methods=["GET"])
+def get_sni_pinned_apps():
+    """Get list of domains with SSL pinning detected."""
+    try:
+        pinned_domains = []
+
+        if DB_PATH.exists():
+            with _open_db() as connection:
+                if _table_exists(connection, "traffic_log"):
+                    query = """
+                        SELECT DISTINCT host
+                        FROM traffic_log
+                        WHERE category = 'Mobile_Bypass' OR method = 'TLS'
+                        ORDER BY host
+                    """
+                    rows = connection.execute(query).fetchall()
+                    pinned_domains = [row[0] for row in rows]
+
+        return jsonify({
+            "status": "success",
+            "pinned_domains": pinned_domains,
+            "count": len(pinned_domains)
+        })
+    except sqlite3.Error as e:
+        app.logger.error("Database error in get_sni_pinned_apps: %s", e, exc_info=True)
+        return jsonify({"error": "Database error", "details": str(e)}), 500
+    except Exception as e:
+        app.logger.error("Error in get_sni_pinned_apps: %s", e, exc_info=True)
+        return jsonify({"error": "Internal server error", "details": str(e)}), 500
 
 
 @app.route('/api/config/setup/export')

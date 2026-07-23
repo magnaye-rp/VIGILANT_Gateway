@@ -261,7 +261,8 @@ def init_db():
             method      TEXT,
             category    TEXT,
             flagged     INTEGER DEFAULT 0,
-            entities    TEXT
+            entities    TEXT,
+            block_reason TEXT
         )
     """)
     # Ensure all columns exist in traffic_log (handles legacy 6-column tables from setup.sh)
@@ -274,8 +275,12 @@ def init_db():
                 c.execute("ALTER TABLE traffic_log ADD COLUMN method TEXT")
             if "entities" not in columns:
                 c.execute("ALTER TABLE traffic_log ADD COLUMN entities TEXT")
+            if "block_reason" not in columns:
+                c.execute("ALTER TABLE traffic_log ADD COLUMN block_reason TEXT")
     except sqlite3.Error as e:
         print(f"[VIGILANT] Migration error for traffic_log columns in init_db: {e}")
+
+    c.execute("CREATE INDEX IF NOT EXISTS idx_traffic_block_reason ON traffic_log(block_reason)")
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS throttle_events (
@@ -296,6 +301,20 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS sni_requests (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp   REAL,
+            client_ip   TEXT,
+            domain      TEXT,
+            request_count INTEGER DEFAULT 1,
+            velocity_rps REAL
+        )
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_sni_timestamp ON sni_requests(timestamp DESC)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_sni_client_ip ON sni_requests(client_ip)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_sni_domain ON sni_requests(domain)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_sni_client_domain ON sni_requests(client_ip, domain)")
     conn.commit()
     conn.close()
 
@@ -453,7 +472,20 @@ _LOGGABLE_CATEGORIES = {"educational", "productive", "distracting", "harmful"}
 _NOISE_CATEGORIES = {"non-html", "dns_tracked", "dns", "dns_query", "mobile_bypass", "uncategorized"}
 
 
-def log_request(client_ip, host, path, method, category, flagged, entities):
+def log_request(client_ip, host, path, method, category, flagged, entities, block_reason=None):
+    """
+    Log HTTP/HTTPS/TLS requests to traffic_log table with block reason tracking.
+    
+    Args:
+        client_ip: Client IP address
+        host: Requested host/domain
+        path: Request path
+        method: HTTP method
+        category: Content category (Educational, Productive, Distracting, Harmful)
+        flagged: Whether request was blocked
+        entities: NER entities detected
+        block_reason: Comma-separated block reasons (KEYWORD_MATCH, DOMAIN_BLOCKED, CATEGORY_BLOCKED)
+    """
     category_key = (category or "").strip().lower()
 
     if category_key in _NOISE_CATEGORIES:
@@ -462,14 +494,22 @@ def log_request(client_ip, host, path, method, category, flagged, entities):
     if category_key not in _LOGGABLE_CATEGORIES:
         return
 
+    # Normalize block_reason to comma-separated string
+    if block_reason is None:
+        block_reason = ""
+    elif isinstance(block_reason, list):
+        block_reason = ",".join(str(r) for r in block_reason if r)
+    else:
+        block_reason = str(block_reason)
+
     try:
         with db_lock:
             conn = _connect_db()
             conn.execute(
-                "INSERT INTO traffic_log (timestamp, client_ip, host, path, method, category, flagged, entities) "
-                "VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT INTO traffic_log (timestamp, client_ip, host, path, method, category, flagged, entities, block_reason) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
                 (time.time(), client_ip, host, path, method,
-                 category, int(flagged), str(entities))
+                 category, int(flagged), str(entities), block_reason)
             )
             conn.commit()
             conn.close()
@@ -492,6 +532,62 @@ def log_throttle(client_ip, host, rpm_now, rpm_base, action, reason=""):
         print(f"[VIGILANT] Database error in log_throttle: {e}")
     except Exception as e:
         print(f"[VIGILANT] Unexpected error in log_throttle: {e}")
+
+def log_sni_request(client_ip, domain, velocity_rps):
+    """
+    Log SNI requests with velocity tracking for scroll rate monitoring.
+    
+    Args:
+        client_ip: Client IP address
+        domain: SNI domain name
+        velocity_rps: Current requests per second for this client-domain pair
+    """
+    try:
+        with db_lock:
+            conn = _connect_db()
+            conn.execute(
+                "INSERT INTO sni_requests (timestamp, client_ip, domain, request_count, velocity_rps) "
+                "VALUES (?,?,?,?,?)",
+                (time.time(), client_ip, domain, 1, velocity_rps)
+            )
+            conn.commit()
+            conn.close()
+    except sqlite3.Error as e:
+        print(f"[VIGILANT] Database error in log_sni_request: {e}")
+    except Exception as e:
+        print(f"[VIGILANT] Unexpected error in log_sni_request: {e}")
+
+# SNI request tracking for velocity calculation
+sni_request_history = defaultdict(lambda: deque())
+sni_velocity_lock = threading.Lock()
+SNI_VELOCITY_WINDOW = 5  # 5-second window for RPS calculation
+
+def compute_sni_velocity(client_ip, domain):
+    """
+    Calculate requests per second (RPS) for SNI requests from a specific client to a specific domain.
+    
+    Args:
+        client_ip: Client IP address
+        domain: SNI domain name
+    
+    Returns:
+        float: Current RPS for this client-domain pair
+    """
+    now = time.time()
+    with sni_velocity_lock:
+        key = f"{client_ip}:{domain}"
+        dq = sni_request_history[key]
+        
+        # Remove requests outside the 5-second window
+        while dq and now - dq[0] > SNI_VELOCITY_WINDOW:
+            dq.popleft()
+        
+        # Add current request
+        dq.append(now)
+        
+        # Calculate RPS
+        rps = len(dq) / SNI_VELOCITY_WINDOW
+        return rps
 
 # ─── Velocity Monitor ─────────────────────────────────────────────
 request_history   = defaultdict(lambda: deque())
@@ -753,7 +849,7 @@ def tail_dnsmasq_log():
                                         print(f"[VIGILANT] DNS DOOMSCROLL DETECTED {client_ip} @ {domain} "
                                               f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
 
-                                    log_request(client_ip, domain, "(DNS_QUERY)", "DNS", "DNS_Tracked", False, [])
+                                    log_request(client_ip, domain, "(DNS_QUERY)", "DNS", "DNS_Tracked", False, [], None)
                                     break
         except FileNotFoundError:
             time.sleep(5)
@@ -984,19 +1080,25 @@ class VIGILANTAddon:
             if sni_filtering_enabled:
                 self.log_to_dashboard(client_ip, server_name)
 
+                # Calculate SNI velocity (RPS)
+                velocity_rps = compute_sni_velocity(client_ip, server_name)
+
+                # Log SNI request with velocity
+                log_sni_request(client_ip, server_name, velocity_rps)
+
                 flagged, rpm_now, rpm_base = should_throttle(client_ip, server_name)
                 if flagged and client_ip not in throttled_clients:
                     throttled_clients.add(client_ip)
                     log_throttle(client_ip, server_name, rpm_now, rpm_base, "TLS_THROTTLE_APPLIED", "SNI/TLS velocity threshold exceeded")
                     apply_throttle(client_ip)
                     print(f"[VIGILANT] TLS DOOMSCROLL DETECTED {client_ip} @ {server_name} "
-                          f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
+                          f"RPM={rpm_now:.1f} baseline={rpm_base:.1f} RPS={velocity_rps:.2f}")
 
                 social_domains = load_social_domains()
                 clean_sni = server_name.lstrip("www.")
                 base = ".".join(clean_sni.split(".")[-2:])
                 if any(base in d for d in social_domains):
-                    log_request(client_ip, server_name, "(TLS_SNI)", "TLS", "Mobile_Bypass", False, [])
+                    log_request(client_ip, server_name, "(TLS_SNI)", "TLS", "Mobile_Bypass", False, [], None)
 
         except (AttributeError, IndexError, TypeError) as e:
             print(f"[VIGILANT] TLS ClientHello data structure parsing issue: {e}")
@@ -1046,7 +1148,7 @@ class VIGILANTAddon:
                     category = "Productive"  # Default category for SNI logs to ensure database logging
             
             # Log the SNI domain request
-            log_request(client_ip, sni, "(TLS_SNI)", "TLS", category, False, [])
+            log_request(client_ip, sni, "(TLS_SNI)", "TLS", category, False, [], None)
             print(f"[VIGILANT] SNI logged to dashboard: {client_ip} -> {sni} [{category}]")
         except Exception as e:
             print(f"[VIGILANT] Failed to log SNI to dashboard: {e}")
@@ -1062,7 +1164,7 @@ class VIGILANTAddon:
         # Whitelist bypass: asset subdomains (kept ahead of everything else - these
         # are infrastructure/CDN domains, not user-navigable content).
         if is_whitelisted(host):
-            log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Educational", False, [])
+            log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Educational", False, [], None)
             print(f"[VIGILANT] WHITELIST BYPASS (request): {host} -> {client_ip}")
             return
 
@@ -1080,7 +1182,7 @@ class VIGILANTAddon:
                 matched = scan_text_for_keywords(combined_search_text, keywords)
                 if matched:
                     print(f"[VIGILANT] INSTAGRAM KEYWORD BLOCKED: {matched} from {client_ip}")
-                    log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [])
+                    log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "KEYWORD_MATCH")
                     flow.response = http.Response.make(
                         403,
                         render_block_page(host, "Harmful"),
@@ -1131,7 +1233,7 @@ class VIGILANTAddon:
                     matched = scan_text_for_keywords(request_body, keywords)
                     if matched:
                         print(f"[VIGILANT] REQUEST KEYWORD BLOCKED: {matched} in request body from {host}")
-                        log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [])
+                        log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "KEYWORD_MATCH")
                         flow.response = http.Response.make(
                             403,
                             render_block_page(host, "Harmful"),
@@ -1161,7 +1263,7 @@ class VIGILANTAddon:
         content_type = flow.response.headers.get("content-type", "")
 
         if is_whitelisted(host):
-            log_request(client_ip, host, path, method, "Educational", False, [])
+            log_request(client_ip, host, path, method, "Educational", False, [], None)
             print(f"[VIGILANT] WHITELIST BYPASS (response): {host} -> {client_ip}")
             return
 
@@ -1191,7 +1293,7 @@ class VIGILANTAddon:
 
         if not any(ct in content_type for ct in TEXT_CONTENT_TYPES):
             final_category = domain_category if domain_category else "Non-HTML"
-            log_request(client_ip, host, path, method, final_category, False, [])
+            log_request(client_ip, host, path, method, final_category, False, [], None)
             return
 
         # ── Sampled scanning for oversized payloads (see get_scan_text) ──
@@ -1239,7 +1341,7 @@ class VIGILANTAddon:
                         matched = None
                     if matched:
                         print(f"[VIGILANT] RESPONSE KEYWORD BLOCKED: {matched} in {content_type} response from {host}")
-                        log_request(client_ip, host, path, method, "Harmful", True, [])
+                        log_request(client_ip, host, path, method, "Harmful", True, [], "KEYWORD_MATCH")
                         flow.response = http.Response.make(
                             403,
                             render_block_page(host, "Harmful"),
@@ -1249,7 +1351,8 @@ class VIGILANTAddon:
             except sqlite3.Error as e:
                 print(f"[VIGILANT] Response keyword blacklist check failed: {e}")
 
-        log_request(client_ip, host, path, method, category, flagged, entities[:10])
+        block_reason = "CATEGORY_BLOCKED" if flagged else None
+        log_request(client_ip, host, path, method, category, flagged, entities[:10], block_reason)
         print(f"[VIGILANT] {method} {host}{path[:40]} "
               f"-> [{category}] entities={len(entities)} client={client_ip}")
 
