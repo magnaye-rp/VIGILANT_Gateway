@@ -15,6 +15,7 @@ from pathlib import Path
 import platform
 from collections import deque
 import json
+from flask import Flask, jsonify, render_template, request, make_response, send_file, abort, redirect, flash, url_for
 
 # Global network interface configuration - can be overridden via environment variable
 GATEWAY_INTERFACE = os.getenv("GATEWAY_INTERFACE", "eth1")
@@ -25,7 +26,6 @@ except ImportError:
     psutil = None
 
 yaml = importlib.import_module("yaml") if importlib.util.find_spec("yaml") else None
-from flask import Flask, jsonify, render_template, request, make_response, send_file, abort, redirect, flash, url_for
 
 try:
     from flask_cors import CORS
@@ -49,8 +49,12 @@ _service_cache_time = 0
 CACHE_TTL = 3.0  # Cache psutil process scans for 3 seconds
 
 BASE_DIR = Path(__file__).resolve().parent
+if BASE_DIR.name == "src":
+    BASE_DIR = BASE_DIR.parent
 STATIC_DIR = BASE_DIR / "static"
 TEMPLATE_DIR = BASE_DIR / "templates"
+LOG_DIR = BASE_DIR / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 app = Flask(
     __name__,
@@ -60,13 +64,12 @@ app = Flask(
 CORS(app, resources={r"/*": {"origins": "*"}})
 app.secret_key = "super_secret_vigilant_key"
 
-SERVER_IP = "192.168.100.88"
-PRODUCTION_DB_PATH = Path("/home/vigilant_admin/vigilant/logs/vigilant.db")
-LOCAL_DB_PATH = BASE_DIR / "logs" / "vigilant.db"
+SERVER_IP = "192.168.10.1"
+PRODUCTION_DB_PATH = Path("/home/vigilant-admin/vigilant_gateway/logs/vigilant.db")
+LOCAL_DB_PATH = LOG_DIR / "vigilant.db"
 DB_TIMEOUT = 30.0
 
-# Select database path with permission-aware fallback logic
-DB_PATH = LOCAL_DB_PATH  # Default to local path
+DB_PATH = str(LOG_DIR / "vigilant.db")
 try:
     if PRODUCTION_DB_PATH.parent.exists():
         if os.access(PRODUCTION_DB_PATH.parent, os.W_OK):
@@ -128,6 +131,20 @@ DEFAULT_SYSTEM_METRICS = {
     "memory_percent": 0.0,
     "disk_percent": 52.0,
 }
+
+def _coerce_float(val, default=0.0):
+    try:
+        v = float(val)
+        return v if v >= 0 else default
+    except (TypeError, ValueError):
+        return default
+
+def _coerce_config_value(key, val):
+    if key in FLOAT_CONFIG_KEYS:
+        return str(_coerce_float(val))
+    elif key in INTEGER_CONFIG_KEYS:
+        return str(_coerce_int(val))
+    return str(val)
 
 
 def _ensure_directory(path: Path) -> None:
@@ -1905,36 +1922,40 @@ def delete_category_hint(hint_id):
 @app.route("/api/config/behavioral", methods=["GET", "POST"])
 def handle_behavioral_config():
     if request.method == "GET":
-        config = load_config()
-        try:
-            custom_net = config.get("network_velocity_custom")
-            if custom_net is not None:
-                net_custom = int(float(custom_net))
-            else:
-                threshold_val = float(config.get("network_velocity_threshold", 1.5))
-                net_custom = int(threshold_val * 100)
-        except (TypeError, ValueError):
-            net_custom = 150
+        with _open_db() as conn:
+            config = load_config(connection=conn)
+            
+            try:
+                custom_net = config.get("network_velocity_custom")
+                if custom_net is not None:
+                    net_custom = int(float(custom_net))
+                else:
+                    threshold_val = float(config.get("network_velocity_threshold", 1.5))
+                    net_custom = int(threshold_val * 100)
+            except (TypeError, ValueError):
+                net_custom = 150
 
-        try:
-            custom_scroll = config.get("physical_scroll_custom")
-            if custom_scroll is not None:
-                scroll_custom = int(float(custom_scroll))
-            else:
-                scroll_custom = int(float(config.get("physical_scroll_threshold", 75)))
-        except (TypeError, ValueError):
-            scroll_custom = 75
+            try:
+                custom_scroll = config.get("physical_scroll_custom")
+                if custom_scroll is not None:
+                    scroll_custom = int(float(custom_scroll))
+                else:
+                    scroll_custom = int(float(config.get("physical_scroll_threshold", 75)))
+            except (TypeError, ValueError):
+                scroll_custom = 75
 
-        return jsonify({
-            "network_velocity_preset": config.get("network_velocity_preset", "Medium"),
-            "network_velocity_custom": net_custom,
-            "physical_scroll_preset": config.get("physical_scroll_preset", "Medium"),
-            "physical_scroll_custom": scroll_custom,
-            "sni_filtering_enabled": _coerce_bool(config.get("sni_filtering_enabled", "true")),
-            "throttle_enabled": _coerce_bool(config.get("throttle_enabled", "true")),
-            "throttle_rate": int(config.get("throttle_rate", CONFIG_DEFAULTS["throttle_rate"])),
-            "throttle_duration": _current_throttle_duration(config),
-        })
+            return jsonify({
+                "network_velocity_preset": config.get("network_velocity_preset", "Medium"),
+                "network_velocity_custom": net_custom,
+                "physical_scroll_preset": config.get("physical_scroll_preset", "Medium"),
+                "physical_scroll_custom": scroll_custom,
+                "sni_filtering_enabled": _coerce_bool(config.get("sni_filtering_enabled", "true")),
+                "throttle_enabled": _coerce_bool(config.get("throttle_enabled", "true")),
+                "throttle_rate": int(config.get("throttle_rate", CONFIG_DEFAULTS["throttle_rate"])),
+                "throttle_duration": _current_throttle_duration(config, connection=conn),
+            })
+            
+    # POST / PUT request handling
     payload = request.get_json(silent=True) or {}
     
     # When preset changes, update the corresponding threshold value
@@ -1968,7 +1989,6 @@ def handle_behavioral_config():
     
     save_config(payload)
     return jsonify({"status": "success"})
-
 
 @app.route("/api/devices", methods=["GET"])
 def get_devices():
