@@ -545,6 +545,41 @@ def init_database():
             entities TEXT
         )
     ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS throttle_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp REAL,
+            client_ip TEXT,
+            host TEXT,
+            rpm_current REAL,
+            rpm_baseline REAL,
+            action TEXT,
+            reason TEXT
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS sni_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp REAL,
+            client_ip TEXT,
+            domain TEXT,
+            request_count INTEGER DEFAULT 1,
+            velocity_rps REAL
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS throttle_state (
+            client_ip TEXT PRIMARY KEY,
+            is_throttled INTEGER DEFAULT 0,
+            applied_at REAL,
+            recovery_at REAL,
+            cycle_count INTEGER DEFAULT 0
+        )
+    ''')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_traffic_timestamp ON traffic_log(timestamp DESC)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_throttle_timestamp ON throttle_events(timestamp DESC)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_sni_timestamp ON sni_requests(timestamp DESC)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_throttle_state_client ON throttle_state(client_ip)')
     conn.commit()
     conn.close()
     print("Database initialized successfully at " + DB_PATH)

@@ -2246,7 +2246,7 @@ def get_devices():
 
 @app.route("/api/devices/active", methods=["GET"])
 def get_active_devices():
-    """Get currently active devices from traffic_log (last 1 minute)"""
+    """Get currently active devices from network_devices (last 60 seconds)"""
     try:
         active_devices = []
         managed_prefix = _managed_ip_prefix()
@@ -2254,13 +2254,12 @@ def get_active_devices():
         if DB_PATH.exists():
             with _open_db() as conn:
                 window_start = time.time() - 60
-                if _table_exists(conn, "traffic_log"):
+                if _table_exists(conn, "network_devices"):
                     rows = conn.execute(
                         """
-                        SELECT DISTINCT client_ip, MAX(timestamp) as last_seen
-                        FROM traffic_log
-                        WHERE client_ip LIKE ? AND timestamp > ?
-                        GROUP BY client_ip
+                        SELECT ip_address, hostname, custom_name, mac_address, last_seen
+                        FROM network_devices
+                        WHERE ip_address LIKE ? AND last_seen > ?
                         ORDER BY last_seen DESC
                         """,
                         (managed_prefix, window_start)
@@ -2268,19 +2267,9 @@ def get_active_devices():
                     
                     for row in rows:
                         ip_address = row[0]
-                        last_seen = row[1]
-                        
-                        # Try to get device info from network_devices
-                        hostname = "Unknown Device"
-                        mac_address = "—"
-                        if _table_exists(conn, "network_devices"):
-                            device_row = conn.execute(
-                                "SELECT hostname, custom_name, mac_address FROM network_devices WHERE ip_address = ?",
-                                (ip_address,)
-                            ).fetchone()
-                            if device_row:
-                                hostname = device_row[0] or device_row[1] or "Unknown Device"
-                                mac_address = device_row[2] or "—"
+                        hostname = row[1] or row[2] or "Unknown Device"
+                        mac_address = row[3] or "—"
+                        last_seen = row[4]
                         
                         active_devices.append({
                             "ip_address": ip_address,
@@ -2331,7 +2320,20 @@ def release_throttle():
         if not ip_address:
             return jsonify({"error": "IP address is required"}), 400
 
-        # Import and use the addon's remove_throttle function
+        # Update throttle_state in database so mitmproxy knows it's unthrottled
+        if DB_PATH.exists():
+            with _open_db() as conn:
+                if _table_exists(conn, "throttle_state"):
+                    conn.execute(
+                        "UPDATE throttle_state SET is_throttled = 0 WHERE client_ip = ?",
+                        (ip_address,)
+                    )
+                    conn.commit()
+        
+        # Signal the proxy to refresh its cache and sync the throttle state
+        _signal_rule_cache_reload()
+
+        # Try to remove TC rules using the addon if it's imported locally, else directly
         try:
             from vigilant_addon import remove_throttle
             remove_throttle(ip_address)

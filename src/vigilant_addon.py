@@ -534,6 +534,21 @@ def log_request(client_ip, host, path, method, category, flagged, entities, bloc
     except Exception as e:
         print(f"[VIGILANT] Unexpected error in log_request: {e}")
 
+def update_device_activity(client_ip):
+    """Update the last_seen timestamp for a device in network_devices."""
+    try:
+        with db_lock:
+            conn = _connect_db()
+            # Only update last_seen if the device is already in network_devices.
+            conn.execute(
+                "UPDATE network_devices SET last_seen = ? WHERE ip_address = ?",
+                (time.time(), client_ip)
+            )
+            conn.commit()
+            conn.close()
+    except Exception as e:
+        print(f"[VIGILANT] Error updating device activity for {client_ip}: {e}")
+
 def log_throttle(client_ip, host, rpm_now, rpm_base, action, reason=""):
     try:
         with db_lock:
@@ -651,6 +666,20 @@ def should_throttle(client_ip, host, path=""):
         return False, rpm_now, rpm_base
 
     flagged = (rpm_now > (rpm_base * network_velocity_threshold)) or (rpm_now > physical_scroll_threshold)
+    
+    if flagged:
+        # Burst detection: if the last `physical_scroll_threshold` requests happened in < 10 seconds, it's a burst
+        is_burst = False
+        with velocity_lock:
+            dq = request_history[client_ip]
+            if len(dq) >= physical_scroll_threshold:
+                time_for_threshold_reqs = time.time() - dq[-physical_scroll_threshold]
+                if time_for_threshold_reqs < 10:  # 10 seconds threshold for burst
+                    is_burst = True
+                    
+        if is_burst:
+            return False, rpm_now, rpm_base
+
     return flagged, rpm_now, rpm_base
 
 def websocket_message(self, flow: http.HTTPFlow):
@@ -1117,6 +1146,8 @@ def tail_dnsmasq_log():
                                 if i + 2 < len(parts):
                                     domain = parts[i + 1]
                                     client_ip = parts[i + 3]
+                                    
+                                    update_device_activity(client_ip)
 
                                     flagged, rpm_now, rpm_base = should_throttle(client_ip, domain)
                                     if flagged and client_ip not in throttled_clients:
@@ -1299,11 +1330,34 @@ class VIGILANTAddon:
                 cursor = conn.execute("SELECT category, domain FROM category_hints")
                 for category, domain in cursor.fetchall():
                     hints.setdefault(category, set()).add(domain)
+                    
+            cursor = conn.execute(
+                "SELECT client_ip FROM throttle_state WHERE is_throttled = 1"
+            )
+            currently_throttled_ips = [row[0] for row in cursor.fetchall()]
             conn.close()
 
             with self._cache_lock:
                 self.cached_keywords = keywords
                 self.cached_hints = hints
+                
+                # Sync throttled_clients set
+                global throttled_clients
+                current_set = set(currently_throttled_ips)
+                
+                # If an IP was released in DB but is still in our set, unthrottle it
+                for ip in list(throttled_clients):
+                    if ip not in current_set:
+                        print(f"[VIGILANT] Sync: {ip} was released externally, removing from throttle set.")
+                        throttled_clients.discard(ip)
+                        # We don't call remove_throttle_cycle because app.py already removed the TC rule.
+                        
+                        # Cleanup timer if it exists
+                        with throttle_timers_lock:
+                            if ip in throttle_timers:
+                                throttle_timers[ip].cancel()
+                                del throttle_timers[ip]
+
                 self._last_cache_refresh = time.time()
         except Exception as e:
             print(f"[VIGILANT] Error refreshing rule cache: {e}")
@@ -1330,7 +1384,11 @@ class VIGILANTAddon:
         """Unified TLS ClientHello hook: Dynamic SSL Pinning Bypass + SNI Logging."""
         try:
             # 1. Safely extract SNI name across mitmproxy API versions
-            server_name = getattr(data, "sni", None)
+            server_name = None
+            if hasattr(data, "client_hello") and hasattr(data.client_hello, "sni"):
+                server_name = data.client_hello.sni
+            if not server_name:
+                server_name = getattr(data, "sni", None)
             if not server_name and hasattr(data, "context") and hasattr(data.context, "server_conn"):
                 server_name = data.context.server_conn.sni
 
@@ -1352,6 +1410,8 @@ class VIGILANTAddon:
             client_ip = "127.0.0.1"
             if hasattr(data, "context") and hasattr(data.context, "client_conn"):
                 client_ip = data.context.client_conn.peername[0]
+                
+            update_device_activity(client_ip)
 
             # 5. SNI Filtering & Behavioral Checks
             config = load_proxy_config()
@@ -1435,6 +1495,7 @@ class VIGILANTAddon:
     def request(self, flow: http.HTTPFlow):
         try:
             client_ip = flow.client_conn.peername[0]
+            update_device_activity(client_ip)
         except (AttributeError, IndexError, TypeError) as e:
             print(f"[VIGILANT] Request: Failed to extract client IP from peername: {e}")
             return
