@@ -6,6 +6,28 @@ let currentPage = 1;
 let perPage = 100;
 let totalPages = 1;
 
+async function parseJsonResponse(response) {
+  try {
+    return await response.json();
+  } catch (error) {
+    return null;
+  }
+}
+
+function getResponseErrorMessage(payload, fallbackMessage) {
+  if (!payload || typeof payload !== 'object') {
+    return fallbackMessage;
+  }
+  return payload.error || payload.message || fallbackMessage;
+}
+
+function setTextIfPresent(id, value) {
+  const element = document.getElementById(id);
+  if (element) {
+    element.textContent = value;
+  }
+}
+
 // ─── Tab Navigation ───
 function showHelpToolkit() {
   const toolkitModal = document.getElementById('toolkitModal');
@@ -45,12 +67,15 @@ function showHelpToolkit() {
   }
 }
 
-function switchTab(tabId) {
+function switchTab(tabId, triggerElement = null) {
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   
   document.getElementById(`tab-${tabId}`)?.classList.add('active');
-  event.currentTarget.classList.add('active');
+  const navItem = triggerElement
+    || window.event?.currentTarget
+    || Array.from(document.querySelectorAll('.nav-item')).find(el => el.getAttribute('onclick')?.includes(`'${tabId}'`));
+  navItem?.classList.add('active');
   
   currentTab = tabId;
   
@@ -351,16 +376,19 @@ function closeSidebar() {
 async function refreshStats() {
   try {
     const response = await fetch('/api/stats');
-    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(`Failed to fetch stats: ${response.status}`);
+    }
+    const data = await parseJsonResponse(response) || {};
     const systemMetrics = data.system_metrics || {};
     const networkConfig = data.network_config || {};
     const recentRows = Array.isArray(data.recent) ? data.recent : [];
     const counts = Array.isArray(data.counts) ? data.counts : [];
 
-    document.getElementById('stat-total').textContent = data.total;
-    document.getElementById('stat-flagged').textContent = data.flagged;
-    document.getElementById('stat-clients').textContent = data.clients;
-    document.getElementById('stat-throttled').textContent = data.throttles?.length || 0;
+    setTextIfPresent('stat-total', data.total ?? 0);
+    setTextIfPresent('stat-flagged', data.flagged ?? 0);
+    setTextIfPresent('stat-clients', data.clients ?? 0);
+    setTextIfPresent('stat-throttled', data.throttles?.length || 0);
 
     let html = '';
     counts.forEach(c => {
@@ -375,7 +403,10 @@ async function refreshStats() {
         </div>
       `;
     });
-    document.getElementById('category-breakdown').innerHTML = html;
+    const categoryBreakdown = document.getElementById('category-breakdown');
+    if (categoryBreakdown) {
+      categoryBreakdown.innerHTML = html;
+    }
 
     let recentHtml = '';
     recentRows.slice(0, 10).forEach(r => {
@@ -390,7 +421,10 @@ async function refreshStats() {
         </tr>
       `;
     });
-    document.getElementById('recent-tbody').innerHTML = recentHtml || '<tr><td colspan="5" class="text-center" style="color: var(--text-secondary); padding: 2rem;">No traffic data yet</td></tr>';
+    const recentTableBody = document.getElementById('recent-tbody');
+    if (recentTableBody) {
+      recentTableBody.innerHTML = recentHtml || '<tr><td colspan="5" class="text-center" style="color: var(--text-secondary); padding: 2rem;">No traffic data yet</td></tr>';
+    }
 
     // Throughput display removed per requirements
 
@@ -472,7 +506,7 @@ async function loadUnifiedConfig() {
       throw new Error('Failed to fetch configuration');
     }
 
-    const config = await response.json();
+    const config = await parseJsonResponse(response) || {};
     
     // Populate network interface dropdowns with available interfaces
     if (config.available_interfaces && Array.isArray(config.available_interfaces)) {
@@ -483,35 +517,6 @@ async function loadUnifiedConfig() {
     syncConfigInputs(['block-harmful'], config.block_harmful);
     syncConfigInputs(['block-distracting'], config.block_distracting);
     syncConfigInputs(['throttle-enabled'], config.throttle_enabled);
-    
-    // Sync Behavioral Settings
-    const netVelPreset = document.getElementById('network-velocity-preset');
-    const netVelCustom = document.getElementById('network-velocity-custom');
-    if (netVelPreset && config.proxy_velocity_threshold) {
-      let val = String(config.proxy_velocity_threshold);
-      if (['2.0', '1.5', '1.1'].includes(val)) {
-        netVelPreset.value = val;
-        document.getElementById('network-velocity-custom-container').style.display = 'none';
-      } else {
-        netVelPreset.value = 'custom';
-        netVelCustom.value = val;
-        document.getElementById('network-velocity-custom-container').style.display = 'block';
-      }
-    }
-    
-    const scrollVelPreset = document.getElementById('scroll-velocity-preset');
-    const scrollVelCustom = document.getElementById('scroll-velocity-custom');
-    if (scrollVelPreset && config.request_threshold) {
-      let val = String(config.request_threshold);
-      if (['120', '75', '40'].includes(val)) {
-        scrollVelPreset.value = val;
-        document.getElementById('scroll-velocity-custom-container').style.display = 'none';
-      } else {
-        scrollVelPreset.value = 'custom';
-        scrollVelCustom.value = val;
-        document.getElementById('scroll-velocity-custom-container').style.display = 'block';
-      }
-    }
     
     // Sync network settings
     syncConfigInputs(['upstream-interface'], config.upstream_interface);
@@ -643,10 +648,6 @@ async function saveUnifiedConfig(e) {
     block_harmful: Boolean(blockHarmfulEl?.checked),
     block_distracting: Boolean(blockDistractingEl?.checked),
     throttle_enabled: Boolean(throttleEnabledEl?.checked),
-    // Use behavioral logic for backward compatibility in unified form
-    request_threshold: document.getElementById('scroll-velocity-preset')?.value === 'custom' 
-                       ? Number.parseInt(document.getElementById('scroll-velocity-custom')?.value || '0', 10) 
-                       : Number.parseInt(document.getElementById('scroll-velocity-preset')?.value || '0', 10),
     // Network configuration
     upstream_interface: upstreamInterfaceEl?.value || 'enp0s31f6',
     distribution_interface: distributionInterfaceEl?.value || 'wlp1s0',
@@ -687,9 +688,9 @@ async function saveUnifiedConfig(e) {
 
 async function loadBehavioralSettings() {
   try {
-    const response = await fetch('/api/config');
+    const response = await fetch('/api/config/behavioral');
     if (!response.ok) throw new Error('Failed to fetch configuration');
-    const data = await response.json();
+    const data = await parseJsonResponse(response) || {};
     
     const netPreset = document.getElementById('behavioral-network-preset');
     const netCustom = document.getElementById('behavioral-network-custom');
@@ -962,6 +963,11 @@ function showToast(message, type = 'info') {
 }
 
 async function loadTrafficLogs() {
+  const trafficTableBody = document.getElementById('traffic-tbody');
+  if (!trafficTableBody) {
+    return;
+  }
+
   try {
     // Get filter values
     const categoryFilter = document.getElementById('traffic-filter-category')?.value || '';
@@ -973,7 +979,8 @@ async function loadTrafficLogs() {
     const searchFilter = clientFilter || domainFilter;
     
     // Build URL with filter parameters
-    let url = `/api/stats?page=${currentPage}&limit=100`;
+    const offset = (currentPage - 1) * perPage;
+    let url = `/api/logs/traffic?limit=${perPage}&offset=${offset}`;
     if (categoryFilter) {
       url += `&category=${encodeURIComponent(categoryFilter)}`;
     }
@@ -985,8 +992,12 @@ async function loadTrafficLogs() {
     }
     
     const response = await fetch(url);
-    const data = await response.json();
-    const recentRows = Array.isArray(data.recent) ? data.recent : [];
+    if (!response.ok) {
+      const errorPayload = await parseJsonResponse(response);
+      throw new Error(getResponseErrorMessage(errorPayload, 'Failed to load traffic logs'));
+    }
+    const data = await parseJsonResponse(response) || {};
+    const recentRows = Array.isArray(data.logs) ? data.logs : [];
 
     let trafficHtml = '';
     recentRows.forEach(r => {
@@ -1005,7 +1016,7 @@ async function loadTrafficLogs() {
       
       trafficHtml += `
         <tr>
-          <td>${r.time}</td>
+          <td>${r.formatted_time || r.time || 'N/A'}</td>
           <td style="font-family: monospace; font-size: 0.9rem;">${r.client_ip}</td>
           <td>${r.host}</td>
           <td><span class="${categoryClass}">${r.category}</span></td>
@@ -1014,21 +1025,26 @@ async function loadTrafficLogs() {
         </tr>
       `;
     });
-    document.getElementById('traffic-tbody').innerHTML = trafficHtml || '<tr><td colspan="6" class="text-center" style="color: var(--text-secondary); padding: 2rem;">No traffic data yet</td></tr>';
+    trafficTableBody.innerHTML = trafficHtml || '<tr><td colspan="6" class="text-center" style="color: var(--text-secondary); padding: 2rem;">No traffic data yet</td></tr>';
 
     // Update pagination controls
     if (data.pagination) {
-      currentPage = Math.max(1, Number(data.pagination.page) || 1);
-      totalPages = Math.max(1, Number(data.pagination.total_pages) || 1);
-      document.getElementById('current-page').textContent = currentPage;
-      document.getElementById('total-pages').textContent = totalPages;
-      document.getElementById('total-items').textContent = data.pagination.total_items;
+      const totalItems = Math.max(0, Number(data.pagination.total_count) || 0);
+      totalPages = Math.max(1, Math.ceil(totalItems / perPage));
+      currentPage = Math.min(Math.max(1, currentPage), totalPages);
+      setTextIfPresent('current-page', currentPage);
+      setTextIfPresent('total-pages', totalPages);
+      setTextIfPresent('total-items', totalItems);
       
       // Enable/disable buttons
-      document.getElementById('prev-page').disabled = currentPage <= 1;
-      document.getElementById('next-page').disabled = currentPage >= totalPages;
+      const prevButton = document.getElementById('prev-page');
+      const nextButton = document.getElementById('next-page');
+      if (prevButton) prevButton.disabled = currentPage <= 1;
+      if (nextButton) nextButton.disabled = currentPage >= totalPages;
     }
   } catch (e) {
+    console.error('Failed to load traffic logs:', e);
+    trafficTableBody.innerHTML = '<tr><td colspan="6" class="text-center" style="color: var(--text-secondary); padding: 2rem;">Unable to load traffic logs right now</td></tr>';
     showToast('Failed to load traffic logs', 'error');
   }
 }
@@ -1073,6 +1089,10 @@ async function clearTrafficLogs() {
 async function confirmReset() {
   pendingConfirmAction = factoryReset;
   showConfirmDialog('Reset all settings to factory defaults? This cannot be undone.', 'Reset');
+}
+
+function resetConfiguration() {
+  confirmReset();
 }
 
 async function factoryReset() {
@@ -1267,7 +1287,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadConfigToUI();
 
   const settingsForm = document.getElementById('settingsForm');
-  if (settingsForm) settingsForm.addEventListener('submit', saveConfig);
+  if (settingsForm && typeof saveConfig === 'function') settingsForm.addEventListener('submit', saveConfig);
 
   const wizardForm = document.getElementById('wizardForm');
   if (wizardForm) wizardForm.addEventListener('submit', saveWizardConfig);
@@ -1397,24 +1417,34 @@ let sniScrollChart = null;
 let sniDomainChart = null;
 
 async function loadSNIDashboard() {
+  const timeWindowSelect = document.getElementById('sni-time-window');
+  const clientFilterSelect = document.getElementById('sni-client-filter');
+  if (!timeWindowSelect || !clientFilterSelect) {
+    return;
+  }
+
   try {
-    const timeWindow = document.getElementById('sni-time-window').value;
-    const clientIP = document.getElementById('sni-client-filter').value;
+    const timeWindow = timeWindowSelect.value;
+    const clientIP = clientFilterSelect.value;
     
     // Load scroll rates
     const scrollResponse = await fetch(`/api/sni/scroll-rates?time_window=${timeWindow}&client_ip=${clientIP}`);
-    const scrollData = await scrollResponse.json();
+    const scrollData = await parseJsonResponse(scrollResponse) || {};
     
-    if (scrollData.status === 'success') {
+    if (scrollResponse.ok && scrollData.status === 'success') {
       updateSNICharts(scrollData.scroll_rates);
+    } else {
+      updateSNICharts([]);
     }
     
     // Load SNI logs
     const logsResponse = await fetch(`/api/sni/requests?limit=20&client_ip=${clientIP}`);
-    const logsData = await logsResponse.json();
+    const logsData = await parseJsonResponse(logsResponse) || {};
     
-    if (logsData.status === 'success') {
+    if (logsResponse.ok && logsData.status === 'success') {
       updateSNILogTable(logsData.logs);
+    } else {
+      updateSNILogTable([]);
     }
     
     // Load client filter options
@@ -1426,13 +1456,60 @@ async function loadSNIDashboard() {
   }
 }
 
+function renderSNIChartFallback(canvasId, items, labelFormatter) {
+  const canvas = document.getElementById(canvasId);
+  const container = canvas?.parentElement;
+  if (!canvas || !container) {
+    return;
+  }
+
+  let fallback = container.querySelector('.sni-chart-fallback');
+  if (!fallback) {
+    fallback = document.createElement('div');
+    fallback.className = 'sni-chart-fallback';
+    fallback.style.marginTop = '1rem';
+    fallback.style.padding = '0.75rem 1rem';
+    fallback.style.border = '1px solid var(--border)';
+    fallback.style.borderRadius = '8px';
+    fallback.style.background = 'var(--surface)';
+    container.appendChild(fallback);
+  }
+
+  if (!items.length) {
+    fallback.textContent = 'No SNI activity available for the selected filters.';
+    return;
+  }
+
+  fallback.innerHTML = items.slice(0, 5).map(labelFormatter).join('<br>');
+}
+
 function updateSNICharts(scrollRates) {
+  const safeRates = Array.isArray(scrollRates) ? scrollRates : [];
   const domains = scrollRates.map(r => r.domain);
   const avgVelocities = scrollRates.map(r => r.avg_velocity_rps);
   const requestCounts = scrollRates.map(r => r.total_requests);
+
+  if (!window.Chart) {
+    renderSNIChartFallback(
+      'sni-scroll-chart',
+      safeRates,
+      rate => `${rate.domain}: ${Number(rate.avg_velocity_rps || 0).toFixed(2)} RPS average`
+    );
+    renderSNIChartFallback(
+      'sni-domain-chart',
+      safeRates,
+      rate => `${rate.domain}: ${Number(rate.total_requests || 0)} requests`
+    );
+    return;
+  }
   
   // Scroll Rate Chart
-  const scrollCtx = document.getElementById('sni-scroll-chart').getContext('2d');
+  const scrollCanvas = document.getElementById('sni-scroll-chart');
+  const domainCanvas = document.getElementById('sni-domain-chart');
+  if (!scrollCanvas || !domainCanvas) {
+    return;
+  }
+  const scrollCtx = scrollCanvas.getContext('2d');
   if (sniScrollChart) {
     sniScrollChart.destroy();
   }
@@ -1464,7 +1541,7 @@ function updateSNICharts(scrollRates) {
   });
   
   // Domain Chart
-  const domainCtx = document.getElementById('sni-domain-chart').getContext('2d');
+  const domainCtx = domainCanvas.getContext('2d');
   if (sniDomainChart) {
     sniDomainChart.destroy();
   }
@@ -1491,18 +1568,22 @@ function updateSNICharts(scrollRates) {
 
 function updateSNILogTable(logs) {
   const tableBody = document.getElementById('sni-log-table');
+  if (!tableBody) {
+    return;
+  }
+  const safeLogs = Array.isArray(logs) ? logs : [];
   
-  if (logs.length === 0) {
+  if (safeLogs.length === 0) {
     tableBody.innerHTML = '<tr><td colspan="4" class="text-center">No SNI requests found</td></tr>';
     return;
   }
   
-  tableBody.innerHTML = logs.map(log => `
+  tableBody.innerHTML = safeLogs.map(log => `
     <tr>
-      <td>${log.formatted_time}</td>
-      <td style="font-family: monospace;">${log.client_ip}</td>
-      <td>${log.domain}</td>
-      <td><span class="badge bg-info">${log.velocity_rps.toFixed(2)} RPS</span></td>
+      <td>${log.formatted_time || 'N/A'}</td>
+      <td style="font-family: monospace;">${log.client_ip || '—'}</td>
+      <td>${log.domain || 'Unknown domain'}</td>
+      <td><span class="badge bg-info">${Number(log.velocity_rps || 0).toFixed(2)} RPS</span></td>
     </tr>
   `).join('');
 }
@@ -1510,11 +1591,14 @@ function updateSNILogTable(logs) {
 async function loadSNIClientFilter() {
   try {
     const response = await fetch('/api/sni/requests');
-    const data = await response.json();
+    const data = await parseJsonResponse(response) || {};
     
-    if (data.status === 'success') {
+    if (response.ok && data.status === 'success') {
       const clientIPs = [...new Set(data.logs.map(log => log.client_ip))];
       const select = document.getElementById('sni-client-filter');
+      if (!select) {
+        return;
+      }
       
       // Keep current selection
       const currentValue = select.value;

@@ -2678,6 +2678,41 @@ def _discover_network_devices() -> list:
     return list(discovered_devices.values())
 
 
+# ─── Global Error Handlers ───────────────────────────────────────────
+@app.errorhandler(404)
+def handle_not_found(error):
+    """Handle 404 Not Found errors gracefully."""
+    if request.path.startswith('/api/'):
+        return jsonify({"error": "Endpoint not found", "status": 404}), 404
+    return render_template("dashboard.html", proxy_active=_service_statuses().get("vigilant_proxy") == "active", time=time), 404
+
+
+@app.errorhandler(500)
+def handle_internal_error(error):
+    """Handle 500 Internal Server errors gracefully."""
+    app.logger.error("Internal server error: %s", error, exc_info=True)
+    if request.path.startswith('/api/'):
+        return jsonify({"error": "Internal server error", "status": 500}), 500
+    return render_template("dashboard.html", proxy_active=_service_statuses().get("vigilant_proxy") == "active", time=time), 500
+
+
+@app.errorhandler(403)
+def handle_forbidden(error):
+    """Handle 403 Forbidden errors gracefully."""
+    if request.path.startswith('/api/'):
+        return jsonify({"error": "Access forbidden", "status": 403}), 403
+    return render_template("dashboard.html", proxy_active=_service_statuses().get("vigilant_proxy") == "active", time=time), 403
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(error):
+    """Handle unexpected errors gracefully."""
+    app.logger.error("Unexpected error: %s", error, exc_info=True)
+    if request.path.startswith('/api/'):
+        return jsonify({"error": "An unexpected error occurred", "status": 500}), 500
+    return render_template("dashboard.html", proxy_active=_service_statuses().get("vigilant_proxy") == "active", time=time), 500
+
+
 if __name__ == "__main__":
     init_db()
     init_config_db()

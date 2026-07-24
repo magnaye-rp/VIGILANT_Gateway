@@ -91,7 +91,12 @@ CATEGORY_KEYWORDS = {
 }
 
 # ─── NLP Setup ────────────────────────────────────────────────────
-nlp = spacy.load("en_core_web_sm")
+nlp = None
+try:
+    nlp = spacy.load("en_core_web_sm")
+except Exception as e:
+    print(f"[VIGILANT] Failed to load spacy model 'en_core_web_sm': {e}")
+    print(f"[VIGILANT] NLP features will be disabled. Install with: python -m spacy download en_core_web_sm")
 
 # ─── TF-IDF Classifier ─────────────────────────────────────────────
 class VigilantTFIDFClassifier:

@@ -258,6 +258,478 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 });
 
+// Tab Switching Function
+function switchTab(tabName) {
+    // Hide all tab contents
+    document.querySelectorAll('.tab-content').forEach(content => {
+        content.classList.remove('active');
+    });
+    
+    // Remove active class from all nav items
+    document.querySelectorAll('.nav-item').forEach(item => {
+        item.classList.remove('active');
+    });
+    
+    // Show selected tab content
+    const tabContent = document.getElementById(`tab-${tabName}`);
+    if (tabContent) {
+        tabContent.classList.add('active');
+    }
+    
+    // Add active class to selected nav item
+    const navItem = document.querySelector(`.nav-item[onclick="switchTab('${tabName}')"]`);
+    if (navItem) {
+        navItem.classList.add('active');
+    }
+    
+    // Load data for specific tabs
+    if (tabName === 'device-management') {
+        loadThrottledDevices();
+        loadActiveDevices();
+        loadLeasedDevices();
+    } else if (tabName === 'traffic-logs') {
+        loadTrafficLogs();
+    } else if (tabName === 'sni-monitoring') {
+        refreshSNI();
+    }
+}
+
+// Sidebar Toggle Function
+function toggleSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar) {
+        sidebar.classList.toggle('open');
+    }
+}
+
+// Theme Toggle Function
+function toggleThemeMode(isDark) {
+    const html = document.documentElement;
+    if (isDark) {
+        html.setAttribute('data-theme', 'dark');
+        localStorage.setItem('vigilant-theme', 'dark');
+    } else {
+        html.setAttribute('data-theme', 'light');
+        localStorage.setItem('vigilant-theme', 'light');
+    }
+    
+    // Save to server
+    apiPost('/api/config/ui-theme', { theme: isDark ? 'dark' : 'light' });
+}
+
+// System Control Function
+async function executeSystemControl(action, buttonElement) {
+    if (!buttonElement) return;
+    
+    const originalText = buttonElement.textContent;
+    buttonElement.disabled = true;
+    buttonElement.innerHTML = '<span class="spinner"></span> Processing...';
+    
+    try {
+        const result = await apiPost('/api/system/control', { action });
+        if (result && result.status === 'success') {
+            showToast(result.message || 'Action completed successfully', 'success');
+        } else {
+            showToast(result?.error || 'Action failed', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to execute system control', 'error');
+    } finally {
+        buttonElement.disabled = false;
+        buttonElement.textContent = originalText;
+    }
+}
+
+// Device Management Functions
+async function loadThrottledDevices() {
+    const tbody = document.getElementById('throttled-tbody');
+    if (!tbody) return;
+    
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align: center;">Loading...</td></tr>';
+    
+    try {
+        const result = await apiGet('/api/devices/throttled');
+        if (result && result.devices) {
+            if (result.devices.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-secondary);">No throttled devices</td></tr>';
+            } else {
+                tbody.innerHTML = result.devices.map(device => `
+                    <tr>
+                        <td>${device.hostname || 'Unknown'}</td>
+                        <td>${device.ip_address}</td>
+                        <td><span class="category-badge distracting">Throttled</span></td>
+                        <td>
+                            <button class="btn-secondary" onclick="releaseThrottle('${device.ip_address}')" style="padding: 0.25rem 0.5rem; font-size: 0.8rem;">Release</button>
+                        </td>
+                    </tr>
+                `).join('');
+            }
+        }
+    } catch (error) {
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--danger);">Failed to load throttled devices</td></tr>';
+    }
+}
+
+async function loadActiveDevices() {
+    const tbody = document.getElementById('active-tbody');
+    if (!tbody) return;
+    
+    tbody.innerHTML = '<tr><td colspan="2" style="text-align: center;">Loading...</td></tr>';
+    
+    try {
+        const result = await apiGet('/api/devices/active');
+        if (result && result.devices) {
+            if (result.devices.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary);">No active devices</td></tr>';
+            } else {
+                tbody.innerHTML = result.devices.map(device => `
+                    <tr>
+                        <td>${device.hostname || 'Unknown'}</td>
+                        <td>${device.ip_address}</td>
+                    </tr>
+                `).join('');
+            }
+        }
+    } catch (error) {
+        tbody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--danger);">Failed to load active devices</td></tr>';
+    }
+}
+
+async function loadLeasedDevices() {
+    const tbody = document.getElementById('leased-tbody');
+    if (!tbody) return;
+    
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align: center;">Loading...</td></tr>';
+    
+    try {
+        const result = await apiGet('/api/devices');
+        if (result && result.devices) {
+            if (result.devices.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-secondary);">No leased devices</td></tr>';
+            } else {
+                tbody.innerHTML = result.devices.map(device => `
+                    <tr>
+                        <td>${device.hostname || 'Unknown'}</td>
+                        <td>${device.ip_address}</td>
+                        <td>${device.mac_address || 'Unknown'}</td>
+                        <td>${device.policy || 'none'}</td>
+                    </tr>
+                `).join('');
+            }
+        }
+    } catch (error) {
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--danger);">Failed to load leased devices</td></tr>';
+    }
+}
+
+async function releaseThrottle(ipAddress) {
+    try {
+        const result = await apiPost('/api/devices/release-throttle', { ip_address: ipAddress });
+        if (result && result.status === 'success') {
+            showToast(`Throttle released for ${ipAddress}`, 'success');
+            loadThrottledDevices();
+        } else {
+            showToast(result?.error || 'Failed to release throttle', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to release throttle', 'error');
+    }
+}
+
+// Traffic Logs Functions
+async function loadTrafficLogs() {
+    const tbody = document.getElementById('traffic-tbody');
+    if (!tbody) return;
+    
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align: center;">Loading...</td></tr>';
+    
+    try {
+        const clientFilter = document.getElementById('traffic-filter-client')?.value || '';
+        const domainFilter = document.getElementById('traffic-filter-domain')?.value || '';
+        const categoryFilter = document.getElementById('traffic-filter-category')?.value || '';
+        const blockReasonFilter = document.getElementById('block-reason-filter')?.value || '';
+        
+        const params = new URLSearchParams();
+        if (clientFilter) params.append('client_ip', clientFilter);
+        if (domainFilter) params.append('host', domainFilter);
+        if (categoryFilter) params.append('category', categoryFilter);
+        if (blockReasonFilter) params.append('block_reason', blockReasonFilter);
+        
+        const result = await apiGet(`/api/logs/traffic?${params.toString()}`);
+        if (result && result.logs) {
+            if (result.logs.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-secondary);">No traffic logs found</td></tr>';
+            } else {
+                tbody.innerHTML = result.logs.map(log => `
+                    <tr>
+                        <td>${formatDate(log.timestamp)}</td>
+                        <td>${log.client_ip}</td>
+                        <td>${log.host}</td>
+                        <td><span class="category-badge ${log.category?.toLowerCase()}">${log.category || 'Unclassified'}</span></td>
+                        <td>${log.block_reason || '-'}</td>
+                        <td>${log.flagged ? '<span style="color: var(--danger);">Blocked</span>' : '<span style="color: var(--success);">Allowed</span>'}</td>
+                    </tr>
+                `).join('');
+            }
+        }
+    } catch (error) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--danger);">Failed to load traffic logs</td></tr>';
+    }
+}
+
+function applyFilters() {
+    loadTrafficLogs();
+}
+
+async function clearTrafficLogs() {
+    if (!confirm('Are you sure you want to clear all traffic logs? This action cannot be undone.')) {
+        return;
+    }
+    
+    try {
+        const result = await apiPost('/api/logs/clear');
+        if (result && result.status === 'success') {
+            showToast('Traffic logs cleared successfully', 'success');
+            loadTrafficLogs();
+        } else {
+            showToast(result?.error || 'Failed to clear logs', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to clear traffic logs', 'error');
+    }
+}
+
+// SNI Dashboard Functions
+async function refreshSNI() {
+    const tbody = document.getElementById('sni-log-table');
+    if (!tbody) return;
+    
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align: center;">Loading...</td></tr>';
+    
+    try {
+        const result = await apiGet('/api/sni/requests');
+        if (result && result.requests) {
+            if (result.requests.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-secondary);">No SNI requests found</td></tr>';
+            } else {
+                tbody.innerHTML = result.requests.map(req => `
+                    <tr>
+                        <td>${formatDate(req.timestamp)}</td>
+                        <td>${req.client_ip}</td>
+                        <td>${req.domain}</td>
+                        <td>${req.velocity_rps?.toFixed(2) || '0.00'}</td>
+                    </tr>
+                `).join('');
+            }
+        }
+    } catch (error) {
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--danger);">Failed to load SNI requests</td></tr>';
+    }
+}
+
+// Configuration Functions
+async function exportConfig() {
+    try {
+        window.location.href = '/api/config/setup/export';
+        showToast('Configuration export started', 'success');
+    } catch (error) {
+        showToast('Failed to export configuration', 'error');
+    }
+}
+
+function importConfig() {
+    // Trigger file upload dialog
+    const fileInput = document.querySelector('input[type="file"][name="config_file"]');
+    if (fileInput) {
+        fileInput.click();
+    } else {
+        showToast('Import form not found', 'error');
+    }
+}
+
+function confirmReset() {
+    const modal = document.getElementById('confirmModal');
+    const message = document.getElementById('modalMessage');
+    const confirmBtn = document.getElementById('confirmBtn');
+    
+    if (modal && message && confirmBtn) {
+        message.textContent = 'This will reset all settings to factory defaults. This action cannot be undone. Are you sure you want to continue?';
+        modal.classList.add('active');
+        
+        confirmBtn.onclick = async function() {
+            try {
+                const result = await apiPost('/api/config/reset');
+                if (result && result.status === 'success') {
+                    showToast('Configuration reset successfully', 'success');
+                    closeModal('confirmModal');
+                    setTimeout(() => location.reload(), 1500);
+                } else {
+                    showToast(result?.error || 'Failed to reset configuration', 'error');
+                }
+            } catch (error) {
+                showToast('Failed to reset configuration', 'error');
+            }
+        };
+    }
+}
+
+function closeModal(modalId) {
+    const modal = document.getElementById(modalId);
+    if (modal) {
+        modal.classList.remove('active');
+    }
+}
+
+function executeConfirm() {
+    // This is a placeholder - actual implementation depends on context
+    closeModal('confirmModal');
+}
+
+// Help Toolkit Function
+function showHelpToolkit() {
+    const modal = document.getElementById('toolkitModal');
+    const title = document.getElementById('toolkitTitle');
+    const content = document.getElementById('toolkitContent');
+    
+    if (modal && title && content) {
+        title.textContent = 'VIGILANT Gateway Help';
+        content.innerHTML = `
+            <h4 style="margin-bottom: 0.5rem;">Quick Start Guide</h4>
+            <ul style="margin-left: 1.5rem; margin-bottom: 1rem;">
+                <li>Configure your network interfaces in the Setup tab</li>
+                <li>Add keywords to block in the Content Filtering tab</li>
+                <li>Set up behavioral controls in the Behavioral Control tab</li>
+                <li>Monitor traffic and devices in the respective tabs</li>
+            </ul>
+            <h4 style="margin-bottom: 0.5rem;">Troubleshooting</h4>
+            <ul style="margin-left: 1.5rem; margin-bottom: 1rem;">
+                <li>If devices aren't connecting, check your DHCP settings</li>
+                <li>If filtering isn't working, verify mitmproxy is running</li>
+                <li>Check system logs for detailed error messages</li>
+            </ul>
+            <h4 style="margin-bottom: 0.5rem;">Support</h4>
+            <p>For additional help, refer to the documentation or contact support.</p>
+        `;
+        modal.classList.add('active');
+    }
+}
+
+// Behavioral Settings Functions
+function toggleBehavioralCustom(type) {
+    const presetSelect = document.getElementById(`behavioral-${type}-preset`);
+    const customContainer = document.getElementById(`behavioral-${type}-custom-container`);
+    
+    if (presetSelect && customContainer) {
+        if (presetSelect.value === 'Custom') {
+            customContainer.classList.remove('hidden');
+        } else {
+            customContainer.classList.add('hidden');
+        }
+    }
+}
+
+function updateSNIStatusIndicator(checkbox) {
+    const statusText = document.getElementById('sni-status-text');
+    if (statusText) {
+        if (checkbox.checked) {
+            statusText.textContent = 'ON';
+            statusText.style.color = '#1A938A';
+        } else {
+            statusText.textContent = 'OFF';
+            statusText.style.color = 'var(--danger)';
+        }
+    }
+}
+
+async function saveBehavioralSettings(event) {
+    event.preventDefault();
+    
+    const form = event.target;
+    const saveBtn = document.getElementById('behavioral-save-btn');
+    
+    if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = '<span class="spinner"></span> Saving...';
+    }
+    
+    try {
+        const formData = {
+            network_velocity_preset: document.getElementById('behavioral-network-preset')?.value,
+            network_velocity_custom: document.getElementById('behavioral-network-custom')?.value,
+            physical_scroll_preset: document.getElementById('behavioral-scroll-preset')?.value,
+            physical_scroll_custom: document.getElementById('behavioral-scroll-custom')?.value,
+            sni_filtering_enabled: document.getElementById('behavioral-sni-enabled')?.checked
+        };
+        
+        const result = await apiPost('/api/config/behavioral', formData);
+        if (result && result.status === 'success') {
+            showToast('Behavioral settings saved successfully', 'success');
+        } else {
+            showToast(result?.error || 'Failed to save behavioral settings', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to save behavioral settings', 'error');
+    } finally {
+        if (saveBtn) {
+            saveBtn.disabled = false;
+            saveBtn.innerHTML = '<i class="fa-solid fa-save"></i> Save Settings';
+        }
+    }
+}
+
+// Settings Functions
+function toggleAdvancedSettings() {
+    const advancedSettings = document.getElementById('advanced-settings');
+    const toggle = document.getElementById('advanced-toggle');
+    
+    if (advancedSettings && toggle) {
+        if (toggle.checked) {
+            advancedSettings.classList.remove('d-none');
+        } else {
+            advancedSettings.classList.add('d-none');
+        }
+    }
+}
+
+function toggleTheme(theme) {
+    const html = document.documentElement;
+    html.setAttribute('data-theme', theme);
+    localStorage.setItem('vigilant-theme', theme);
+}
+
+async function saveUnifiedConfig(event) {
+    event.preventDefault();
+    
+    const form = event.target;
+    const formData = new FormData(form);
+    const config = {};
+    
+    formData.forEach((value, key) => {
+        config[key] = value;
+    });
+    
+    // Handle checkboxes
+    const checkboxes = form.querySelectorAll('input[type="checkbox"]');
+    checkboxes.forEach(checkbox => {
+        config[checkbox.id] = checkbox.checked;
+    });
+    
+    try {
+        const result = await apiPost('/api/config/setup', config);
+        if (result && result.status === 'success') {
+            showToast('Configuration saved successfully', 'success');
+        } else {
+            showToast(result?.error || 'Failed to save configuration', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to save configuration', 'error');
+    }
+}
+
+function resetConfiguration() {
+    confirmReset();
+}
+
 // Export for use in page-specific scripts
 window.Vigilant = {
     showToast,
@@ -270,5 +742,26 @@ window.Vigilant = {
     formatDate,
     confirmAction,
     startAutoRefresh,
-    stopAutoRefresh
+    stopAutoRefresh,
+    switchTab,
+    toggleSidebar,
+    toggleThemeMode,
+    executeSystemControl,
+    loadThrottledDevices,
+    loadActiveDevices,
+    loadLeasedDevices,
+    loadTrafficLogs,
+    applyFilters,
+    clearTrafficLogs,
+    refreshSNI,
+    exportConfig,
+    importConfig,
+    confirmReset,
+    showHelpToolkit,
+    toggleBehavioralCustom,
+    updateSNIStatusIndicator,
+    saveBehavioralSettings,
+    toggleAdvancedSettings,
+    toggleTheme,
+    saveUnifiedConfig
 };
