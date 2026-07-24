@@ -1903,7 +1903,7 @@ def get_sni_scroll_rates():
                 if _table_exists(connection, "sni_requests"):
                     query = f"""
                         SELECT client_ip, domain, COUNT(*) as total_requests, 
-                               AVG(velocity_rps) as avg_velocity, 
+                               COALESCE(AVG(CASE WHEN velocity_rps <= 15 THEN velocity_rps ELSE NULL END), 0) as avg_velocity, 
                                MAX(velocity_rps) as max_velocity
                         FROM sni_requests
                         WHERE {where_sql}
