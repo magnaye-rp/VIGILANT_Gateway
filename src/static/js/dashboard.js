@@ -1568,22 +1568,27 @@ function updateSNICharts(scrollRates) {
 
 function updateSNILogTable(logs) {
   const tableBody = document.getElementById('sni-log-table');
+  const emptyState = document.getElementById('sni-empty-state');
   if (!tableBody) {
     return;
   }
   const safeLogs = Array.isArray(logs) ? logs : [];
   
   if (safeLogs.length === 0) {
-    tableBody.innerHTML = '<tr><td colspan="4" class="text-center">No SNI requests found</td></tr>';
+    tableBody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-secondary);">No SNI requests found for the selected filters.</td></tr>';
+    if (emptyState) emptyState.classList.remove('hidden');
     return;
   }
+  
+  // Hide empty state when data is present
+  if (emptyState) emptyState.classList.add('hidden');
   
   tableBody.innerHTML = safeLogs.map(log => `
     <tr>
       <td>${log.formatted_time || 'N/A'}</td>
       <td style="font-family: monospace;">${log.client_ip || '—'}</td>
       <td>${log.domain || 'Unknown domain'}</td>
-      <td><span class="badge bg-info">${Number(log.velocity_rps || 0).toFixed(2)} RPS</span></td>
+      <td><span class="category-badge productive">${Number(log.velocity_rps || 0).toFixed(2)} RPS</span></td>
     </tr>
   `).join('');
 }
