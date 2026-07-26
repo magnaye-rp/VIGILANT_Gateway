@@ -1458,6 +1458,23 @@ def api_config_reset():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route('/api/sni/clear-loopback', methods=['POST'])
+def clear_loopback_sni():
+    """Clear SNI entries with loopback client IPs (127.0.0.1)"""
+    try:
+        if not DB_PATH.exists():
+            return jsonify({"status": "success", "message": "No database found"})
+        with _open_db() as connection:
+            if _table_exists(connection, "sni_requests"):
+                cursor = connection.execute("DELETE FROM sni_requests WHERE client_ip LIKE '127.%' OR client_ip = '::1'")
+                deleted_count = cursor.rowcount
+                connection.commit()
+                return jsonify({"status": "success", "message": f"Cleared {deleted_count} loopback SNI entries"})
+            return jsonify({"status": "success", "message": "SNI table does not exist"})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route('/api/logs/clear', methods=['POST'])
 def clear_logs():
     try:

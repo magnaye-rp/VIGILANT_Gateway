@@ -355,6 +355,11 @@ def load_proxy_config():
         nlp_enabled_str = row[0] if row else "true"
         nlp_enabled = nlp_enabled_str.lower() in ["true", "1", "yes"]
 
+        cursor.execute("SELECT value FROM config_settings WHERE key = 'sni_filtering_enabled'")
+        row = cursor.fetchone()
+        sni_filtering_enabled_str = row[0] if row else "true"
+        sni_filtering_enabled = sni_filtering_enabled_str.lower() in ["true", "1", "yes"]
+
         cursor.execute("SELECT value FROM config_settings WHERE key = 'proxy_throttle_rate'")
         row = cursor.fetchone()
         throttle_rate = row[0] if row else DEFAULT_THROTTLE_RATE
@@ -377,6 +382,7 @@ def load_proxy_config():
             'network_velocity_threshold': network_velocity_threshold,
             'physical_scroll_threshold': physical_scroll_threshold,
             'nlp_enabled': nlp_enabled,
+            'sni_filtering_enabled': sni_filtering_enabled,
             'throttle_rate': throttle_rate,
             'pinned_domains': pinned_domains
         }
@@ -386,6 +392,7 @@ def load_proxy_config():
             'network_velocity_threshold': DEFAULT_VELOCITY_THRESHOLD,
             'physical_scroll_threshold': 75,
             'nlp_enabled': True,
+            'sni_filtering_enabled': True,
             'throttle_rate': DEFAULT_THROTTLE_RATE,
             'pinned_domains': set(DEFAULT_PINNED_DOMAINS.split(','))
         }
