@@ -1380,6 +1380,45 @@ class VIGILANTAddon:
             if reload_requested or stale:
                 self._refresh_rule_cache()  
             
+    @staticmethod
+    def _extract_client_ip_from_tls(data) -> str | None:
+        """Extract real client IP from TLS ClientHelloData, rejecting loopback addresses.
+
+        In transparent proxy mode with iptables REDIRECT, peername in the
+        tls_clienthello hook can resolve to 127.0.0.1 (the redirect
+        destination) rather than the original client.  This helper tries
+        multiple attributes and falls back through them until a non-loopback
+        address is found.
+        """
+        _LOOPBACK = {"127.0.0.1", "::1"}
+        candidates = []
+        client_conn = getattr(getattr(data, "context", None), "client_conn", None)
+        if client_conn is None:
+            return None
+
+        # Gather candidate IPs from all known attributes
+        for attr in ("peername", "address", "sockname"):
+            val = getattr(client_conn, attr, None)
+            if val and isinstance(val, (tuple, list)) and len(val) >= 1:
+                candidates.append(str(val[0]))
+
+        ip_attr = getattr(client_conn, "ip", None)
+        if ip_attr:
+            candidates.append(str(ip_attr))
+
+        # Return first non-loopback candidate
+        for ip in candidates:
+            if ip and ip not in _LOOPBACK:
+                return ip
+
+        # All candidates are loopback – return the first one we found anyway
+        # so logging still works (better than silently dropping)
+        if candidates:
+            print(f"[VIGILANT] Warning: Only loopback IPs found for TLS client: {candidates}")
+            return candidates[0]
+
+        return None
+
     def tls_clienthello(self, data: tls.ClientHelloData):
         """Unified TLS ClientHello hook: Dynamic SSL Pinning Bypass + SNI Logging."""
         try:
@@ -1406,8 +1445,10 @@ class VIGILANTAddon:
                 data.ignore_connection = True
                 return
 
-            # 4. Extract Client IP
-            client_ip = getattr(data.context.client_conn, "ip", None) or data.context.client_conn.peername[0]
+            # 4. Extract Client IP (robust fallback for transparent proxy REDIRECT)
+            client_ip = self._extract_client_ip_from_tls(data)
+            if not client_ip:
+                return
                 
             update_device_activity(client_ip)
 

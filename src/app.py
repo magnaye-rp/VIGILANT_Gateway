@@ -1307,15 +1307,18 @@ def dashboard_summary():
                 throttled_devices = _get_current_throttled_devices(conn, config)
                 throttled_count = len(throttled_devices)
 
-                if _table_exists(conn, "traffic_log"):
+                if _table_exists(conn, "network_devices"):
+                    active_window = time.time() - ACTIVE_DEVICE_WINDOW_SECONDS
                     row = conn.execute(
-                        f"""
-                        SELECT COUNT(DISTINCT client_ip) FROM traffic_log
-                        WHERE {_l7_traffic_filter_sql()} AND timestamp > ? AND client_ip LIKE ?
+                        """
+                        SELECT COUNT(*) FROM network_devices
+                        WHERE ip_address LIKE ? AND last_seen > ?
                         """,
-                        (window_start, managed_prefix),
+                        (managed_prefix, active_window),
                     ).fetchone()
                     total_connected = int(row[0] or 0) if row else 0
+
+                if _table_exists(conn, "traffic_log"):
                     
                     l7_alerts = conn.execute(
                         f"SELECT COUNT(*) FROM traffic_log WHERE {_l7_traffic_filter_sql()} AND flagged = 1 AND timestamp > ?",
@@ -2565,14 +2568,14 @@ def get_nerve_center_metrics():
         
         if DB_PATH.exists():
             with _open_db() as conn:
-                window_start = time.time() - 60
-                if _table_exists(conn, "traffic_log"):
+                active_window = time.time() - ACTIVE_DEVICE_WINDOW_SECONDS
+                if _table_exists(conn, "network_devices"):
                     row = conn.execute(
-                        f"""
-                        SELECT COUNT(DISTINCT client_ip) FROM traffic_log
-                        WHERE {_l7_traffic_filter_sql()} AND client_ip LIKE ? AND timestamp > ?
+                        """
+                        SELECT COUNT(*) FROM network_devices
+                        WHERE ip_address LIKE ? AND last_seen > ?
                         """,
-                        (managed_prefix, window_start)
+                        (managed_prefix, active_window)
                     ).fetchone()
                     active_count = int(row[0] or 0) if row else 0
                 throttled_count = len(_get_current_throttled_devices(conn, config))

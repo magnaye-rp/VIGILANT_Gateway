@@ -527,6 +527,33 @@ async function refreshSNI() {
     }
 }
 
+function exportSNI() {
+  const timeWindowSelect = document.getElementById('sni-time-window');
+  const clientFilterSelect = document.getElementById('sni-client-filter');
+
+  const params = new URLSearchParams();
+
+  // Apply client filter if selected
+  if (clientFilterSelect && clientFilterSelect.value) {
+    params.set('client_ip', clientFilterSelect.value);
+  }
+
+  // Convert time window to start_time
+  if (timeWindowSelect && timeWindowSelect.value) {
+    const now = Date.now() / 1000;
+    const windowMap = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600 };
+    const seconds = windowMap[timeWindowSelect.value];
+    if (seconds) {
+      params.set('start_time', (now - seconds).toFixed(0));
+    }
+  }
+
+  const queryString = params.toString();
+  const url = '/api/sni/export' + (queryString ? '?' + queryString : '');
+  window.location.href = url;
+  showToast('Exporting SNI data to CSV...', 'success');
+}
+
 // Configuration Functions
 async function exportConfig() {
     try {
