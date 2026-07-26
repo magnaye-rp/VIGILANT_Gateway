@@ -4,14 +4,14 @@ After=network.target vigilant-proxy.service
 
 [Service]
 Type=simple
-User=vigilant_admin
-WorkingDirectory=/home/vigilant_admin/vigilant
-ExecStart=/home/vigilant_admin/vigilant/venv/bin/python3 \
-  /home/vigilant_admin/vigilant/app.py
+User=vigilant-admin
+WorkingDirectory=/home/vigilant-admin/vigilant_gateway
+ExecStart=/home/vigilant-admin/vigilant_gateway/venv/bin/python3 \
+  /home/vigilant-admin/vigilant_gateway/src/app.py
 Restart=on-failure
 RestartSec=5
-StandardOutput=append:/home/vigilant_admin/vigilant/logs/dashboard.log
-StandardError=append:/home/vigilant_admin/vigilant/logs/dashboard.log
+StandardOutput=append:/home/vigilant-admin/vigilant_gateway/logs/dashboard.log
+StandardError=append:/home/vigilant-admin/vigilant_gateway/logs/dashboard.log
 
 [Install]
 WantedBy=multi-user.target
