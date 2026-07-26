@@ -1407,9 +1407,7 @@ class VIGILANTAddon:
                 return
 
             # 4. Extract Client IP
-            client_ip = "127.0.0.1"
-            if hasattr(data, "context") and hasattr(data.context, "client_conn"):
-                client_ip = data.context.client_conn.peername[0]
+            client_ip = getattr(data.context.client_conn, "ip", None) or data.context.client_conn.peername[0]
                 
             update_device_activity(client_ip)
 

@@ -126,6 +126,7 @@ STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_i
 TRAFFIC_CATEGORIES = ("Educational", "Productive", "Distracting", "Harmful")
 L4_TRAFFIC_CATEGORIES = ("DNS_TRACKED", "SNI_PASSTHROUGH")
 DEFAULT_THROTTLE_DURATION = 300
+ACTIVE_DEVICE_WINDOW_SECONDS = 60
 DEFAULT_SYSTEM_METRICS = {
     "cpu_percent": 0.0,
     "memory_percent": 0.0,
@@ -1795,6 +1796,70 @@ def export_logs():
     except sqlite3.Error as e:
         app.logger.error("Database error during CSV export: %s", e, exc_info=True)
         return jsonify({"error": "Database error during export", "details": str(e)}), 500
+
+
+@app.route('/api/sni/export', methods=["GET"])
+def export_sni_requests():
+    """Export SNI request logs to CSV. Supports same filters as get_sni_requests."""
+    try:
+        client_ip = request.args.get('client_ip', '').strip()
+        domain = request.args.get('domain', '').strip()
+        start_time = request.args.get('start_time', type=float)
+        end_time = request.args.get('end_time', type=float)
+
+        where_clauses = ["1=1"]
+        params = []
+
+        if client_ip:
+            where_clauses.append("client_ip = ?")
+            params.append(client_ip)
+        if domain:
+            where_clauses.append("domain LIKE ?")
+            params.append(f"%{domain}%")
+        if start_time:
+            where_clauses.append("timestamp >= ?")
+            params.append(start_time)
+        if end_time:
+            where_clauses.append("timestamp <= ?")
+            params.append(end_time)
+
+        where_sql = " AND ".join(where_clauses)
+        download_name = "sni_requests_export.csv"
+
+        if DB_PATH.exists():
+            with _open_db() as connection:
+                if _table_exists(connection, "sni_requests"):
+                    query = f"""
+                        SELECT id, timestamp, client_ip, domain, request_count, velocity_rps
+                        FROM sni_requests
+                        WHERE {where_sql}
+                        ORDER BY timestamp DESC
+                    """
+                    rows = connection.execute(query, tuple(params)).fetchall()
+
+                    # Write CSV
+                    text_stream = io.StringIO()
+                    cw = csv.writer(text_stream)
+                    # Header
+                    cw.writerow(["id", "timestamp", "client_ip", "domain", "request_count", "velocity_rps"])
+                    for row in rows:
+                        cw.writerow(row)
+                    byte_stream = io.BytesIO(text_stream.getvalue().encode('utf-8'))
+                    text_stream.close()
+                    return send_file(
+                        byte_stream,
+                        as_attachment=True,
+                        download_name=download_name,
+                        mimetype='text/csv'
+                    )
+        # If no data or DB missing
+        return jsonify({"status": "success", "message": "No SNI data to export"})
+    except sqlite3.Error as e:
+        app.logger.error("Database error during SNI CSV export: %s", e, exc_info=True)
+        return jsonify({"error": "Database error during export", "details": str(e)}), 500
+    except Exception as e:
+        app.logger.error("Failed to export SNI logs: %s", e, exc_info=True)
+        return jsonify({"error": "Failed to export SNI logs", "details": str(e)}), 500
     except Exception as e:
         app.logger.error("Failed to export logs: %s", e, exc_info=True)
         return jsonify({"error": "Failed to export logs", "details": str(e)}), 500
@@ -2253,7 +2318,7 @@ def get_active_devices():
         
         if DB_PATH.exists():
             with _open_db() as conn:
-                window_start = time.time() - 60
+                window_start = time.time() - ACTIVE_DEVICE_WINDOW_SECONDS
                 if _table_exists(conn, "network_devices"):
                     rows = conn.execute(
                         """
