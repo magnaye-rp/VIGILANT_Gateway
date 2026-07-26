@@ -1545,25 +1545,14 @@ class VIGILANTAddon:
             if not server_name:
                 return
 
-            # 2. Certificate Pinning Dynamic Bypass
-            if server_name in self.pinned_hosts:
-                data.ignore_connection = True
-                print(f"[VIGILANT] Dynamic L4 Passthrough activated for pinned SNI: {server_name}")
-                return
-
-            # 3. Bypass core internal Apple traffic to prevent OS-level freezes
-            if any(domain in server_name for domain in ["apple.com", "icloud.com", "mzstatic.com"]):
-                data.ignore_connection = True
-                return
-
-            # 4. Extract Client IP (robust fallback for transparent proxy REDIRECT)
+            # 2. Extract Client IP (robust fallback for transparent proxy REDIRECT)
             client_ip = self._extract_client_ip_from_tls(data)
             if not client_ip:
                 return
-                
+
             update_device_activity(client_ip)
 
-            # 5. SNI Filtering & Behavioral Checks
+            # 3. SNI Filtering & Behavioral Checks (do this BEFORE bypassing pinned apps)
             config = load_proxy_config()
             sni_filtering_enabled = config.get('sni_filtering_enabled', 'true').lower() == 'true'
 
@@ -1583,11 +1572,23 @@ class VIGILANTAddon:
                     print(f"[VIGILANT] TLS DOOMSCROLL DETECTED {client_ip} @ {server_name} "
                           f"RPM={rpm_now:.1f} baseline={rpm_base:.1f} RPS={velocity_rps:.2f} - throttle cycle initiated")
 
-                social_domains = load_social_domains()
-                clean_sni = server_name.lstrip("www.")
-                base = ".".join(clean_sni.split(".")[-2:])
-                if any(base in d for d in social_domains):
-                    log_request(client_ip, server_name, "(TLS_SNI)", "TLS", "Mobile_Bypass", False, [], None)
+            # 4. Certificate Pinning Dynamic Bypass (AFTER logging)
+            if server_name in self.pinned_hosts:
+                data.ignore_connection = True
+                print(f"[VIGILANT] Dynamic L4 Passthrough activated for pinned SNI: {server_name}")
+                return
+
+            # 5. Bypass core internal Apple traffic to prevent OS-level freezes
+            if any(domain in server_name for domain in ["apple.com", "icloud.com", "mzstatic.com"]):
+                data.ignore_connection = True
+                return
+
+            # 6. Log social domain requests to traffic log (non-pinned only)
+            social_domains = load_social_domains()
+            clean_sni = server_name.lstrip("www.")
+            base = ".".join(clean_sni.split(".")[-2:])
+            if any(base in d for d in social_domains):
+                log_request(client_ip, server_name, "(TLS_SNI)", "TLS", "Mobile_Bypass", False, [], None)
 
         except (AttributeError, IndexError, TypeError) as e:
             print(f"[VIGILANT] TLS ClientHello data structure parsing issue: {e}")
