@@ -331,6 +331,28 @@ def init_db():
     """)
     c.execute("CREATE INDEX IF NOT EXISTS idx_throttle_state_client ON throttle_state(client_ip)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_throttle_state_recovery ON throttle_state(recovery_at)")
+
+    # Ensure network_devices table exists so UPSERT in update_device_activity works
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS network_devices (
+            ip_address TEXT PRIMARY KEY,
+            mac_address TEXT,
+            hostname TEXT,
+            custom_name TEXT,
+            policy TEXT DEFAULT 'none',
+            first_seen REAL,
+            last_seen REAL,
+            updated_at REAL
+        )
+    """)
+    # Add doomscroll_exempt column if missing (for older databases)
+    try:
+        columns = [row[1] for row in c.execute("PRAGMA table_info(network_devices)").fetchall()]
+        if columns and "doomscroll_exempt" not in columns:
+            c.execute("ALTER TABLE network_devices ADD COLUMN doomscroll_exempt INTEGER DEFAULT 0")
+    except sqlite3.Error:
+        pass
+
     conn.commit()
     conn.close()
 
@@ -542,14 +564,16 @@ def log_request(client_ip, host, path, method, category, flagged, entities, bloc
         print(f"[VIGILANT] Unexpected error in log_request: {e}")
 
 def update_device_activity(client_ip):
-    """Update the last_seen timestamp for a device in network_devices."""
+    """Update or insert the last_seen timestamp for a device in network_devices."""
     try:
         with db_lock:
             conn = _connect_db()
-            # Only update last_seen if the device is already in network_devices.
+            now = time.time()
             conn.execute(
-                "UPDATE network_devices SET last_seen = ? WHERE ip_address = ?",
-                (time.time(), client_ip)
+                "INSERT INTO network_devices (ip_address, last_seen, first_seen) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(ip_address) DO UPDATE SET last_seen = excluded.last_seen",
+                (client_ip, now, now)
             )
             conn.commit()
             conn.close()
@@ -1493,41 +1517,52 @@ class VIGILANTAddon:
         _LOOPBACK = {"127.0.0.1", "::1"}
         candidates = []
         client_conn = getattr(getattr(data, "context", None), "client_conn", None)
-        if client_conn is None:
-            return None
 
-        # Gather candidate IPs from all known attributes
-        for attr in ("peername", "address", "sockname"):
-            val = getattr(client_conn, attr, None)
-            if val and isinstance(val, (tuple, list)) and len(val) >= 1:
-                candidates.append(str(val[0]))
+        if client_conn is not None:
+            # Gather candidate IPs from all known attributes
+            for attr in ("peername", "address", "sockname"):
+                val = getattr(client_conn, attr, None)
+                if val and isinstance(val, (tuple, list)) and len(val) >= 1:
+                    candidates.append(str(val[0]))
 
-        ip_attr = getattr(client_conn, "ip", None)
-        if ip_attr:
-            candidates.append(str(ip_attr))
+            ip_attr = getattr(client_conn, "ip", None)
+            if ip_attr:
+                candidates.append(str(ip_attr))
 
-        # Return first non-loopback candidate
-        for ip in candidates:
-            if ip and ip not in _LOOPBACK:
-                return ip
+            # Return first non-loopback candidate
+            for ip in candidates:
+                if ip and ip not in _LOOPBACK:
+                    print(f"[VIGILANT DEBUG] TLS client IP from peername/address: {ip}")
+                    return ip
+        else:
+            print(f"[VIGILANT DEBUG] TLS client_conn is None (transparent proxy may need DB fallback)")
 
-        # All candidates are loopback – try resolving real client IP from active network_devices
+        # All candidates are loopback or client_conn was unavailable –
+        # try resolving real client IP from active network_devices.
         try:
             with db_lock:
                 conn = _connect_db()
                 cursor = conn.execute(
-                    "SELECT ip_address FROM network_devices WHERE ip_address NOT LIKE '127.%' AND ip_address NOT LIKE '::1%' ORDER BY last_seen DESC LIMIT 1"
+                    "SELECT ip_address FROM network_devices "
+                    "WHERE ip_address NOT LIKE '127.%' AND ip_address NOT LIKE '0.0.0%' AND ip_address != '::1' "
+                    "ORDER BY last_seen DESC LIMIT 1"
                 )
                 row = cursor.fetchone()
                 conn.close()
                 if row and row[0]:
+                    print(f"[VIGILANT DEBUG] TLS client IP from network_devices fallback: {row[0]}")
                     return row[0]
-        except Exception:
-            pass
+                else:
+                    print(f"[VIGILANT DEBUG] network_devices fallback returned no rows")
+        except Exception as exc:
+            print(f"[VIGILANT DEBUG] network_devices fallback error: {exc}")
 
         # Return None if only loopback candidates found - don't log loopback traffic
         if candidates:
             print(f"[VIGILANT] Warning: Only loopback IPs found for TLS client: {candidates} - skipping SNI logging")
+        else:
+            print(f"[VIGILANT] Warning: No client IP found for TLS ClientHello - skipping SNI logging "
+                  f"(ensure devices are registered in network_devices)")
         return None
 
     def tls_clienthello(self, data: tls.ClientHelloData):
@@ -1595,7 +1630,7 @@ class VIGILANTAddon:
             clean_sni = server_name.lstrip("www.")
             base = ".".join(clean_sni.split(".")[-2:])
             if any(base in d for d in social_domains):
-                log_request(client_ip, server_name, "(TLS_SNI)", "TLS", "Mobile_Bypass", False, [], None)
+                log_request(client_ip, server_name, "(TLS_SNI)", "TLS", "Distracting", False, [], None)
 
         except (AttributeError, IndexError, TypeError) as e:
             print(f"[VIGILANT] TLS ClientHello data structure parsing issue: {e}")
