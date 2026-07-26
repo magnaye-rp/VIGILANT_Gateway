@@ -2904,14 +2904,3 @@ if __name__ == "__main__":
     init_db()
     init_config_db()
     app.run(host='0.0.0.0', port=5000, debug=False)
-    """Handle unexpected errors gracefully."""
-    app.logger.error("Unexpected error: %s", error, exc_info=True)
-    if request.path.startswith('/api/'):
-        return jsonify({"error": "An unexpected error occurred", "status": 500}), 500
-    return render_template("dashboard.html", proxy_active=_service_statuses().get("vigilant_proxy") == "active", time=time), 500
-
-
-if __name__ == "__main__":
-    init_db()
-    init_config_db()
-    app.run(host='0.0.0.0', port=5000, debug=False)
