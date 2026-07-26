@@ -2434,9 +2434,21 @@ def release_throttle():
             app.logger.info(f"Manually released throttle for {ip_address}")
             return jsonify({"status": "success", "message": f"Throttle released for {ip_address}"})
         except ImportError:
-            # If addon is not available, try to remove via TC directly
+            # If addon is not available, try to remove TC for this IP only
             import subprocess
-            subprocess.run(['tc', 'qdisc', 'del', 'dev', 'eth0', 'root'], check=False)
+            try:
+                ip_hash = abs(hash(str(ip_address))) % 0xfff0 + 0x10
+                class_id = f"1:{ip_hash:x}"
+                prio = ip_hash
+                config = load_config()
+                interface = config.get("distribution_interface", "eth1")
+                subprocess.run(['tc', 'filter', 'del', 'dev', interface, 'protocol', 'ip', 'parent', '1:0',
+                              'prio', str(prio), 'u32', 'match', 'ip', 'dst', str(ip_address), 'flowid', class_id], check=False)
+                subprocess.run(['tc', 'filter', 'del', 'dev', interface, 'protocol', 'ip', 'parent', '1:0',
+                              'prio', str(prio), 'u32', 'match', 'ip', 'src', str(ip_address), 'flowid', class_id], check=False)
+                subprocess.run(['tc', 'class', 'del', 'dev', interface, 'parent', '1:', 'classid', class_id], check=False)
+            except Exception:
+                pass
             app.logger.warning(f"Addon not available, attempted TC cleanup for {ip_address}")
             return jsonify({"status": "success", "message": f"Throttle released for {ip_address} (TC cleanup)"})
 

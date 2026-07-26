@@ -96,10 +96,7 @@ function switchTab(tabId, triggerElement = null) {
     loadBehavioralSettings();
   }
   if (tabId === 'sni-monitoring') {
-    // Wait for DOM layout before rendering charts (charts in hidden tabs have zero dimensions)
-    requestAnimationFrame(() => {
-      setTimeout(() => loadSNIDashboard(), 100);
-    });
+    loadSNIDashboard();
   }
   if (tabId === 'restraints') {
     loadRestraintsRegistry();
@@ -130,7 +127,7 @@ window.loadThrottledDevices = async function() {
         <tr>
           <td style="font-weight: 500;">${hostname}</td>
           <td style="font-family: monospace; font-size: 0.9rem;">${ip}</td>
-          <td><span class="category-badge ${throttleStateClass}">${throttleState}</span></td>
+          <td><span class="badge ${throttleStateClass}">${throttleState}</span></td>
           <td>
             <button class="btn-secondary" style="padding: 0.25rem 0.75rem; font-size: 0.85rem;" onclick="releaseThrottle('${ip}')">Release</button>
           </td>
@@ -145,11 +142,11 @@ window.loadThrottledDevices = async function() {
 
 function getThrottleStateClass(state) {
   const stateMap = {
-    'throttled': 'danger',
-    'recovering': 'warning',
-    'released': 'success'
+    'throttled': 'bg-danger',
+    'recovering': 'bg-warning',
+    'released': 'bg-success'
   };
-  return stateMap[state] || 'secondary';
+  return stateMap[state] || 'bg-secondary';
 }
 
 async function releaseThrottle(ipAddress) {
@@ -1488,9 +1485,9 @@ function renderSNIChartFallback(canvasId, items, labelFormatter) {
 
 function updateSNICharts(scrollRates) {
   const safeRates = Array.isArray(scrollRates) ? scrollRates : [];
-  const domains = safeRates.map(r => r.domain);
-  const avgVelocities = safeRates.map(r => r.avg_velocity_rps);
-  const requestCounts = safeRates.map(r => r.total_requests);
+  const domains = scrollRates.map(r => r.domain);
+  const avgVelocities = scrollRates.map(r => r.avg_velocity_rps);
+  const requestCounts = scrollRates.map(r => r.total_requests);
 
   if (!window.Chart) {
     renderSNIChartFallback(
@@ -1512,26 +1509,17 @@ function updateSNICharts(scrollRates) {
   if (!scrollCanvas || !domainCanvas) {
     return;
   }
-  
-  // Set proper canvas dimensions before chart creation
-  const parentWidth = scrollCanvas.parentElement.clientWidth || 400;
-  scrollCanvas.width = parentWidth;
-  scrollCanvas.height = 280;
-  domainCanvas.width = parentWidth;
-  domainCanvas.height = 280;
-  
   const scrollCtx = scrollCanvas.getContext('2d');
   if (sniScrollChart) {
     sniScrollChart.destroy();
-    sniScrollChart = null;
   }
   sniScrollChart = new Chart(scrollCtx, {
     type: 'line',
     data: {
-      labels: domains.length ? domains : ['No Data'],
+      labels: domains,
       datasets: [{
         label: 'Avg Velocity (RPS)',
-        data: avgVelocities.length ? avgVelocities : [0],
+        data: avgVelocities,
         borderColor: '#43B3AE',
         backgroundColor: 'rgba(67, 179, 174, 0.1)',
         fill: true,
@@ -1540,19 +1528,12 @@ function updateSNICharts(scrollRates) {
     },
     options: {
       responsive: true,
-      maintainAspectRatio: false,
       scales: {
         y: {
           beginAtZero: true,
           title: {
             display: true,
             text: 'Requests per Second'
-          }
-        },
-        x: {
-          ticks: {
-            maxRotation: 45,
-            minRotation: 45
           }
         }
       }
@@ -1563,37 +1544,26 @@ function updateSNICharts(scrollRates) {
   const domainCtx = domainCanvas.getContext('2d');
   if (sniDomainChart) {
     sniDomainChart.destroy();
-    sniDomainChart = null;
   }
   sniDomainChart = new Chart(domainCtx, {
     type: 'bar',
     data: {
-      labels: domains.length ? domains : ['No Data'],
+      labels: domains,
       datasets: [{
         label: 'Request Count',
-        data: requestCounts.length ? requestCounts : [0],
+        data: requestCounts,
         backgroundColor: '#43B3AE'
       }]
     },
     options: {
       responsive: true,
-      maintainAspectRatio: false,
       scales: {
         y: {
           beginAtZero: true
-        },
-        x: {
-          ticks: {
-            maxRotation: 45,
-            minRotation: 45
-          }
         }
       }
     }
   });
-
-  // Remove any stale fallbacks since Chart is working
-  document.querySelectorAll('.sni-chart-fallback').forEach(el => el.remove());
 }
 
 function updateSNILogTable(logs) {

@@ -870,6 +870,7 @@ def get_distribution_interface():
 def apply_throttle(client_ip, rate=None):
     """
     Apply Linux traffic control (tc) rules to throttle bandwidth for a given client IP.
+    Uses a unique classId per device so that each client gets its own bandwidth ceiling.
     
     Args:
         client_ip: Client IP address to throttle
@@ -881,15 +882,25 @@ def apply_throttle(client_ip, rate=None):
     config = load_proxy_config()
     throttle_rate = rate or config['throttle_rate']
     interface = get_distribution_interface()
+    
+    # Derive a unique classId from the client IP (1:10 through 1:fffe)
+    ip_hash = abs(hash(client_ip)) % 0xfff0 + 0x0010  # range 1:10 to 1:fffe
+    class_id = f"1:{ip_hash:x}"
+    prio = ip_hash
 
     try:
+        # Ensure root qdisc exists (ignore error if it already does)
         subprocess.run(
-            ["tc", "qdisc", "add", "dev", interface, "root", "handle", "1:", "htb"],
+            ["tc", "qdisc", "add", "dev", interface, "root", "handle", "1:", "htb", "default", "1"],
             check=False, capture_output=True
         )
 
+        # Remove any stale class/filter for this client first (clean re-apply)
+        remove_throttle(client_ip, client_ip_only=True)
+
+        # Add a dedicated class for this client IP
         subprocess.run(
-            ["tc", "class", "add", "dev", interface, "parent", "1:", "classid", "1:10",
+            ["tc", "class", "add", "dev", interface, "parent", "1:", "classid", class_id,
              "htb", "rate", throttle_rate, "ceil", throttle_rate],
             check=False, capture_output=True
         )
@@ -897,64 +908,72 @@ def apply_throttle(client_ip, rate=None):
         # Match traffic sent TO the client (downloads)
         subprocess.run(
             ["tc", "filter", "add", "dev", interface, "protocol", "ip", "parent", "1:0",
-             "prio", "1", "u32", "match", "ip", "dst", client_ip, "flowid", "1:10"],
+             "prio", str(prio), "u32", "match", "ip", "dst", client_ip, "flowid", class_id],
             check=False, capture_output=True
         )
         # Match traffic FROM the client (uploads)
         subprocess.run(
             ["tc", "filter", "add", "dev", interface, "protocol", "ip", "parent", "1:0",
-             "prio", "1", "u32", "match", "ip", "src", client_ip, "flowid", "1:10"],
+             "prio", str(prio), "u32", "match", "ip", "src", client_ip, "flowid", class_id],
             check=False, capture_output=True
         )
-        print(f"[VIGILANT] Throttling applied to {client_ip} on {interface} at {throttle_rate} (dst & src)")
+        
+        # Store mapping for later removal
+        _throttle_map[client_ip] = class_id
+        
+        print(f"[VIGILANT] Throttling applied to {client_ip} on {interface} at {throttle_rate} (classId={class_id})")
         return True
     except Exception as e:
         print(f"[VIGILANT] Throttling failed for {client_ip}: {e}")
         return False
 
-def remove_throttle(client_ip):
+def remove_throttle(client_ip, client_ip_only=False):
     """
-    Remove traffic control throttling for client IP with full cleanup.
+    Remove traffic control throttling for a specific client IP.
+    Only removes the filters and class for THIS client – does NOT destroy other devices' throttles.
     
     Args:
         client_ip: Client IP address to unthrottle
+        client_ip_only: If True, removes only the matching IP filter (internal re-apply usage)
     
     Returns:
         bool: True if throttle removed successfully, False otherwise
     """
     interface = get_distribution_interface()
+    
+    # Get the classId assigned to this client
+    ip_hash = abs(hash(client_ip)) % 0xfff0 + 0x10
+    class_id = f"1:{ip_hash:x}"
+    prio = ip_hash
+    
+    # Also try stored mapping if available
+    stored_class = _throttle_map.get(client_ip)
+    if stored_class:
+        class_id = stored_class
+        del _throttle_map[client_ip]
+    
     try:
-        # Remove filters (both dst and src)
+        # Remove dst filter for this specific client
         subprocess.run(
             ["tc", "filter", "del", "dev", interface, "protocol", "ip", "parent", "1:0",
-             "prio", "1", "u32", "match", "ip", "dst", client_ip, "flowid", "1:10"],
+             "prio", str(prio), "u32", "match", "ip", "dst", client_ip, "flowid", class_id],
             check=False, capture_output=True
         )
-        result = subprocess.run(
+        # Remove src filter for this specific client
+        subprocess.run(
             ["tc", "filter", "del", "dev", interface, "protocol", "ip", "parent", "1:0",
-             "prio", "1", "u32", "match", "ip", "src", client_ip, "flowid", "1:10"],
+             "prio", str(prio), "u32", "match", "ip", "src", client_ip, "flowid", class_id],
             check=False, capture_output=True
         )
-        if result.returncode != 0 and result.stderr:
-            print(f"[VIGILANT] Filter removal message for {client_ip}: {result.stderr.decode().strip()}")
-
-        # Remove class if no other filters reference it
-        result = subprocess.run(
-            ["tc", "class", "del", "dev", interface, "parent", "1:", "classid", "1:10"],
-            check=False, capture_output=True
-        )
-        if result.returncode != 0 and result.stderr:
-            print(f"[VIGILANT] Class removal message for {client_ip}: {result.stderr.decode().strip()}")
-
-        # Remove qdisc if no classes remain
-        result = subprocess.run(
-            ["tc", "qdisc", "del", "dev", interface, "root"],
-            check=False, capture_output=True
-        )
-        if result.returncode != 0 and result.stderr:
-            print(f"[VIGILANT] Qdisc removal message for {client_ip}: {result.stderr.decode().strip()}")
-
-        print(f"[VIGILANT] Full throttle cleanup completed for {client_ip} on {interface}")
+        
+        if not client_ip_only:
+            # Remove the dedicated class for this client ONLY
+            subprocess.run(
+                ["tc", "class", "del", "dev", interface, "parent", "1:", "classid", class_id],
+                check=False, capture_output=True
+            )
+        
+        print(f"[VIGILANT] Throttle cleanup completed for {client_ip} on {interface}")
         return True
     except Exception as e:
         print(f"[VIGILANT] Throttle cleanup failed for {client_ip}: {e}")
@@ -962,6 +981,7 @@ def remove_throttle(client_ip):
 
 # Throttle cycle tracking
 throttle_timers = {}  # client_ip -> Timer object
+_throttle_map = {}  # client_ip -> tc classId mapping
 throttle_timers_lock = threading.Lock()
 THROTTLE_CYCLE_DURATION = 600  # 10 minutes in seconds
 
