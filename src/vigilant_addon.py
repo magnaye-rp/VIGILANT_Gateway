@@ -44,7 +44,7 @@ MIN_REQUESTS_BASELINE = 10
 
 # Default values (will be overridden by database config)
 DEFAULT_VELOCITY_THRESHOLD = 1.5
-DEFAULT_THROTTLE_RATE = "512kbit"
+DEFAULT_THROTTLE_RATE = "64kbit"
 DEFAULT_PINNED_DOMAINS = "cdninstagram.com, facebook.com,tiktok.com,x.com,twitter.co, youtube.com"
 
 # Global asset whitelist
@@ -747,17 +747,19 @@ def should_throttle(client_ip, host, path=""):
     flagged = (rpm_now > (rpm_base * network_velocity_threshold)) or (rpm_now > physical_scroll_threshold)
     
     if flagged:
-        # Burst detection: if the last `physical_scroll_threshold` requests happened in < 10 seconds, it's a burst
-        is_burst = False
+        # Burst detection: confirm that a burst just occurred (requests clustered
+        # tightly in time).  We still flag it — the exemption was removed because
+        # app-initialization bursts are exactly what we want to rate-limit.
+        # The 16k burst buffer on the tc class lets header/TLS traffic through
+        # before the steady 64kbit rate kicks in, so this no longer needs a
+        # code-level bypass.
         with velocity_lock:
             dq = request_history[client_ip]
             if len(dq) >= physical_scroll_threshold:
                 time_for_threshold_reqs = time.time() - dq[-physical_scroll_threshold]
-                if time_for_threshold_reqs < 10:  # 10 seconds threshold for burst
-                    is_burst = True
-                    
-        if is_burst:
-            return False, rpm_now, rpm_base
+                if time_for_threshold_reqs < 10:
+                    print(f"[VIGILANT] Burst detected for {client_ip}: "
+                          f"{physical_scroll_threshold} requests in {time_for_threshold_reqs:.1f}s — throttling anyway")
 
     # Spacing check: if requests are consistently less than 30 seconds apart, throttle
     with velocity_lock:
@@ -907,7 +909,7 @@ def apply_throttle(client_ip, rate=None):
     
     Args:
         client_ip: Client IP address to throttle
-        rate: Throttle rate (e.g., "256kbit", "10%"). If None, uses config default.
+        rate: Throttle rate (e.g., "64kbit", "128kbit"). If None, uses config default.
     
     Returns:
         bool: True if throttle applied successfully, False otherwise
@@ -931,10 +933,16 @@ def apply_throttle(client_ip, rate=None):
         # Remove any stale class/filter for this client first (clean re-apply)
         remove_throttle(client_ip, client_ip_only=True)
 
-        # Add a dedicated class for this client IP
+        # Add a dedicated class for this client IP.
+        # burst=16k allows the first 2KB-16KB of a TCP flow through at line rate
+        # so initial HTTP request / TLS handshake complete quickly, then the
+        # steady rate kicks in.  This is critical for user-perceptible throttle:
+        # pages partially render (text/headers) but images and video stall.
+        # cburst=16k applies the same burst control to the ceil limit.
         subprocess.run(
             ["tc", "class", "add", "dev", interface, "parent", "1:", "classid", class_id,
-             "htb", "rate", throttle_rate, "ceil", throttle_rate],
+             "htb", "rate", throttle_rate, "ceil", throttle_rate,
+             "burst", "16k", "cburst", "16k"],
             check=False, capture_output=True
         )
 
@@ -954,7 +962,7 @@ def apply_throttle(client_ip, rate=None):
         # Store mapping for later removal
         _throttle_map[client_ip] = class_id
         
-        print(f"[VIGILANT] Throttling applied to {client_ip} on {interface} at {throttle_rate} (classId={class_id})")
+        print(f"[VIGILANT] Throttling applied to {client_ip} on {interface} at {throttle_rate} burst=16k (classId={class_id})")
         return True
     except Exception as e:
         print(f"[VIGILANT] Throttling failed for {client_ip}: {e}")
@@ -1038,8 +1046,12 @@ def apply_throttle_cycle(client_ip):
             except Exception as e:
                 print(f"[VIGILANT] Error cancelling timer for {client_ip}: {e}")
 
-    # Drop to 10% immediately when doomscrolling detected (256kbit)
-    success = apply_throttle(client_ip, rate="256kbit")
+    # Drop to a strict rate immediately when doomscrolling detected.
+    # 64kbit = 8 KB/s.  Enough for plain-text and a trickle of header metadata
+    # so pages partially load, but images/video stall hard.  Combined with the
+    # 16k burst in apply_throttle, the initial TCP handshake + HTTP request
+    # complete quickly, then the client hits the wall.
+    success = apply_throttle(client_ip, rate="64kbit")
 
     if success:
         # Save throttle state to database
@@ -1215,7 +1227,7 @@ def restore_throttle_states():
 
                 if time_remaining > 0:
                     print(f"[VIGILANT] Restoring throttle for {client_ip} ({time_remaining:.0f}s remaining)")
-                    apply_throttle(client_ip, rate="256kbit")
+                    apply_throttle(client_ip, rate="64kbit")
 
                     recovery_timer = threading.Timer(
                         time_remaining,
