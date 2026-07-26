@@ -728,21 +728,23 @@ def should_throttle(client_ip, host, path=""):
         if is_burst:
             return False, rpm_now, rpm_base
 
-    return flagged, rpm_now, rpm_base
+    # Spacing check: if requests are consistently less than 30 seconds apart, throttle
+    with velocity_lock:
+        dq = request_history[client_ip]
+        if len(dq) >= 10:  # Need at least 10 requests to calculate spacing
+            # Calculate average time between consecutive requests
+            time_gaps = []
+            for i in range(len(dq) - 1):
+                gap = dq[i + 1] - dq[i]
+                time_gaps.append(gap)
+            
+            avg_gap = sum(time_gaps) / len(time_gaps)
+            # If average spacing is less than 30 seconds, consider it rapid scrolling
+            if avg_gap < 30:
+                flagged = True
+                print(f"[VIGILANT] Rapid spacing detected for {client_ip}: avg_gap={avg_gap:.1f}s")
 
-def websocket_message(self, flow: http.HTTPFlow):
-    message = flow.websocket.messages[-1]
-    client_ip = flow.client_conn.peername[0]
-    
-    # Extract textual content from web-socket frame payload
-    payload_text = message.text if message.is_text else message.content.decode("utf-8", errors="ignore")
-    
-    keywords = get_blacklisted_keywords()
-    matched = scan_text_for_keywords(payload_text, keywords)
-    if matched:
-        print(f"[VIGILANT] WEBSOCKET KEYWORD BLOCKED: {matched} from {client_ip}")
-        # Drop the websocket frame / close connection
-        flow.websocket.close(1008, "Blocked keyword detected")
+    return flagged, rpm_now, rpm_base
 
 def normalize_text_simple(text: str) -> str:
     """

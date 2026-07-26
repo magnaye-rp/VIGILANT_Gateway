@@ -101,7 +101,7 @@ DEFAULT_CONFIG = {
     "nlp_enabled": "true",
     "nlp_accuracy": "balanced",
     "network_velocity_threshold": "1.5",
-    "physical_scroll_threshold": "75",
+    "physical_scroll_threshold": "180",
     "throttle_enabled": "true",
     "throttle_rate": "256",
     "throttle_duration": "300",
@@ -2314,11 +2314,11 @@ def handle_behavioral_config():
     if "physical_scroll_preset" in payload:
         preset = payload["physical_scroll_preset"]
         if preset == "High":
-            payload["physical_scroll_threshold"] = "40"
-        elif preset == "Medium":
-            payload["physical_scroll_threshold"] = "75"
-        elif preset == "Low":
             payload["physical_scroll_threshold"] = "120"
+        elif preset == "Medium":
+            payload["physical_scroll_threshold"] = "180"
+        elif preset == "Low":
+            payload["physical_scroll_threshold"] = "300"
     
     # When custom value changes, update the threshold
     if "network_velocity_custom" in payload:
@@ -2508,6 +2508,29 @@ def toggle_doomscroll_exempt():
     except Exception as e:
         app.logger.error("Error toggling doomscroll exemption: %s", e, exc_info=True)
         return jsonify({"error": "Failed to update doomscroll exemption", "details": str(e)}), 500
+
+
+@app.route("/api/restraints/registry", methods=["GET"])
+def get_restraints_registry():
+    """Get current restraints registry (alias for throttled devices)"""
+    try:
+        config = load_config()
+        throttled_devices = []
+        
+        if DB_PATH.exists():
+            with _open_db() as conn:
+                throttled_devices = _get_current_throttled_devices(conn, config)
+        
+        return jsonify({"restraints": throttled_devices})
+    except Exception as e:
+        app.logger.error("Error getting restraints registry: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/restraints/release", methods=["POST"])
+def release_restraint():
+    """Release restraint for a specific device (alias for release-throttle)"""
+    return release_throttle()
 
 
 @app.route("/api/devices/policy", methods=["POST"])
@@ -2870,6 +2893,17 @@ def handle_forbidden(error):
 
 @app.errorhandler(Exception)
 def handle_unexpected_error(error):
+    """Handle unexpected errors gracefully."""
+    app.logger.error("Unexpected error: %s", error, exc_info=True)
+    if request.path.startswith('/api/'):
+        return jsonify({"error": "An unexpected error occurred", "status": 500}), 500
+    return render_template("dashboard.html", proxy_active=_service_statuses().get("vigilant_proxy") == "active", time=time), 500
+
+
+if __name__ == "__main__":
+    init_db()
+    init_config_db()
+    app.run(host='0.0.0.0', port=5000, debug=False)
     """Handle unexpected errors gracefully."""
     app.logger.error("Unexpected error: %s", error, exc_info=True)
     if request.path.startswith('/api/'):
