@@ -209,6 +209,8 @@ def init_db() -> None:
                 "ip_address TEXT PRIMARY KEY, mac_address TEXT, hostname TEXT, custom_name TEXT, "
                 "policy TEXT DEFAULT 'none', first_seen REAL, last_seen REAL, updated_at REAL)"
             )
+            if _table_exists(connection, "network_devices") and not _column_exists(connection, "network_devices", "doomscroll_exempt"):
+                connection.execute("ALTER TABLE network_devices ADD COLUMN doomscroll_exempt INTEGER DEFAULT 0")
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS throttle_events ("
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp REAL, client_ip TEXT, host TEXT, "
@@ -1052,10 +1054,15 @@ def _apply_device_metadata(connection: sqlite3.Connection, devices: dict) -> Non
     if not devices or not _table_exists(connection, "network_devices"):
         return
 
+    has_exempt_col = _column_exists(connection, "network_devices", "doomscroll_exempt")
+    cols = "ip_address, mac_address, hostname, custom_name, policy, last_seen"
+    if has_exempt_col:
+        cols += ", doomscroll_exempt"
+
     placeholders = ",".join("?" for _ in devices)
     rows = connection.execute(
         f"""
-        SELECT ip_address, mac_address, hostname, custom_name, policy, last_seen
+        SELECT {cols}
         FROM network_devices
         WHERE ip_address IN ({placeholders})
         """,
@@ -1071,6 +1078,10 @@ def _apply_device_metadata(connection: sqlite3.Connection, devices: dict) -> Non
         entry["custom_name"] = row[3] or entry.get("custom_name")
         entry["policy"] = row[4] or entry.get("policy", "none")
         entry["last_seen"] = row[5] or entry.get("last_seen")
+        if has_exempt_col:
+            entry["doomscroll_exempt"] = bool(row[6])
+        else:
+            entry["doomscroll_exempt"] = False
 
 
 def _get_current_throttled_devices(connection: sqlite3.Connection, config: dict | None = None) -> list[dict]:
@@ -2419,6 +2430,59 @@ def release_throttle():
         return jsonify({"error": "Failed to release throttle", "details": str(e)}), 500
 
 
+@app.route("/api/devices/doomscroll-exempt", methods=["POST"])
+def toggle_doomscroll_exempt():
+    """Toggle doomscrolling throttle exemption for a specific device."""
+    try:
+        data = request.json or {}
+        ip_address = data.get("ip_address")
+        exempt = data.get("exempt", False)
+
+        if not ip_address:
+            return jsonify({"error": "IP address is required"}), 400
+
+        if DB_PATH.exists():
+            with _open_db() as conn:
+                # Ensure column exists
+                if not _column_exists(conn, "network_devices", "doomscroll_exempt"):
+                    conn.execute("ALTER TABLE network_devices ADD COLUMN doomscroll_exempt INTEGER DEFAULT 0")
+
+                conn.execute(
+                    "UPDATE network_devices SET doomscroll_exempt = ?, updated_at = ? WHERE ip_address = ?",
+                    (1 if exempt else 0, time.time(), ip_address)
+                )
+                conn.commit()
+
+        # Signal the proxy to refresh its cache
+        _signal_rule_cache_reload()
+
+        # If exempting, also release any active throttle
+        if exempt:
+            try:
+                if _table_exists(conn, "throttle_state"):
+                    with _open_db() as conn2:
+                        conn2.execute(
+                            "UPDATE throttle_state SET is_throttled = 0 WHERE client_ip = ?",
+                            (ip_address,)
+                        )
+                        conn2.commit()
+                try:
+                    from vigilant_addon import remove_throttle
+                    remove_throttle(ip_address)
+                except ImportError:
+                    pass
+            except Exception as release_err:
+                app.logger.warning("Could not auto-release throttle for exempt device %s: %s", ip_address, release_err)
+
+        status_text = "exempt" if exempt else "not exempt"
+        app.logger.info(f"Device {ip_address} doomscroll exemption set to: {status_text}")
+        return jsonify({"status": "success", "message": f"Device {ip_address} is now {status_text} from doomscroll throttling"})
+
+    except Exception as e:
+        app.logger.error("Error toggling doomscroll exemption: %s", e, exc_info=True)
+        return jsonify({"error": "Failed to update doomscroll exemption", "details": str(e)}), 500
+
+
 @app.route("/api/devices/policy", methods=["POST"])
 def set_device_policy():
     data = request.json or {}
@@ -2727,14 +2791,17 @@ def _discover_network_devices() -> list:
     try:
         with _open_db() as connection:
             connection.execute("CREATE TABLE IF NOT EXISTS network_devices (ip_address TEXT PRIMARY KEY, mac_address TEXT, hostname TEXT, custom_name TEXT, policy TEXT DEFAULT 'none', first_seen REAL, last_seen REAL, updated_at REAL)")
-            rows = connection.execute("SELECT ip_address, mac_address, hostname, custom_name, policy, first_seen, last_seen FROM network_devices").fetchall()
+            if not _column_exists(connection, "network_devices", "doomscroll_exempt"):
+                connection.execute("ALTER TABLE network_devices ADD COLUMN doomscroll_exempt INTEGER DEFAULT 0")
+            
+            rows = connection.execute("SELECT ip_address, mac_address, hostname, custom_name, policy, first_seen, last_seen, doomscroll_exempt FROM network_devices").fetchall()
             
             for row in rows:
                 ip = row[0]
                 if ip in discovered_devices:
-                    discovered_devices[ip].update({'custom_name': row[3], 'policy': row[4], 'first_seen': row[5]})
+                    discovered_devices[ip].update({'custom_name': row[3], 'policy': row[4], 'first_seen': row[5], 'doomscroll_exempt': bool(row[7])})
                 else:
-                    discovered_devices[ip] = {'ip_address': ip, 'mac_address': row[1], 'hostname': row[2], 'custom_name': row[3], 'policy': row[4], 'first_seen': row[5], 'last_seen': row[6], 'active': False}
+                    discovered_devices[ip] = {'ip_address': ip, 'mac_address': row[1], 'hostname': row[2], 'custom_name': row[3], 'policy': row[4], 'first_seen': row[5], 'last_seen': row[6], 'doomscroll_exempt': bool(row[7]), 'active': False}
                     
             for ip, info in discovered_devices.items():
                 if info.get('active', True):

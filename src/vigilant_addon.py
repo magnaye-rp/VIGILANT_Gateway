@@ -549,6 +549,50 @@ def update_device_activity(client_ip):
     except Exception as e:
         print(f"[VIGILANT] Error updating device activity for {client_ip}: {e}")
 
+def is_device_exempt(client_ip):
+    """Check if a device is exempt from doomscrolling throttling.
+    
+    Devices with policy='whitelist' or doomscroll_exempt=1 in network_devices
+    are exempt from behavioral throttling.
+    
+    Args:
+        client_ip: Client IP address
+    
+    Returns:
+        bool: True if device is exempt from doomscroll throttling
+    """
+    try:
+        with db_lock:
+            conn = _connect_db()
+            cursor = conn.execute(
+                "SELECT policy, doomscroll_exempt FROM network_devices WHERE ip_address = ?",
+                (client_ip,)
+            )
+            row = cursor.fetchone()
+            conn.close()
+            
+            if row:
+                policy = row[0] or 'none'
+                exempt = row[1] if row[1] is not None else 0
+                return policy == 'whitelist' or exempt == 1
+            return False
+    except Exception as e:
+        # If column doesn't exist yet, fall back to policy-only check
+        try:
+            with db_lock:
+                conn = _connect_db()
+                cursor = conn.execute(
+                    "SELECT policy FROM network_devices WHERE ip_address = ?",
+                    (client_ip,)
+                )
+                row = cursor.fetchone()
+                conn.close()
+                if row:
+                    return (row[0] or 'none') == 'whitelist'
+        except Exception:
+            pass
+        return False
+
 def log_throttle(client_ip, host, rpm_now, rpm_base, action, reason=""):
     try:
         with db_lock:
@@ -647,6 +691,10 @@ def should_throttle(client_ip, host, path=""):
     network_velocity_threshold = config['network_velocity_threshold']
     physical_scroll_threshold = config['physical_scroll_threshold']
     social_domains = load_social_domains()
+
+    # Skip throttle check for exempt devices
+    if is_device_exempt(client_ip):
+        return False, 0, 0
 
     # Include youtube.com back into social_domains in DB or default set
     clean_host = host.lstrip("www.")
@@ -903,7 +951,7 @@ def remove_throttle(client_ip):
 # Throttle cycle tracking
 throttle_timers = {}  # client_ip -> Timer object
 throttle_timers_lock = threading.Lock()
-THROTTLE_CYCLE_DURATION = 120  # 2 minutes in seconds
+THROTTLE_CYCLE_DURATION = 600  # 10 minutes in seconds
 
 
 def apply_throttle_cycle(client_ip):
@@ -945,7 +993,7 @@ def apply_throttle_cycle(client_ip):
         recovery_timer.start()
 
         # Log to behavioral throttling table (separate from content filtering)
-        log_throttle(client_ip, "throttle_cycle", 0, 0, "THROTTLE_CYCLE_APPLIED", "Doomscrolling detected - 2-minute throttle cycle")
+        log_throttle(client_ip, "throttle_cycle", 0, 0, "THROTTLE_CYCLE_APPLIED", "Doomscrolling detected - 10-minute throttle cycle")
 
         print(f"[VIGILANT] Throttle cycle started for {client_ip} - will recover in {THROTTLE_CYCLE_DURATION}s")
 
@@ -1150,7 +1198,7 @@ def tail_dnsmasq_log():
                                     update_device_activity(client_ip)
 
                                     flagged, rpm_now, rpm_base = should_throttle(client_ip, domain)
-                                    if flagged and client_ip not in throttled_clients:
+                                    if flagged and client_ip not in throttled_clients and not is_device_exempt(client_ip):
                                         throttled_clients.add(client_ip)
                                         apply_throttle_cycle(client_ip)
                                         print(f"[VIGILANT] DNS DOOMSCROLL DETECTED {client_ip} @ {domain} "
@@ -1296,6 +1344,7 @@ class VIGILANTAddon:
         init_db()
         self.cached_keywords = []
         self.cached_hints = {}
+        self.cached_exempt_devices = set()
         self._cache_lock = threading.Lock()
         self._last_cache_refresh = 0.0
         _active_addon = self
@@ -1335,6 +1384,15 @@ class VIGILANTAddon:
                 "SELECT client_ip FROM throttle_state WHERE is_throttled = 1"
             )
             currently_throttled_ips = [row[0] for row in cursor.fetchall()]
+            
+            # Load exempt devices
+            try:
+                cursor = conn.execute(
+                    "SELECT ip_address FROM network_devices WHERE doomscroll_exempt = 1 OR policy = 'whitelist'"
+                )
+                exempt_ips = set(row[0] for row in cursor.fetchall())
+            except sqlite3.OperationalError:
+                exempt_ips = set()
             conn.close()
 
             with self._cache_lock:
@@ -1359,6 +1417,7 @@ class VIGILANTAddon:
                                 del throttle_timers[ip]
 
                 self._last_cache_refresh = time.time()
+                self.cached_exempt_devices = exempt_ips
         except Exception as e:
             print(f"[VIGILANT] Error refreshing rule cache: {e}")
 
@@ -1466,7 +1525,7 @@ class VIGILANTAddon:
                 log_sni_request(client_ip, server_name, velocity_rps)
 
                 flagged, rpm_now, rpm_base = should_throttle(client_ip, server_name)
-                if flagged and client_ip not in throttled_clients:
+                if flagged and client_ip not in throttled_clients and not is_device_exempt(client_ip):
                     throttled_clients.add(client_ip)
                     apply_throttle_cycle(client_ip)
                     print(f"[VIGILANT] TLS DOOMSCROLL DETECTED {client_ip} @ {server_name} "

@@ -399,26 +399,51 @@ async function loadLeasedDevices() {
     const tbody = document.getElementById('leased-tbody');
     if (!tbody) return;
     
-    tbody.innerHTML = '<tr><td colspan="4" style="text-align: center;">Loading...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align: center;">Loading...</td></tr>';
     
     try {
         const result = await apiGet('/api/devices');
         if (result && result.devices) {
             if (result.devices.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-secondary);">No leased devices</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-secondary);">No leased devices</td></tr>';
             } else {
-                tbody.innerHTML = result.devices.map(device => `
+                tbody.innerHTML = result.devices.map(device => {
+                    const isExempt = Boolean(device.doomscroll_exempt || device.policy === 'whitelist');
+                    return `
                     <tr>
                         <td>${device.hostname || 'Unknown'}</td>
                         <td>${device.ip_address}</td>
                         <td>${device.mac_address || 'Unknown'}</td>
                         <td>${device.policy || 'none'}</td>
+                        <td>
+                            <button class="${isExempt ? 'btn-primary' : 'btn-secondary'}" onclick="toggleDoomscrollExempt('${device.ip_address}', ${isExempt})" style="padding: 0.25rem 0.5rem; font-size: 0.8rem;">
+                                ${isExempt ? 'Exempt' : 'Exempt Device'}
+                            </button>
+                        </td>
                     </tr>
-                `).join('');
+                `}).join('');
             }
         }
     } catch (error) {
-        tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--danger);">Failed to load leased devices</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--danger);">Failed to load leased devices</td></tr>';
+    }
+}
+
+async function toggleDoomscrollExempt(ipAddress, isCurrentlyExempt) {
+    try {
+        const result = await apiPost('/api/devices/doomscroll-exempt', { 
+            ip_address: ipAddress,
+            exempt: !isCurrentlyExempt 
+        });
+        if (result && result.status === 'success') {
+            showToast(result.message || 'Exemption updated', 'success');
+            loadLeasedDevices();
+            loadThrottledDevices();
+        } else {
+            showToast(result?.error || 'Failed to update exemption', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to update exemption', 'error');
     }
 }
 
