@@ -1516,11 +1516,9 @@ class VIGILANTAddon:
         except Exception:
             pass
 
-        # Fallback to loopback candidate if no device found
+        # Return None if only loopback candidates found - don't log loopback traffic
         if candidates:
-            print(f"[VIGILANT] Warning: Only loopback IPs found for TLS client: {candidates}")
-            return candidates[0]
-
+            print(f"[VIGILANT] Warning: Only loopback IPs found for TLS client: {candidates} - skipping SNI logging")
         return None
 
     def tls_clienthello(self, data: tls.ClientHelloData):
