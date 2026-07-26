@@ -525,15 +525,93 @@ async function clearTrafficLogs() {
 }
 
 // SNI Dashboard Functions
+let sniScrollChartInstance = null;
+let sniDomainChartInstance = null;
+
+function renderSNICharts(scrollRates) {
+    if (typeof Chart === 'undefined') return;
+
+    const scrollCanvas = document.getElementById('sni-scroll-chart');
+    const domainCanvas = document.getElementById('sni-domain-chart');
+
+    if (!scrollCanvas || !domainCanvas) return;
+
+    const topRates = (scrollRates || []).slice(0, 10);
+    const labels = topRates.map(r => r.domain || 'Unknown');
+    const velocities = topRates.map(r => r.avg_velocity_rps || 0);
+    const counts = topRates.map(r => r.total_requests || 0);
+
+    if (sniScrollChartInstance) {
+        sniScrollChartInstance.destroy();
+        sniScrollChartInstance = null;
+    }
+    if (sniDomainChartInstance) {
+        sniDomainChartInstance.destroy();
+        sniDomainChartInstance = null;
+    }
+
+    const ctxScroll = scrollCanvas.getContext('2d');
+    sniScrollChartInstance = new Chart(ctxScroll, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Avg RPS',
+                data: velocities,
+                backgroundColor: 'rgba(59, 130, 246, 0.6)',
+                borderColor: 'rgba(59, 130, 246, 1)',
+                borderWidth: 1
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true, title: { display: true, text: 'RPS' } } }
+        }
+    });
+
+    const ctxDomain = domainCanvas.getContext('2d');
+    sniDomainChartInstance = new Chart(ctxDomain, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Requests',
+                data: counts,
+                backgroundColor: 'rgba(16, 185, 129, 0.6)',
+                borderColor: 'rgba(16, 185, 129, 1)',
+                borderWidth: 1
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true, title: { display: true, text: 'Request Count' } } }
+        }
+    });
+}
+
 async function refreshSNI() {
     const tbody = document.getElementById('sni-log-table');
     if (!tbody) return;
     
     tbody.innerHTML = '<tr><td colspan="4" style="text-align: center;">Loading...</td></tr>';
     
+    const timeWindow = document.getElementById('sni-time-window')?.value || '5m';
+    const clientFilter = document.getElementById('sni-client-filter')?.value || '';
+
+    let queryParams = `?limit=100`;
+    if (clientFilter) queryParams += `&client_ip=${encodeURIComponent(clientFilter)}`;
+
     try {
-        const result = await apiGet('/api/sni/requests');
-        const logs = result ? (result.logs || result.requests || []) : [];
+        const [requestsResult, ratesResult] = await Promise.all([
+            apiGet(`/api/sni/requests${queryParams}`),
+            apiGet(`/api/sni/scroll-rates?time_window=${timeWindow}&client_ip=${encodeURIComponent(clientFilter)}`)
+        ]);
+
+        const logs = requestsResult ? (requestsResult.logs || requestsResult.requests || []) : [];
         if (logs.length === 0) {
             tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-secondary);">No SNI requests found</td></tr>';
         } else {
@@ -545,6 +623,10 @@ async function refreshSNI() {
                     <td>${req.velocity_rps?.toFixed(2) || '0.00'}</td>
                 </tr>
             `).join('');
+        }
+
+        if (ratesResult && ratesResult.scroll_rates) {
+            renderSNICharts(ratesResult.scroll_rates);
         }
     } catch (error) {
         tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--danger);">Failed to load SNI requests</td></tr>';

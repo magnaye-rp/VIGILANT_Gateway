@@ -1482,8 +1482,21 @@ class VIGILANTAddon:
             if ip and ip not in _LOOPBACK:
                 return ip
 
-        # All candidates are loopback – return the first one we found anyway
-        # so logging still works (better than silently dropping)
+        # All candidates are loopback – try resolving real client IP from active network_devices
+        try:
+            with db_lock:
+                conn = _connect_db()
+                cursor = conn.execute(
+                    "SELECT ip_address FROM network_devices WHERE ip_address NOT LIKE '127.%' AND ip_address NOT LIKE '::1%' ORDER BY last_seen DESC LIMIT 1"
+                )
+                row = cursor.fetchone()
+                conn.close()
+                if row and row[0]:
+                    return row[0]
+        except Exception:
+            pass
+
+        # Fallback to loopback candidate if no device found
         if candidates:
             print(f"[VIGILANT] Warning: Only loopback IPs found for TLS client: {candidates}")
             return candidates[0]
