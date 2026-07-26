@@ -1556,7 +1556,10 @@ class VIGILANTAddon:
             config = load_proxy_config()
             sni_filtering_enabled = config.get('sni_filtering_enabled', 'true').lower() == 'true'
 
+            print(f"[VIGILANT DEBUG] SNI filtering enabled: {sni_filtering_enabled}")
+
             if sni_filtering_enabled:
+                print(f"[VIGILANT DEBUG] About to log SNI request: {client_ip} @ {server_name}")
                 self.log_to_dashboard(client_ip, server_name)
 
                 # Calculate SNI velocity (RPS)
@@ -1574,6 +1577,7 @@ class VIGILANTAddon:
 
             # 4. Certificate Pinning Dynamic Bypass (AFTER logging)
             if server_name in self.pinned_hosts:
+                print(f"[VIGILANT DEBUG] SSL pinned, bypassing: {server_name}")
                 data.ignore_connection = True
                 print(f"[VIGILANT] Dynamic L4 Passthrough activated for pinned SNI: {server_name}")
                 return
