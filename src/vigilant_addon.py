@@ -1554,7 +1554,10 @@ class VIGILANTAddon:
 
             # 3. SNI Filtering & Behavioral Checks (do this BEFORE bypassing pinned apps)
             config = load_proxy_config()
-            sni_filtering_enabled = config.get('sni_filtering_enabled', 'true').lower() == 'true'
+            # load_proxy_config returns sni_filtering_enabled as a bool already;
+            # do NOT call .lower() on it (was causing an AttributeError that silently
+            # skipped all SNI logging).
+            sni_filtering_enabled = bool(config.get('sni_filtering_enabled', True))
 
             print(f"[VIGILANT DEBUG] SNI filtering enabled: {sni_filtering_enabled}")
 
