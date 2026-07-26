@@ -894,12 +894,19 @@ def apply_throttle(client_ip, rate=None):
             check=False, capture_output=True
         )
 
+        # Match traffic sent TO the client (downloads)
+        subprocess.run(
+            ["tc", "filter", "add", "dev", interface, "protocol", "ip", "parent", "1:0",
+             "prio", "1", "u32", "match", "ip", "dst", client_ip, "flowid", "1:10"],
+            check=False, capture_output=True
+        )
+        # Match traffic FROM the client (uploads)
         subprocess.run(
             ["tc", "filter", "add", "dev", interface, "protocol", "ip", "parent", "1:0",
              "prio", "1", "u32", "match", "ip", "src", client_ip, "flowid", "1:10"],
             check=False, capture_output=True
         )
-        print(f"[VIGILANT] Throttling applied to {client_ip} on {interface} at {throttle_rate}")
+        print(f"[VIGILANT] Throttling applied to {client_ip} on {interface} at {throttle_rate} (dst & src)")
         return True
     except Exception as e:
         print(f"[VIGILANT] Throttling failed for {client_ip}: {e}")
@@ -917,7 +924,12 @@ def remove_throttle(client_ip):
     """
     interface = get_distribution_interface()
     try:
-        # Remove filter
+        # Remove filters (both dst and src)
+        subprocess.run(
+            ["tc", "filter", "del", "dev", interface, "protocol", "ip", "parent", "1:0",
+             "prio", "1", "u32", "match", "ip", "dst", client_ip, "flowid", "1:10"],
+            check=False, capture_output=True
+        )
         result = subprocess.run(
             ["tc", "filter", "del", "dev", interface, "protocol", "ip", "parent", "1:0",
              "prio", "1", "u32", "match", "ip", "src", client_ip, "flowid", "1:10"],

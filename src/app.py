@@ -1091,6 +1091,21 @@ def _get_current_throttled_devices(connection: sqlite3.Connection, config: dict 
 
     devices = _collect_dynamic_throttle_devices(connection, active_since, managed_prefix)
     devices.update({k: v for k, v in _collect_policy_blacklist_devices(connection, managed_prefix).items() if k not in devices})
+
+    # Exclude devices that have been unthrottled in throttle_state
+    if _table_exists(connection, "throttle_state"):
+        try:
+            rows = connection.execute(
+                "SELECT client_ip, is_throttled FROM throttle_state"
+            ).fetchall()
+            throttle_status = {r[0]: bool(r[1]) for r in rows}
+            devices = {
+                ip: dev for ip, dev in devices.items()
+                if throttle_status.get(ip, True) or dev.get("policy") == "blacklist"
+            }
+        except sqlite3.Error:
+            pass
+
     _apply_device_metadata(connection, devices)
 
     throttled_devices = sorted(

@@ -533,19 +533,18 @@ async function refreshSNI() {
     
     try {
         const result = await apiGet('/api/sni/requests');
-        if (result && result.requests) {
-            if (result.requests.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-secondary);">No SNI requests found</td></tr>';
-            } else {
-                tbody.innerHTML = result.requests.map(req => `
-                    <tr>
-                        <td>${formatDate(req.timestamp)}</td>
-                        <td>${req.client_ip}</td>
-                        <td>${req.domain}</td>
-                        <td>${req.velocity_rps?.toFixed(2) || '0.00'}</td>
-                    </tr>
-                `).join('');
-            }
+        const logs = result ? (result.logs || result.requests || []) : [];
+        if (logs.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-secondary);">No SNI requests found</td></tr>';
+        } else {
+            tbody.innerHTML = logs.map(req => `
+                <tr>
+                    <td>${formatDate(req.timestamp)}</td>
+                    <td>${req.client_ip}</td>
+                    <td>${req.domain}</td>
+                    <td>${req.velocity_rps?.toFixed(2) || '0.00'}</td>
+                </tr>
+            `).join('');
         }
     } catch (error) {
         tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--danger);">Failed to load SNI requests</td></tr>';
