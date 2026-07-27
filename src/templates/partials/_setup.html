@@ -1,193 +1,6 @@
-      <!-- Filtering Tab -->
-      <div id="tab-filtering" class="tab-content">
-        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Keyword Filtering</h2>
-
-        <div class="settings-grid">
-          <!-- CARD 1: Keyword Enforcement Engine -->
-          <div class="settings-card">
-            <div class="card-header">
-              <div>
-                <div class="card-title">Keyword Enforcement Engine</div>
-                <div class="card-subtitle">Register phrases for URL and payload blocking</div>
-              </div>
-            </div>
-
-            <form id="keyword-form">
-              <div class="form-group">
-                <label class="form-label">Keyword</label>
-                <input type="text" id="keyword-input" class="form-input" placeholder="e.g., tung tung tung sahur" required>
-                <div class="form-hint">Keywords are converted to lowercase for matching</div>
-              </div>
-
-              <div style="margin-top: 1.5rem;">
-                <button type="submit" class="btn btn-primary">Add Keyword</button>
-              </div>
-            </form>
-          </div>
-
-          <!-- CARD 2: Active Restraints Registry -->
-          <div class="settings-card">
-            <div class="card-header">
-              <div>
-                <div class="card-title">Active Restraints Registry</div>
-                <div class="card-subtitle">Currently blocked keywords in SQLite</div>
-              </div>
-            </div>
-
-            <table class="traffic-table">
-              <thead>
-                <tr>
-                  <th>Keyword</th>
-                  <th style="text-align: right;">Actions</th>
-                </tr>
-              </thead>
-              <tbody id="keywords-table-body">
-                <tr>
-                  <td colspan="2" style="text-align: center; color: var(--text-secondary);">Loading...</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-
-
-          <!-- CARD 4: Traffic Categorization Rules -->
-          <div class="settings-card full-width">
-            <div class="card-header">
-              <div>
-                <div class="card-title">Traffic Categorization Rules</div>
-                <div class="card-subtitle">Domain destination category router context</div>
-              </div>
-            </div>
-
-            <form id="category-hint-form">
-              <div class="form-row">
-                <div class="form-group">
-                  <label class="form-label">Category</label>
-                  <select id="category-hint-category" required>
-                    <option value="">Select category...</option>
-                    <option value="Educational">Educational</option>
-                    <option value="Productive">Productive</option>
-                    <option value="Distracting">Distracting</option>
-                    <option value="Harmful">Harmful</option>
-                  </select>
-                  <div class="form-hint">Structural designation for domain classification</div>
-                </div>
-                <div class="form-group">
-                  <label class="form-label">Target Domain</label>
-                  <input type="text" id="category-hint-domain" placeholder="example.com" required>
-                  <div class="form-hint">Domain to classify (converted to lowercase)</div>
-                </div>
-              </div>
-
-              <div style="margin-top: 1.5rem;">
-                <button type="submit" class="btn btn-primary">Add Routing Rule</button>
-              </div>
-            </form>
-
-            <div style="margin-top: 2rem;">
-              <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Active Routing Rules</h3>
-              <table class="traffic-table">
-                <thead>
-                  <tr>
-                    <th>Category</th>
-                    <th>Domain</th>
-                    <th style="text-align: right;">Actions</th>
-                  </tr>
-                </thead>
-                <tbody id="category-hints-table-body">
-                  <tr>
-                    <td colspan="3" style="text-align: center; color: var(--text-secondary);">Loading...</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Behavioral Control Tab -->
-      <div id="tab-behavioral-control" class="tab-content">
-        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Behavioral Control & Habit Management <i class="fa-solid fa-info-circle tooltip-trigger" data-tooltip="Manage how the system analyzes pacing and encryption patterns to limit excessive consumption."></i></h2>
-
-        <div class="card glassmorphic-card behavioral-card" style="background: var(--surface); box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.15); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 12px; padding: 2rem;">
-
-          <form id="behavioral-form" onsubmit="saveBehavioralSettings(event)">
-            <!-- Section A -->
-            <div>
-              <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem; color: var(--primary);">Network Request Velocity</h3>
-              <div class="behavioral-preset-grid">
-                <div class="form-group">
-                  <label class="form-label">Preset Sensitivity</label>
-                  <select id="behavioral-network-preset" onchange="toggleBehavioralCustom('network')">
-                    <option value="Low">Low (200%)</option>
-                    <option value="Medium">Medium (150%)</option>
-                    <option value="High">High (110%)</option>
-                    <option value="Custom">Custom</option>
-                  </select>
-                </div>
-                <div class="form-group hidden" id="behavioral-network-custom-container">
-                  <label class="form-label">Custom Value (%)</label>
-                  <input type="number" id="behavioral-network-custom" min="50" max="500" placeholder="e.g. 150">
-                </div>
-              </div>
-            </div>
-
-            <!-- Section B -->
-            <div>
-              <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem; color: var(--primary);">Physical Scroll Telemetry Control</h3>
-              <div class="behavioral-preset-grid">
-                <div class="form-group">
-                  <label class="form-label">Preset Sensitivity</label>
-                  <select id="behavioral-scroll-preset" onchange="toggleBehavioralCustom('scroll')">
-                    <option value="Low">Low (120/min)</option>
-                    <option value="Medium">Medium (75/min)</option>
-                    <option value="High">High (40/min)</option>
-                    <option value="Custom">Custom</option>
-                  </select>
-                </div>
-                <div class="form-group hidden" id="behavioral-scroll-custom-container">
-                  <label class="form-label">Custom Value (Events/Min)</label>
-                  <input type="number" id="behavioral-scroll-custom" min="1" max="500" placeholder="e.g. 75">
-                </div>
-              </div>
-            </div>
-
-            <!-- Section C -->
-            <div class="behavioral-section">
-              <h3 class="behavioral-title">SNI (Server Name Indication) Guard</h3>
-              
-              <div class="toggle-control-group">
-                <div class="toggle-label-container">
-                  <h4 class="toggle-main-label">Enable SNI Fallback Tracking</h4>
-                  <p class="toggle-sub-description">
-                    Allows VIGILANT to apply behavioral policies to encrypted apps (like Instagram & TikTok) that block full SSL inspection.
-                  </p>
-                </div>
-                
-                <div class="switch-container">
-                  <span id="sni-status-text" class="switch-status-indicator" style="color: #1A938A; font-weight: bold;">ON</span>
-                  <label class="switch">
-                    <input type="checkbox" id="behavioral-sni-enabled" checked onchange="updateSNIStatusIndicator(this)">
-                    <span class="slider round"></span>
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            <!-- Action Bar -->
-            <div style="display: flex; justify-content: flex-end;">
-              <button type="submit" class="btn-primary" id="behavioral-save-btn" style="transition: all 0.3s ease; display: flex; align-items: center; gap: 0.5rem; width: auto;">
-                <i class="fa-solid fa-save"></i> Save Settings
-              </button>
-            </div>
-          </form>
-        </div>
-      </div>
-
       <!-- Settings & Setup Tab -->
       <div id="tab-settings" class="tab-content">
-        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Settings & Setup</h2>
+        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Settings &amp; Setup</h2>
 
         <div class="card" style="margin-bottom: 2rem;">
           <div class="card-header">
@@ -326,7 +139,7 @@
 
             <div class="card" style="margin-bottom: 2rem;">
               <div class="card-header">
-                <div class="card-title">Security & Privacy</div>
+                <div class="card-title">Security &amp; Privacy</div>
                 <div class="card-subtitle">System security settings</div>
               </div>
 
@@ -357,17 +170,17 @@
         </form>
 
         <div class="card card-custom mt-4" style="margin-bottom: 2rem;">
-            <div class="card-header">System Backup & Configuration Recovery</div>
+            <div class="card-header">System Backup &amp; Configuration Recovery</div>
             <div class="card-body">
                 <p class="text-muted">Export your keyword blocklists, MAC whitelists, and network controls to a backup file, or restore them onto this server gateway device.</p>
                 <div class="d-flex align-items-center justify-content-between flex-wrap" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;">
-                    <a href="/api/config/setup/export" class="btn btn-primary m-2">Download Settings JSON Backup</a>
+                    <a href="/api/config/setup/export" class="btn-primary m-2">Download Settings JSON Backup</a>
                     
                     <form action="/api/config/setup/import" method="POST" enctype="multipart/form-data" class="form-inline m-2" style="display: flex; gap: 1rem; align-items: center;">
                         <div class="form-group mr-2" style="margin-bottom: 0;">
                             <input type="file" name="config_file" accept=".json" class="form-control-file" required>
                         </div>
-                        <button type="submit" class="btn btn-warning">Restore Configuration JSON</button>
+                        <button type="submit" class="btn-warning">Restore Configuration JSON</button>
                     </form>
                 </div>
             </div>

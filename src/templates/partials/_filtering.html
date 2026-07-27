@@ -1,0 +1,105 @@
+      <!-- Filtering Tab -->
+      <div id="tab-filtering" class="tab-content">
+        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Keyword Filtering</h2>
+
+        <div class="settings-grid">
+          <!-- CARD 1: Keyword Enforcement Engine -->
+          <div class="settings-card">
+            <div class="card-header">
+              <div>
+                <div class="card-title">Keyword Enforcement Engine</div>
+                <div class="card-subtitle">Register phrases for URL and payload blocking</div>
+              </div>
+            </div>
+
+            <form id="keyword-form">
+              <div class="form-group">
+                <label class="form-label">Keyword</label>
+                <input type="text" id="keyword-input" class="form-input" placeholder="e.g., tung tung tung sahur" required>
+                <div class="form-hint">Keywords are converted to lowercase for matching</div>
+              </div>
+
+              <div style="margin-top: 1.5rem;">
+                <button type="submit" class="btn-primary">Add Keyword</button>
+              </div>
+            </form>
+          </div>
+
+          <!-- CARD 2: Active Restraints Registry -->
+          <div class="settings-card">
+            <div class="card-header">
+              <div>
+                <div class="card-title">Active Restraints Registry</div>
+                <div class="card-subtitle">Currently blocked keywords in SQLite</div>
+              </div>
+            </div>
+
+            <table class="traffic-table">
+              <thead>
+                <tr>
+                  <th>Keyword</th>
+                  <th style="text-align: right;">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="keywords-table-body">
+                <tr>
+                  <td colspan="2" style="text-align: center; color: var(--text-secondary);">Loading...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- CARD 3: Traffic Categorization Rules -->
+          <div class="settings-card full-width">
+            <div class="card-header">
+              <div>
+                <div class="card-title">Traffic Categorization Rules</div>
+                <div class="card-subtitle">Domain destination category router context</div>
+              </div>
+            </div>
+
+            <form id="category-hint-form">
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Category</label>
+                  <select id="category-hint-category" required>
+                    <option value="">Select category...</option>
+                    <option value="Educational">Educational</option>
+                    <option value="Productive">Productive</option>
+                    <option value="Distracting">Distracting</option>
+                    <option value="Harmful">Harmful</option>
+                  </select>
+                  <div class="form-hint">Structural designation for domain classification</div>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Target Domain</label>
+                  <input type="text" id="category-hint-domain" placeholder="example.com" required>
+                  <div class="form-hint">Domain to classify (converted to lowercase)</div>
+                </div>
+              </div>
+
+              <div style="margin-top: 1.5rem;">
+                <button type="submit" class="btn-primary">Add Routing Rule</button>
+              </div>
+            </form>
+
+            <div style="margin-top: 2rem;">
+              <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Active Routing Rules</h3>
+              <table class="traffic-table">
+                <thead>
+                  <tr>
+                    <th>Category</th>
+                    <th>Domain</th>
+                    <th style="text-align: right;">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="category-hints-table-body">
+                  <tr>
+                    <td colspan="3" style="text-align: center; color: var(--text-secondary);">Loading...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>

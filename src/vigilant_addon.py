@@ -40,12 +40,9 @@ else:
     DB_PATH = str(LOCAL_DB_PATH)
 
 VELOCITY_WINDOW    = 60
-MIN_REQUESTS_BASELINE = 10
 
 # Default values (will be overridden by database config)
 DEFAULT_VELOCITY_THRESHOLD = 1.5
-DEFAULT_THROTTLE_RATE = "64kbit"
-DEFAULT_PINNED_DOMAINS = "cdninstagram.com, facebook.com,tiktok.com,x.com,twitter.co, youtube.com"
 
 # Global asset whitelist
 GLOBAL_WHITELIST = {
@@ -370,7 +367,7 @@ def load_proxy_config():
 
         cursor.execute("SELECT value FROM config_settings WHERE key = 'physical_scroll_threshold'")
         row = cursor.fetchone()
-        physical_scroll_threshold = int(row[0]) if row else 75
+        physical_scroll_threshold = int(row[0]) if row else 30
 
         cursor.execute("SELECT value FROM config_settings WHERE key = 'nlp_enabled'")
         row = cursor.fetchone()
@@ -412,7 +409,7 @@ def load_proxy_config():
         print(f"[VIGILANT] Error loading proxy config from database: {e}, using defaults")
         return {
             'network_velocity_threshold': DEFAULT_VELOCITY_THRESHOLD,
-            'physical_scroll_threshold': 75,
+            'physical_scroll_threshold': 30,
             'nlp_enabled': True,
             'sni_filtering_enabled': True,
             'throttle_rate': DEFAULT_THROTTLE_RATE,
@@ -723,24 +720,49 @@ def should_throttle(client_ip, host, path=""):
     physical_scroll_threshold = config['physical_scroll_threshold']
     social_domains = load_social_domains()
 
+    # Always accumulate velocity for every request (including CDN/cookie
+    # subdomains of social platforms) so the RPM counter reflects actual
+    # user activity, not only the primary hostname.  Throttle check on
+    # social domains happens below.
+    rpm_now, rpm_base = compute_velocity(client_ip)
+
     # Skip throttle check for exempt devices
     if is_device_exempt(client_ip):
-        return False, 0, 0
+        return False, rpm_now, rpm_base
 
-    # Include youtube.com back into social_domains in DB or default set
+    # Social-domain + CDN detection: match base domain AND CDN/cookie
+    # subdomains of known social platforms so media-fetch traffic is
+    # counted alongside API traffic.
+    SOCIAL_CDN_SUFFIXES = {
+        "tiktokcdn.com", "tiktokv.com", "tiktok.com", "tiktok-minis.us",
+        "zijieapi.com", "bytedance.net", "bytedance.com",
+        "facebook.com", "fbcdn.net", "facebook.net",
+        "instagram.com", "cdninstagram.com",
+        "twitter.com", "x.com",
+        "reddit.com", "redditmedia.com",
+        "youtube.com", "googlevideo.com", "ytimg.com",
+    }
     clean_host = host.lstrip("www.")
-    base = ".".join(clean_host.split(".")[-2:])
-    
-    if not any(base in d for d in social_domains):
-        return False, 0, 0
 
-    # Optional: Short-form video detection filter for YouTube / IG
+    # Match on the base domain (e.g. "facebook.com" from "graph.facebook.com")
+    # AND on CDN suffixes ("fbcdn.net" matches directly)
+    is_social = False
+    for suffix in social_domains | DEFAULT_SOCIAL_DOMAINS | SOCIAL_CDN_SUFFIXES:
+        if clean_host == suffix:
+            is_social = True
+            break
+        if clean_host.endswith("." + suffix):
+            is_social = True
+            break
+
+    if not is_social:
+        return False, rpm_now, rpm_base
+
+    # Optional: YouTube / IG short-form detection
     is_youtube = "youtube.com" in clean_host or "googlevideo.com" in clean_host
     if is_youtube and not ("/shorts/" in path or "shorts" in path):
-        # Allow standard long-form videos without aggressive throttling
-        return False, 0, 0
+        return False, rpm_now, rpm_base
 
-    rpm_now, rpm_base = compute_velocity(client_ip)
     if session_totals[client_ip] < MIN_REQUESTS_BASELINE:
         return False, rpm_now, rpm_base
 
@@ -751,7 +773,7 @@ def should_throttle(client_ip, host, path=""):
         # tightly in time).  We still flag it — the exemption was removed because
         # app-initialization bursts are exactly what we want to rate-limit.
         # The 16k burst buffer on the tc class lets header/TLS traffic through
-        # before the steady 64kbit rate kicks in, so this no longer needs a
+        # before the steady 32kbit rate kicks in, so this no longer needs a
         # code-level bypass.
         with velocity_lock:
             dq = request_history[client_ip]
@@ -761,21 +783,19 @@ def should_throttle(client_ip, host, path=""):
                     print(f"[VIGILANT] Burst detected for {client_ip}: "
                           f"{physical_scroll_threshold} requests in {time_for_threshold_reqs:.1f}s — throttling anyway")
 
-    # Spacing check: if requests are consistently less than 30 seconds apart, throttle
+    # Spacing check: if requests are consistently less than 20 seconds apart, throttle
     with velocity_lock:
         dq = request_history[client_ip]
-        if len(dq) >= 10:  # Need at least 10 requests to calculate spacing
-            # Calculate average time between consecutive requests
+        if len(dq) >= 10:
             time_gaps = []
             for i in range(len(dq) - 1):
                 gap = dq[i + 1] - dq[i]
                 time_gaps.append(gap)
-            
-            avg_gap = sum(time_gaps) / len(time_gaps)
-            # If average spacing is less than 30 seconds, consider it rapid scrolling
-            if avg_gap < 30:
-                flagged = True
-                print(f"[VIGILANT] Rapid spacing detected for {client_ip}: avg_gap={avg_gap:.1f}s")
+            if time_gaps:
+                avg_gap = sum(time_gaps) / len(time_gaps)
+                if avg_gap < 20:
+                    flagged = True
+                    print(f"[VIGILANT] Rapid spacing detect for {client_ip}: avg_gap={avg_gap:.1f}s")
 
     return flagged, rpm_now, rpm_base
 
@@ -924,40 +944,52 @@ def apply_throttle(client_ip, rate=None):
     prio = ip_hash
 
     try:
-        # Ensure root qdisc exists (ignore error if it already does)
-        subprocess.run(
+        # Ensure root qdisc exists (quietly; it may already be set up)
+        result = subprocess.run(
             ["tc", "qdisc", "add", "dev", interface, "root", "handle", "1:", "htb", "default", "1"],
-            check=False, capture_output=True
+            check=False, capture_output=True, text=True
         )
+        if result.returncode != 0 and "RTNETLINK answers: File exists" not in result.stderr:
+            print(f"[VIGILANT] tc qdisc add error on {interface}: {result.stderr.strip()}")
 
         # Remove any stale class/filter for this client first (clean re-apply)
         remove_throttle(client_ip, client_ip_only=True)
 
         # Add a dedicated class for this client IP.
         # burst=16k allows the first 2KB-16KB of a TCP flow through at line rate
-        # so initial HTTP request / TLS handshake complete quickly, then the
+        # so initial HTTP request line / TLS handshake complete quickly, then the
         # steady rate kicks in.  This is critical for user-perceptible throttle:
         # pages partially render (text/headers) but images and video stall.
         # cburst=16k applies the same burst control to the ceil limit.
-        subprocess.run(
+        result = subprocess.run(
             ["tc", "class", "add", "dev", interface, "parent", "1:", "classid", class_id,
              "htb", "rate", throttle_rate, "ceil", throttle_rate,
              "burst", "16k", "cburst", "16k"],
-            check=False, capture_output=True
+            check=False, capture_output=True, text=True
         )
+        if result.returncode != 0:
+            print(f"[VIGILANT] tc class add failed for {client_ip} on {interface}: {result.stderr.strip()}")
+            return False
 
         # Match traffic sent TO the client (downloads)
-        subprocess.run(
+        result = subprocess.run(
             ["tc", "filter", "add", "dev", interface, "protocol", "ip", "parent", "1:0",
              "prio", str(prio), "u32", "match", "ip", "dst", client_ip, "flowid", class_id],
-            check=False, capture_output=True
+            check=False, capture_output=True, text=True
         )
+        if result.returncode != 0:
+            print(f"[VIGILANT] tc filter dst failed for {client_ip} on {interface}: {result.stderr.strip()}")
+            return False
+
         # Match traffic FROM the client (uploads)
-        subprocess.run(
+        result = subprocess.run(
             ["tc", "filter", "add", "dev", interface, "protocol", "ip", "parent", "1:0",
              "prio", str(prio), "u32", "match", "ip", "src", client_ip, "flowid", class_id],
-            check=False, capture_output=True
+            check=False, capture_output=True, text=True
         )
+        if result.returncode != 0:
+            print(f"[VIGILANT] tc filter src failed for {client_ip} on {interface}: {result.stderr.strip()}")
+            return False
         
         # Store mapping for later removal
         _throttle_map[client_ip] = class_id
@@ -1047,11 +1079,11 @@ def apply_throttle_cycle(client_ip):
                 print(f"[VIGILANT] Error cancelling timer for {client_ip}: {e}")
 
     # Drop to a strict rate immediately when doomscrolling detected.
-    # 64kbit = 8 KB/s.  Enough for plain-text and a trickle of header metadata
+    # 32kbit = 4 KB/s.  Enough for plain-text and a trickle of header metadata
     # so pages partially load, but images/video stall hard.  Combined with the
     # 16k burst in apply_throttle, the initial TCP handshake + HTTP request
     # complete quickly, then the client hits the wall.
-    success = apply_throttle(client_ip, rate="64kbit")
+    success = apply_throttle(client_ip, rate="32kbit")
 
     if success:
         # Save throttle state to database
@@ -1227,7 +1259,7 @@ def restore_throttle_states():
 
                 if time_remaining > 0:
                     print(f"[VIGILANT] Restoring throttle for {client_ip} ({time_remaining:.0f}s remaining)")
-                    apply_throttle(client_ip, rate="64kbit")
+                    apply_throttle(client_ip, rate="32kbit")
 
                     recovery_timer = threading.Timer(
                         time_remaining,

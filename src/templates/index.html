@@ -37,6 +37,10 @@
         <div class="nav-icon"><i class="fa-solid fa-eye"></i></div>
         <span>Behavioral Control</span>
       </div>
+      <div class="nav-item" onclick="switchTab('sni-monitoring')">
+        <div class="nav-icon"><i class="fa-solid fa-shield-halved"></i></div>
+        <span>SNI Monitoring</span>
+      </div>
       <div class="nav-item" onclick="switchTab('settings')">
         <div class="nav-icon"><i class="fa-solid fa-gear"></i></div>
         <span>Setup</span>
@@ -71,8 +75,11 @@
 
     <main class="content">
       {% include 'partials/_device_management.html' %}
-      {% include 'partials/_settings_form.html' %}
+      {% include 'partials/_filtering.html' %}
+      {% include 'partials/_behavioral_control.html' %}
+      {% include 'partials/_setup.html' %}
       {% include 'partials/_traffic_logs.html' %}
+      {% include 'partials/_sni_dashboard.html' %}
 
       <!-- System Tab -->
       <div id="tab-system" class="tab-content active">
@@ -166,170 +173,6 @@
           </div>
         </div>
       </div>
-
-
-      <!-- Traffic Logs Tab -->
-      <div id="tab-traffic-logs" class="tab-content">
-        <div class="card">
-          <div class="card-header">
-            <div class="card-title">Traffic Logs</div>
-            <div class="card-subtitle">View and filter network traffic events</div>
-          </div>
-          <div style="margin-bottom: 1.5rem; display: flex; gap: 1rem; flex-wrap: wrap;">
-            <select id="traffic-filter-category" style="width: auto;">
-              <option value="">All Categories</option>
-              <option value="educational">Educational</option>
-              <option value="productive">Productive</option>
-              <option value="distracting">Distracting</option>
-              <option value="harmful">Harmful</option>
-            </select>
-            <input type="text" id="traffic-filter-client" placeholder="Filter by Client IP..." style="flex: 1;">
-            <input type="text" id="traffic-filter-domain" placeholder="Filter by Domain..." style="flex: 1;">
-            <button class="btn btn-primary" onclick="applyFilters()">Apply Filters</button>
-            <button class="btn btn-danger" onclick="clearTrafficLogs()">Clear Logs</button>
-          </div>
-          <table class="traffic-table">
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Client IP</th>
-                <th>Host</th>
-                <th>Category</th>
-                <th>Blocked</th>
-              </tr>
-            </thead>
-            <tbody id="traffic-tbody">
-              <tr><td colspan="5" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Loading logs...</td></tr>
-            </tbody>
-          </table>
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem;">
-            <div style="font-size: 0.9rem; color: var(--text-secondary);">
-              Page <span id="current-page">1</span> of <span id="total-pages">1</span> (<span id="total-items">0</span> total)
-            </div>
-            <div class="btn-group">
-              <button class="btn btn-secondary" id="prev-page" onclick="changePage(-1)">Previous</button>
-              <button class="btn btn-secondary" id="next-page" onclick="changePage(1)">Next</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Content Filtering Tab -->
-      <div id="tab-filtering" class="tab-content">
-        <div class="settings-grid">
-          <div class="settings-card">
-            <div class="card-header">
-              <div class="card-title">Category Hints</div>
-              <div class="card-subtitle">Manually assign categories to domains</div>
-            </div>
-            <form id="category-hint-form">
-              <div class="form-row">
-                <div class="form-group">
-                  <label class="form-label">Category</label>
-                  <select id="category-hint-category">
-                    <option value="">Select category...</option>
-                    <option value="educational">Educational</option>
-                    <option value="productive">Productive</option>
-                    <option value="distracting">Distracting</option>
-                    <option value="harmful">Harmful</option>
-                  </select>
-                </div>
-                <div class="form-group">
-                  <label class="form-label">Domain</label>
-                  <input type="text" id="category-hint-domain" placeholder="example.com">
-                </div>
-              </div>
-              <button type="submit" class="btn btn-primary">Add Mapping</button>
-            </form>
-            <table class="traffic-table" style="margin-top: 1.5rem;">
-              <thead>
-                <tr>
-                  <th>Category</th>
-                  <th>Domain</th>
-                  <th style="text-align: right;">Actions</th>
-                </tr>
-              </thead>
-              <tbody id="category-hints-table-body">
-                <tr><td colspan="3" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Loading hints...</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <!-- Behavioral Control Tab -->
-      <div id="tab-behavioral-control" class="tab-content">
-        <div class="settings-card">
-          <div class="card-header">
-            <div class="card-title">Behavioral Control Settings</div>
-            <div class="card-subtitle">Configure network velocity and scroll telemetry thresholds</div>
-          </div>
-          <form id="behavioral-settings-form" onsubmit="saveBehavioralSettings(event)">
-            <div class="behavioral-setting-group">
-              <label class="form-label">Network Request Velocity</label>
-              <div class="behavioral-preset-grid">
-                <div class="form-group">
-                  <select id="behavioral-network-preset" onchange="toggleBehavioralCustom('network')">
-                    <option value="Low">Low (100 req/min)</option>
-                    <option value="Medium">Medium (150 req/min)</option>
-                    <option value="High">High (200 req/min)</option>
-                    <option value="Custom">Custom</option>
-                  </select>
-                </div>
-                <div class="form-group" id="behavioral-network-custom-container" style="display: none;">
-                  <input type="number" id="behavioral-network-custom" placeholder="Custom threshold">
-                </div>
-              </div>
-            </div>
-            <div class="behavioral-setting-group">
-              <label class="form-label">Physical Scroll Telemetry</label>
-              <div class="behavioral-preset-grid">
-                <div class="form-group">
-                  <select id="behavioral-scroll-preset" onchange="toggleBehavioralCustom('scroll')">
-                    <option value="Low">Low (40 req/min)</option>
-                    <option value="Medium">Medium (75 req/min)</option>
-                    <option value="High">High (120 req/min)</option>
-                    <option value="Custom">Custom</option>
-                  </select>
-                </div>
-                <div class="form-group" id="behavioral-scroll-custom-container" style="display: none;">
-                  <input type="number" id="behavioral-scroll-custom" placeholder="Custom threshold">
-                </div>
-              </div>
-            </div>
-            {% include 'partials/_settings_form.html' %}
-            <button type="submit" class="btn btn-primary">Save Behavioral Settings</button>
-          </form>
-        </div>
-      </div>
-
-      <!-- Setup Tab -->
-      <div id="tab-settings" class="tab-content">
-        <div class="settings-grid">
-          <div class="settings-card">
-            <div class="card-header">
-              <div class="card-title">Configuration Management</div>
-              <div class="card-subtitle">Backup, restore, and reset system settings</div>
-            </div>
-            <div class="btn-group">
-              <button class="btn btn-primary" onclick="exportConfig()">Export Configuration</button>
-              <button class="btn btn-secondary" onclick="importConfig()">Import Configuration</button>
-              <button class="btn btn-danger" onclick="confirmReset()">Factory Reset</button>
-            </div>
-          </div>
-          <div class="settings-card">
-            <div class="card-header">
-              <div class="card-title">System Control</div>
-              <div class="card-subtitle">Restart services and reload configurations</div>
-            </div>
-            <div class="btn-group">
-              <button class="btn btn-secondary" onclick="executeSystemControl('restart_proxy', this)">Restart Proxy</button>
-              <button class="btn btn-secondary" onclick="executeSystemControl('reload_config', this)">Reload Dashboard</button>
-              <button class="btn btn-secondary" onclick="executeSystemControl('reload_firewall', this)">Reload Firewall</button>
-            </div>
-          </div>
-        </div>
-      </div>
     </main>
   </div>
 </div>
@@ -348,8 +191,8 @@
       <p id="modalMessage">Are you sure?</p>
     </div>
     <div class="modal-footer">
-      <button class="btn btn-secondary" onclick="closeModal('confirmModal')">Cancel</button>
-      <button class="btn btn-danger" id="confirmBtn" onclick="executeConfirm()">Confirm</button>
+      <button class="btn-secondary" onclick="closeModal('confirmModal')">Cancel</button>
+      <button class="btn-danger" id="confirmBtn" onclick="executeConfirm()">Confirm</button>
     </div>
   </div>
 </div>

@@ -57,6 +57,10 @@ function showHelpToolkit() {
       toolkitTitle.innerText = "Behavioral Control Help";
       toolkitContent.innerHTML = "Understand the difference between <strong>Network Request Velocity</strong> (algorithmic parsing of background traffic) and <strong>Physical Scroll Telemetry</strong> (active user doomscrolling). This section also handles <strong>SNI fallback scanning</strong> for encrypted apps.";
       break;
+    case 'sni-monitoring':
+      toolkitTitle.innerText = "SNI Monitoring Help";
+      toolkitContent.innerHTML = "Monitor <strong>encrypted app traffic patterns</strong> via Server Name Indication (SNI). View <strong>scroll velocity rates</strong>, <strong>domain request counts</strong>, and <strong>client-level telemetry</strong> for apps that block full SSL inspection.";
+      break;
     case 'settings':
       toolkitTitle.innerText = "Setup Help";
       toolkitContent.innerHTML = "Manage system <strong>backups</strong>, perform <strong>configuration restorations</strong>, and configure <strong>edge interface bindings</strong>.";
@@ -100,9 +104,6 @@ function switchTab(tabId, triggerElement = null) {
     requestAnimationFrame(() => {
       setTimeout(() => loadSNIDashboard(), 100);
     });
-  }
-  if (tabId === 'restraints') {
-    loadRestraintsRegistry();
   }
 }
 
@@ -1376,6 +1377,17 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   }
+
+  // SNI dashboard event listeners
+  const sniTimeWindow = document.getElementById('sni-time-window');
+  const sniClientFilter = document.getElementById('sni-client-filter');
+  
+  if (sniTimeWindow) {
+    sniTimeWindow.addEventListener('change', loadSNIDashboard);
+  }
+  if (sniClientFilter) {
+    sniClientFilter.addEventListener('change', loadSNIDashboard);
+  }
 });
 
 // ─── Theme Management ───
@@ -1680,19 +1692,6 @@ function refreshSNI() {
   showToast('SNI dashboard refreshed', 'success');
 }
 
-// Event listeners for SNI dashboard
-document.addEventListener('DOMContentLoaded', () => {
-  const sniTimeWindow = document.getElementById('sni-time-window');
-  const sniClientFilter = document.getElementById('sni-client-filter');
-  
-  if (sniTimeWindow) {
-    sniTimeWindow.addEventListener('change', loadSNIDashboard);
-  }
-  if (sniClientFilter) {
-    sniClientFilter.addEventListener('change', loadSNIDashboard);
-  }
-});
-
 // ─── Unified Polling Engine ───
 let dashboardPollInterval = null;
 
@@ -1821,5 +1820,22 @@ function startDashboardPolling() {
   };
   
   fetchSummary();
+
+  // Reduce polling frequency when tab is not visible
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      if (dashboardPollInterval) {
+        clearInterval(dashboardPollInterval);
+        dashboardPollInterval = setInterval(fetchSummary, 10000);
+      }
+    } else {
+      if (dashboardPollInterval) {
+        clearInterval(dashboardPollInterval);
+        dashboardPollInterval = setInterval(fetchSummary, 3000);
+      }
+      fetchSummary(); // Immediate refresh when tab becomes visible
+    }
+  });
+
   dashboardPollInterval = setInterval(fetchSummary, 3000);
 }
