@@ -4,7 +4,7 @@ import sqlite3
 import threading
 import subprocess
 import urllib.parse
-from collections import defaultdict, deque, Counter
+from collections import defaultdict, deque
 try:
     from mitmproxy import ctx, http, tls
 except ImportError:
@@ -43,6 +43,38 @@ VELOCITY_WINDOW    = 60
 
 # Default values (will be overridden by database config)
 DEFAULT_VELOCITY_THRESHOLD = 1.5
+DEFAULT_THROTTLE_RATE = "32kbit"
+DEFAULT_PINNED_DOMAINS = "facebook.com,twitter.com,x.com,tiktok.com,instagram.com,reddit.com,youtube.com"
+MIN_REQUESTS_BASELINE = 10
+
+# --- Circuit Breaker Escalation System ----------------------------
+CB_LEVEL_NONE = 0
+CB_LEVEL_NUDGE = 1           # 90s: Awareness - log only, notify frontend
+CB_LEVEL_PAUSE = 2           # 120s: 3-second bandwidth pause
+CB_LEVEL_FRICTION = 3        # 180s: Light throttle 256kbit + input delay
+CB_LEVEL_CIRCUIT_BREAK = 4   # 300s+: Hard throttle 32kbit for 2 min
+
+CB_LEVEL_NAMES = {
+    0: "None", 1: "Nudge", 2: "Pause", 3: "Friction", 4: "Circuit Break"
+}
+
+# Escalation time windows (seconds of continuous social media activity)
+CB_NUDGE_SECONDS = 90
+CB_PAUSE_SECONDS = 120
+CB_FRICTION_SECONDS = 180
+CB_BREAK_SECONDS = 300
+
+# Cooldown period after circuit break release (seconds)
+CB_COOLDOWN_SECONDS = 120
+
+# Maximum payload body size before falling back to sampled scanning.
+MAX_PAYLOAD_SIZE = 5 * 1024 * 1024      # hard cap before we stop trying to fully decode
+SAMPLE_PREFIX_BYTES = 512 * 1024        # ~512KB from the start (headlines/titles/first posts)
+SAMPLE_SUFFIX_BYTES = 256 * 1024        # ~256KB from the end (catches trailing chunks)
+
+# No reading pause threshold: if a single inter-request gap exceeds this,
+# the user is assumed to be reading/pausing, not doomscrolling.
+CB_NO_PAUSE_SECONDS = 6
 
 # Global asset whitelist
 GLOBAL_WHITELIST = {
@@ -697,7 +729,188 @@ request_history   = defaultdict(lambda: deque())
 session_totals    = defaultdict(int)
 session_start     = defaultdict(float)
 throttled_clients = set()
+throttled_clients_lock = threading.Lock()
 velocity_lock     = threading.Lock()
+
+
+def _mark_client_throttled(client_ip):
+    """Atomically check if a client is throttled and mark them if not.
+    Returns True if the client was newly marked, False if already throttled."""
+    with throttled_clients_lock:
+        if client_ip in throttled_clients:
+            return False
+        throttled_clients.add(client_ip)
+        return True
+
+# Circuit breaker state per client
+# Structure: { client_ip: { "level": int, "first_seen": float, "escalation_times": {level: float}, "domain": str, "cooldown_until": float } }
+circuit_breaker_state = {}
+cb_state_lock = threading.Lock()
+
+
+
+def escalate_circuit_breaker(client_ip, domain, rpm_current=0, rpm_baseline=0):
+    """Escalate the circuit breaker level based on elapsed time.
+    
+    Args:
+        client_ip: Client IP address
+        domain: Social media domain being accessed
+        rpm_current: Current requests-per-minute (for logging)
+        rpm_baseline: Baseline session average RPM (for logging)
+    
+    Returns:
+        int: The new circuit breaker level
+    """
+    with cb_state_lock:
+        now = time.time()
+        if client_ip not in circuit_breaker_state:
+            circuit_breaker_state[client_ip] = {
+                "level": CB_LEVEL_NONE,
+                "first_seen": now,
+                "escalation_times": {},
+                "domain": domain,
+                "cooldown_until": 0
+            }
+        
+        state = circuit_breaker_state[client_ip]
+        
+        # Check cooldown
+        if state.get("cooldown_until", 0) > now:
+            return CB_LEVEL_NONE
+        
+        elapsed = now - state["first_seen"]
+        
+        # Determine level based on elapsed time
+        if elapsed >= CB_BREAK_SECONDS:
+            new_level = CB_LEVEL_CIRCUIT_BREAK
+        elif elapsed >= CB_FRICTION_SECONDS:
+            new_level = CB_LEVEL_FRICTION
+        elif elapsed >= CB_PAUSE_SECONDS:
+            new_level = CB_LEVEL_PAUSE
+        elif elapsed >= CB_NUDGE_SECONDS:
+            new_level = CB_LEVEL_NUDGE
+        else:
+            new_level = CB_LEVEL_NONE
+        
+        # Record escalation time if new level is higher
+        if new_level > state["level"]:
+            state["level"] = new_level
+            state["escalation_times"][new_level] = now
+            state["domain"] = domain
+            print(f"[VIGILANT] CIRCUIT BREAKER ESCALATED {client_ip} to Level {new_level} ({CB_LEVEL_NAMES[new_level]}) @ {domain}")
+        
+        return state["level"]
+
+def apply_circuit_breaker_action(client_ip, domain, level, rpm_current=0, rpm_baseline=0):
+    """Apply the appropriate intervention based on circuit breaker level.
+    
+    Args:
+        client_ip: Client IP address
+        domain: Social media domain being accessed
+        level: Circuit breaker level (CB_LEVEL_*)
+        rpm_current: Current requests-per-minute (for throttle_events logging)
+        rpm_baseline: Baseline session average RPM (for throttle_events logging)
+    
+    Returns:
+        bool: True if action was applied
+    """
+    if level == CB_LEVEL_NONE:
+        return False
+    
+    if level == CB_LEVEL_NUDGE:
+        # Level 1: Log only - awareness intervention (no throttle)
+        log_throttle(client_ip, domain, rpm_current, rpm_baseline, "CB_NUDGE", f"Circuit Breaker Level 1 - Awareness @ {domain}")
+        print(f"[VIGILANT] CB NUDGE: {client_ip} has been scrolling {domain} for {CB_NUDGE_SECONDS}s")
+        return True
+    
+    elif level == CB_LEVEL_PAUSE:
+        # Level 2: 3-second forced pause via 10s throttle burst
+        log_throttle(client_ip, domain, rpm_current, rpm_baseline, "CB_PAUSE", f"Circuit Breaker Level 2 - Forced Pause @ {domain}")
+        # Apply a brief 128kbit throttle for 10 seconds as a "pause" intervention
+        success = apply_throttle(client_ip, rate="128kbit")
+        if success:
+            save_throttle_state(client_ip, is_throttled=True, recovery_at=time.time() + 10)
+            recovery_timer = threading.Timer(10, remove_throttle_cycle, args=[client_ip])
+            with throttle_timers_lock:
+                if client_ip in throttle_timers:
+                    try:
+                        throttle_timers[client_ip].cancel()
+                    except Exception:
+                        pass
+                throttle_timers[client_ip] = recovery_timer
+            recovery_timer.start()
+            print(f"[VIGILANT] CB PAUSE: {client_ip} - 10s bandwidth pause applied")
+        return success
+    
+    elif level == CB_LEVEL_FRICTION:
+        # Level 3: Light throttle 256kbit for 60 seconds
+        log_throttle(client_ip, domain, rpm_current, rpm_baseline, "CB_FRICTION", f"Circuit Breaker Level 3 - Bandwidth Friction @ {domain}")
+        success = apply_throttle(client_ip, rate="256kbit")
+        if success:
+            save_throttle_state(client_ip, is_throttled=True, recovery_at=time.time() + 60)
+            recovery_timer = threading.Timer(60, remove_throttle_cycle, args=[client_ip])
+            with throttle_timers_lock:
+                if client_ip in throttle_timers:
+                    try:
+                        throttle_timers[client_ip].cancel()
+                    except Exception:
+                        pass
+                throttle_timers[client_ip] = recovery_timer
+            recovery_timer.start()
+            print(f"[VIGILANT] CB FRICTION: {client_ip} - 60s @ 256kbit applied")
+        return success
+    
+    elif level == CB_LEVEL_CIRCUIT_BREAK:
+        # Level 4: Full hard throttle 32kbit for 2 minutes with cooldown
+        log_throttle(client_ip, domain, rpm_current, rpm_baseline, "CB_CIRCUIT_BREAK", f"Circuit Breaker Level 4 - Hard Circuit Break @ {domain}")
+        success = apply_throttle(client_ip, rate="32kbit")
+        if success:
+            recovery_duration = 120  # 2 minutes
+            save_throttle_state(client_ip, is_throttled=True, recovery_at=time.time() + recovery_duration)
+            recovery_timer = threading.Timer(recovery_duration, remove_throttle_cycle, args=[client_ip])
+            with throttle_timers_lock:
+                if client_ip in throttle_timers:
+                    try:
+                        throttle_timers[client_ip].cancel()
+                    except Exception:
+                        pass
+                throttle_timers[client_ip] = recovery_timer
+            recovery_timer.start()
+            # Set cooldown after recovery
+            with cb_state_lock:
+                if client_ip in circuit_breaker_state:
+                    circuit_breaker_state[client_ip]["cooldown_until"] = time.time() + recovery_duration + CB_COOLDOWN_SECONDS
+            print(f"[VIGILANT] CB CIRCUIT BREAK: {client_ip} - 120s @ 32kbit + {CB_COOLDOWN_SECONDS}s cooldown")
+        return success
+    
+    return False
+
+def release_circuit_breaker(client_ip):
+    """Manually release circuit breaker state for a client."""
+    with cb_state_lock:
+        if client_ip in circuit_breaker_state:
+            del circuit_breaker_state[client_ip]
+    remove_throttle_cycle(client_ip)
+    print(f"[VIGILANT] Circuit breaker released for {client_ip}")
+
+def get_all_circuit_breaker_states():
+    """Get all active circuit breaker states for API query."""
+    with cb_state_lock:
+        result = []
+        now = time.time()
+        for ip, state in circuit_breaker_state.items():
+            elapsed = now - state["first_seen"]
+            result.append({
+                "client_ip": ip,
+                "level": state["level"],
+                "level_name": CB_LEVEL_NAMES.get(state["level"], "Unknown"),
+                "domain": state.get("domain", ""),
+                "elapsed_seconds": round(elapsed, 1),
+                "escalation_times": state.get("escalation_times", {}),
+                "cooldown_until": state.get("cooldown_until", 0),
+                "is_throttled": ip in throttled_clients
+            })
+        return result
 
 def compute_velocity(client_ip):
     now = time.time()
@@ -713,6 +926,24 @@ def compute_velocity(client_ip):
         elapsed_min = max(now - session_start[client_ip], 1) / 60
         session_avg = session_totals[client_ip] / elapsed_min
         return current_rpm, session_avg
+
+
+def _cleanup_stale_velocity_state():
+    """Periodic cleanup of stale velocity tracking dictionaries to prevent
+    unbounded memory growth. Removes entries for IPs that have no recent
+    request history (idle for > 2 * VELOCITY_WINDOW)."""
+    now = time.time()
+    stale_cutoff = now - (VELOCITY_WINDOW * 2)
+    with velocity_lock:
+        # Identify IPs whose newest request is older than the cutoff
+        stale_ips = []
+        for ip, dq in list(request_history.items()):
+            if not dq or dq[-1] < stale_cutoff:
+                stale_ips.append(ip)
+        for ip in stale_ips:
+            del request_history[ip]
+            session_totals.pop(ip, None)
+            session_start.pop(ip, None)
 
 def should_throttle(client_ip, host, path=""):
     config = load_proxy_config()
@@ -796,6 +1027,16 @@ def should_throttle(client_ip, host, path=""):
                 if avg_gap < 20:
                     flagged = True
                     print(f"[VIGILANT] Rapid spacing detect for {client_ip}: avg_gap={avg_gap:.1f}s")
+            # Circuit breaker: check if any single gap exceeds the no-pause threshold
+            # If user pauses >6 seconds, they're reading/interacting, not doomscrolling
+            max_gap = max(time_gaps) if time_gaps else 0
+            if max_gap > CB_NO_PAUSE_SECONDS:
+                # User paused - reset the circuit breaker state
+                with cb_state_lock:
+                    if client_ip in circuit_breaker_state:
+                        del circuit_breaker_state[client_ip]
+                        print(f"[VIGILANT] CB RESET: {client_ip} paused for {max_gap:.1f}s (> {CB_NO_PAUSE_SECONDS}s threshold)")
+                flagged = False
 
     return flagged, rpm_now, rpm_base
 
@@ -952,8 +1193,11 @@ def apply_throttle(client_ip, rate=None):
         if result.returncode != 0 and "RTNETLINK answers: File exists" not in result.stderr:
             print(f"[VIGILANT] tc qdisc add error on {interface}: {result.stderr.strip()}")
 
-        # Remove any stale class/filter for this client first (clean re-apply)
-        remove_throttle(client_ip, client_ip_only=True)
+        # Remove any stale class + filter for this client first (clean re-apply).
+        # This is critical: without it, tc class add fails with "File exists"
+        # when circuit breaker escalates to a higher throttle level, meaning
+        # the user would be stuck at the old rate indefinitely.
+        remove_throttle(client_ip)
 
         # Add a dedicated class for this client IP.
         # burst=16k allows the first 2KB-16KB of a TCP flow through at line rate
@@ -1125,7 +1369,8 @@ def remove_throttle_cycle(client_ip):
             del throttle_timers[client_ip]
 
     # Clean up from active throttled_clients set
-    throttled_clients.discard(client_ip)
+    with throttled_clients_lock:
+        throttled_clients.discard(client_ip)
 
     # Update throttle state
     save_throttle_state(client_ip, is_throttled=False, recovery_at=0)
@@ -1210,29 +1455,6 @@ def load_throttle_state(client_ip):
         return None
 
 
-def cleanup_stale_throttle_states():
-    """
-    Clean up expired throttle states from database.
-    """
-    try:
-        with db_lock:
-            conn = _connect_db()
-            now = time.time()
-            conn.execute(
-                "DELETE FROM throttle_state WHERE recovery_at < ? AND is_throttled = 0",
-                (now,)
-            )
-            deleted_count = conn.total_changes
-            conn.commit()
-            conn.close()
-
-            if deleted_count > 0:
-                print(f"[VIGILANT] Cleaned up {deleted_count} stale throttle states")
-    except sqlite3.Error as e:
-        print(f"[VIGILANT] Database error in cleanup_stale_throttle_states: {e}")
-    except Exception as e:
-        print(f"[VIGILANT] Unexpected error in cleanup_stale_throttle_states: {e}")
-
 
 def restore_throttle_states():
     """
@@ -1271,7 +1493,8 @@ def restore_throttle_states():
                         throttle_timers[client_ip] = recovery_timer
 
                     recovery_timer.start()
-                    throttled_clients.add(client_ip)
+                    with throttled_clients_lock:
+                        throttled_clients.add(client_ip)
                 else:
                     save_throttle_state(client_ip, False, 0)
 
@@ -1307,13 +1530,19 @@ def tail_dnsmasq_log():
                                     update_device_activity(client_ip)
 
                                     flagged, rpm_now, rpm_base = should_throttle(client_ip, domain)
-                                    if flagged and client_ip not in throttled_clients and not is_device_exempt(client_ip):
-                                        throttled_clients.add(client_ip)
-                                        apply_throttle_cycle(client_ip)
-                                        print(f"[VIGILANT] DNS DOOMSCROLL DETECTED {client_ip} @ {domain} "
-                                              f"RPM={rpm_now:.1f} baseline={rpm_base:.1f} - throttle cycle initiated")
+                                    if flagged and not is_device_exempt(client_ip):
+                                        level = escalate_circuit_breaker(client_ip, domain, rpm_now, rpm_base)
+                                        if level >= CB_LEVEL_PAUSE:
+                                            _mark_client_throttled(client_ip)
+                                        apply_circuit_breaker_action(client_ip, domain, level, rpm_now, rpm_base)
+                                        if level >= CB_LEVEL_NUDGE:
+                                            print(f"[VIGILANT] DNS CB Level {level} ({CB_LEVEL_NAMES[level]}) {client_ip} @ {domain} "
+                                                  f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
 
-                                    log_request(client_ip, domain, "(DNS_QUERY)", "DNS", "DNS_Tracked", False, [], None)
+                                    # DNS queries are NOT logged to traffic_log to avoid noise.
+                                    # Velocity tracking (should_throttle above) and
+                                    # update_device_activity cover the behavioral detection
+                                    # and device-liveness tracking already.
                                     break
         except FileNotFoundError:
             time.sleep(5)
@@ -1322,19 +1551,7 @@ def tail_dnsmasq_log():
             time.sleep(5)
 
 
-# ══════════════════════════════════════════════════════════════════
-# ─── FIX #4 (partial): Sampled Scanning for Oversized Payloads ─────
-# ══════════════════════════════════════════════════════════════════
-# Infinite-scroll / large JSON payloads used to blow past MAX_PAYLOAD_SIZE
-# and get a complete pass with zero inspection. Instead, we sample a
-# bounded prefix and suffix of the RAW BYTES (never touching the full
-# body, so memory stays bounded regardless of total payload size) and
-# run the same keyword + NLP pipeline against that sample. This is not
-# perfect coverage of a huge payload, but it means large dynamic
-# responses are never entirely unfiltered.
-MAX_PAYLOAD_SIZE = 5 * 1024 * 1024      # hard cap before we stop trying to fully decode
-SAMPLE_PREFIX_BYTES = 512 * 1024        # ~512KB from the start (headlines/titles/first posts)
-SAMPLE_SUFFIX_BYTES = 256 * 1024        # ~256KB from the end (catches trailing chunks)
+
 
 
 def get_scan_text(flow_response) -> (str, bool):
@@ -1513,17 +1730,18 @@ class VIGILANTAddon:
                 current_set = set(currently_throttled_ips)
                 
                 # If an IP was released in DB but is still in our set, unthrottle it
-                for ip in list(throttled_clients):
-                    if ip not in current_set:
-                        print(f"[VIGILANT] Sync: {ip} was released externally, removing from throttle set.")
-                        throttled_clients.discard(ip)
-                        # We don't call remove_throttle_cycle because app.py already removed the TC rule.
-                        
-                        # Cleanup timer if it exists
-                        with throttle_timers_lock:
-                            if ip in throttle_timers:
-                                throttle_timers[ip].cancel()
-                                del throttle_timers[ip]
+                with throttled_clients_lock:
+                    for ip in list(throttled_clients):
+                        if ip not in current_set:
+                            print(f"[VIGILANT] Sync: {ip} was released externally, removing from throttle set.")
+                            throttled_clients.discard(ip)
+                            # We don't call remove_throttle_cycle because app.py already removed the TC rule.
+                            
+                            # Cleanup timer if it exists
+                            with throttle_timers_lock:
+                                if ip in throttle_timers:
+                                    throttle_timers[ip].cancel()
+                                    del throttle_timers[ip]
 
                 self._last_cache_refresh = time.time()
                 self.cached_exempt_devices = exempt_ips
@@ -1531,7 +1749,9 @@ class VIGILANTAddon:
             print(f"[VIGILANT] Error refreshing rule cache: {e}")
 
     def _cache_refresh_loop(self):
-        """Periodically refresh cached rules or reload immediately on API trigger."""
+        """Periodically refresh cached rules or reload immediately on API trigger.
+        Also runs periodic cleanup of stale velocity tracking state."""
+        _cleanup_counter = 0
         while True:
             time.sleep(1.0)
             reload_requested = False
@@ -1546,7 +1766,13 @@ class VIGILANTAddon:
                 stale = (time.time() - self._last_cache_refresh) >= CACHE_REFRESH_INTERVAL
 
             if reload_requested or stale:
-                self._refresh_rule_cache()  
+                self._refresh_rule_cache()
+
+            # Periodically clean up stale velocity tracking state (every 60s)
+            _cleanup_counter += 1
+            if _cleanup_counter >= 60:
+                _cleanup_counter = 0
+                _cleanup_stale_velocity_state()  
             
     @staticmethod
     def _extract_client_ip_from_tls(data) -> str | None:
@@ -1651,11 +1877,14 @@ class VIGILANTAddon:
                 log_sni_request(client_ip, server_name, velocity_rps)
 
                 flagged, rpm_now, rpm_base = should_throttle(client_ip, server_name)
-                if flagged and client_ip not in throttled_clients and not is_device_exempt(client_ip):
-                    throttled_clients.add(client_ip)
-                    apply_throttle_cycle(client_ip)
-                    print(f"[VIGILANT] TLS DOOMSCROLL DETECTED {client_ip} @ {server_name} "
-                          f"RPM={rpm_now:.1f} baseline={rpm_base:.1f} RPS={velocity_rps:.2f} - throttle cycle initiated")
+                if flagged and not is_device_exempt(client_ip):
+                    level = escalate_circuit_breaker(client_ip, server_name, rpm_now, rpm_base)
+                    if level >= CB_LEVEL_PAUSE:
+                        _mark_client_throttled(client_ip)
+                    apply_circuit_breaker_action(client_ip, server_name, level, rpm_now, rpm_base)
+                    if level >= CB_LEVEL_NUDGE:
+                        print(f"[VIGILANT] TLS CB Level {level} ({CB_LEVEL_NAMES[level]}) {client_ip} @ {server_name} "
+                              f"RPM={rpm_now:.1f} baseline={rpm_base:.1f} RPS={velocity_rps:.2f}")
 
             # 4. Certificate Pinning Dynamic Bypass (AFTER logging)
             if server_name in self.pinned_hosts:
@@ -1664,8 +1893,12 @@ class VIGILANTAddon:
                 print(f"[VIGILANT] Dynamic L4 Passthrough activated for pinned SNI: {server_name}")
                 return
 
-            # 5. Bypass core internal Apple traffic to prevent OS-level freezes
-            if any(domain in server_name for domain in ["apple.com", "icloud.com", "mzstatic.com"]):
+            # 5. Bypass core internal Apple traffic to prevent OS-level freezes.
+            # Uses suffix matching (not substring) to avoid a malicious site like
+            # "evilapple.com" or "scam-apple.com" inadvertently bypassing MITM.
+            _APPLE_DOMAINS = {"apple.com", "icloud.com", "mzstatic.com"}
+            clean_sni = server_name.lower().lstrip("www.")
+            if any(clean_sni == d or clean_sni.endswith("." + d) for d in _APPLE_DOMAINS):
                 data.ignore_connection = True
                 return
 
@@ -1821,11 +2054,14 @@ class VIGILANTAddon:
                 print(f"[VIGILANT] Request body keyword blacklist check failed: {e}")
 
         flagged, rpm_now, rpm_base = should_throttle(client_ip, host)
-        if flagged and client_ip not in throttled_clients:
-            throttled_clients.add(client_ip)
-            apply_throttle_cycle(client_ip)
-            print(f"[VIGILANT] HTTP DOOMSCROLL DETECTED {client_ip} @ {host} "
-                  f"RPM={rpm_now:.1f} baseline={rpm_base:.1f} - throttle cycle initiated")
+        if flagged and not is_device_exempt(client_ip):
+            level = escalate_circuit_breaker(client_ip, host, rpm_now, rpm_base)
+            if level >= CB_LEVEL_PAUSE:
+                _mark_client_throttled(client_ip)
+            apply_circuit_breaker_action(client_ip, host, level, rpm_now, rpm_base)
+            if level >= CB_LEVEL_NUDGE:
+                print(f"[VIGILANT] HTTP CB Level {level} ({CB_LEVEL_NAMES[level]}) {client_ip} @ {host} "
+                      f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
 
     def response(self, flow: http.HTTPFlow):
         try:

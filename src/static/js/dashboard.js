@@ -1388,6 +1388,9 @@ document.addEventListener('DOMContentLoaded', () => {
   if (sniClientFilter) {
     sniClientFilter.addEventListener('change', loadSNIDashboard);
   }
+
+  // Initial circuit breaker load
+  loadCircuitBreakerState();
 });
 
 // ─── Theme Management ───
@@ -1813,6 +1816,12 @@ function startDashboardPolling() {
           }).join('');
         }
       }
+      // 4. Update Circuit Breaker status
+      try {
+        await loadCircuitBreakerState();
+      } catch (e) {
+        // Circuit breaker updates are non-critical
+      }
       
     } catch (error) {
       console.error('Polling error:', error);
@@ -1838,4 +1847,93 @@ function startDashboardPolling() {
   });
 
   dashboardPollInterval = setInterval(fetchSummary, 3000);
+}
+
+// ─── Circuit Breaker Status ───
+async function loadCircuitBreakerState() {
+  try {
+    const response = await fetch('/api/circuit-breaker/state');
+    const data = await response.json();
+    
+    const panel = document.getElementById('circuit-breaker-panel');
+    const subtitle = document.getElementById('cb-subtitle');
+    const badge = document.getElementById('cb-status-badge');
+    const interventions = document.getElementById('cb-interventions');
+    const empty = document.getElementById('cb-empty');
+    
+    if (!panel) return;
+    
+    const cbData = data.states || [];
+    
+    if (cbData.length === 0) {
+      panel.style.display = 'none';
+      return;
+    }
+    
+    panel.style.display = 'block';
+    
+    // Update badge
+    const highestLevel = Math.max(...cbData.map(s => s.level));
+    if (highestLevel >= 4) {
+      badge.textContent = 'Circuit Break';
+      badge.style.background = '#ff3860';
+    } else if (highestLevel >= 3) {
+      badge.textContent = 'Active';
+      badge.style.background = '#ffa500';
+    } else if (highestLevel >= 2) {
+      badge.textContent = 'Paused';
+      badge.style.background = '#ffa500';
+    } else {
+      badge.textContent = 'Monitoring';
+      badge.style.background = '#1A938A';
+    }
+    
+    subtitle.textContent = `${cbData.length} device(s) under intervention`;
+    
+    // Build intervention list
+    const levelColors = {1: '#1A938A', 2: '#ffa500', 3: '#ffa500', 4: '#ff3860'};
+    const levelIcons = {1: 'fa-circle-info', 2: 'fa-pause-circle', 3: 'fa-gauge-high', 4: 'fa-bolt'};
+    
+    interventions.innerHTML = cbData.map(s => `
+      <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 1rem; background: var(--surface); border-radius: 8px; margin-bottom: 0.5rem; border-left: 4px solid ${levelColors[s.level] || '#1A938A'};">
+        <div style="display: flex; align-items: center; gap: 0.75rem;">
+          <i class="fa-solid ${levelIcons[s.level] || 'fa-circle-info'}" style="color: ${levelColors[s.level] || '#1A938A'}; font-size: 1.2rem;"></i>
+          <div>
+            <div style="font-weight: 600; font-size: 0.95rem;">${s.client_ip}</div>
+            <div style="font-size: 0.8rem; color: var(--text-secondary);">${s.domain} \u2022 ${Math.floor(s.elapsed_seconds)}s elapsed</div>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 0.75rem;">
+          <span style="font-size: 0.85rem; font-weight: 600; color: ${levelColors[s.level] || '#1A938A'};">L${s.level}: ${s.level_name}</span>
+          <button class="btn-secondary" onclick="releaseCircuitBreaker('${s.client_ip}')" style="padding: 0.25rem 0.75rem; font-size: 0.8rem;">Release</button>
+        </div>
+      </div>
+    `).join('');
+    
+    empty.style.display = 'none';
+  } catch (error) {
+    console.error('Error loading circuit breaker state:', error);
+  }
+}
+
+async function releaseCircuitBreaker(clientIp) {
+  if (!confirm(`Release circuit breaker for ${clientIp}?`)) return;
+  
+  try {
+    const response = await fetch('/api/circuit-breaker/release', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_ip: clientIp })
+    });
+    
+    if (response.ok) {
+      showToast(`Circuit breaker released for ${clientIp}`, 'success');
+      loadCircuitBreakerState();
+    } else {
+      const data = await response.json();
+      showToast(data.error || 'Failed to release', 'danger');
+    }
+  } catch (error) {
+    showToast('Error releasing circuit breaker', 'danger');
+  }
 }

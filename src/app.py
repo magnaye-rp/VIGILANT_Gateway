@@ -1,8 +1,6 @@
 import os
-import re
 import sqlite3
 import subprocess
-import threading
 import time
 import importlib
 import importlib.util
@@ -12,10 +10,8 @@ import socket
 import ipaddress
 from contextlib import contextmanager
 from pathlib import Path
-import platform
-from collections import deque
 import json
-from flask import Flask, jsonify, render_template, request, make_response, send_file, abort, redirect, flash, url_for
+from flask import Flask, jsonify, render_template, request, make_response, send_file, redirect, flash, url_for
 
 # Global network interface configuration - can be overridden via environment variable
 GATEWAY_INTERFACE = os.getenv("GATEWAY_INTERFACE", "eth1")
@@ -133,12 +129,7 @@ DEFAULT_SYSTEM_METRICS = {
     "disk_percent": 52.0,
 }
 
-def _coerce_float(val, default=0.0):
-    try:
-        v = float(val)
-        return v if v >= 0 else default
-    except (TypeError, ValueError):
-        return default
+
 
 def _coerce_config_value(key, val):
     if key in FLOAT_CONFIG_KEYS:
@@ -1387,6 +1378,17 @@ def dashboard_summary():
                             "policy": row[4] or "none",
                             "last_seen": row[5],
                         })
+
+                # Circuit breaker states
+                try:
+                    import importlib
+                    vigilant_cb = importlib.import_module("vigilant_addon")
+                    if hasattr(vigilant_cb, "get_all_circuit_breaker_states"):
+                        cb_states = vigilant_cb.get_all_circuit_breaker_states()
+                    else:
+                        cb_states = []
+                except Exception:
+                    cb_states = []
         except sqlite3.Error as e:
             app.logger.warning(f"DB Error in summary: {e}")
 
@@ -1425,7 +1427,11 @@ def dashboard_summary():
             "throttle_duration": _current_throttle_duration(config),
         },
         "network_config": network_config,
-        "dhcp_allocations": dhcp_allocations
+        "dhcp_allocations": dhcp_allocations,
+        "circuit_breaker": {
+            "active_count": len(cb_states),
+            "interventions": cb_states
+        },
     })
 
 
@@ -2349,6 +2355,63 @@ def handle_behavioral_config():
     
     save_config(payload)
     return jsonify({"status": "success"})
+
+@app.route("/api/circuit-breaker/state", methods=["GET"])
+def get_circuit_breaker_state():
+    """Get current circuit breaker states for all active clients."""
+    try:
+        # Import from vigilant_addon module
+        import importlib
+        vigilant = importlib.import_module("vigilant_addon")
+        if hasattr(vigilant, "get_all_circuit_breaker_states"):
+            states = vigilant.get_all_circuit_breaker_states()
+            return jsonify({
+                "status": "success",
+                "active_interventions": len(states),
+                "states": states
+            })
+        return jsonify({
+            "status": "success",
+            "active_interventions": 0,
+            "states": [],
+            "message": "Circuit breaker module not loaded"
+        })
+    except Exception as e:
+        app.logger.error("Error getting circuit breaker state: %s", e, exc_info=True)
+        return jsonify({
+            "status": "error",
+            "error": "Failed to get circuit breaker state",
+            "details": str(e)
+        }), 500
+
+@app.route("/api/circuit-breaker/release", methods=["POST"])
+def release_circuit_breaker():
+    """Manually release a client from circuit breaker state."""
+    try:
+        data = request.json or {}
+        client_ip = data.get("client_ip")
+        if not client_ip:
+            return jsonify({"error": "client_ip is required"}), 400
+        
+        import importlib
+        vigilant = importlib.import_module("vigilant_addon")
+        if hasattr(vigilant, "release_circuit_breaker"):
+            vigilant.release_circuit_breaker(client_ip)
+            return jsonify({
+                "status": "success",
+                "message": f"Circuit breaker released for {client_ip}"
+            })
+        return jsonify({
+            "status": "error",
+            "message": "Circuit breaker module not available"
+        }), 500
+    except Exception as e:
+        app.logger.error("Error releasing circuit breaker: %s", e, exc_info=True)
+        return jsonify({
+            "status": "error",
+            "error": "Failed to release circuit breaker",
+            "details": str(e)
+        }), 500
 
 @app.route("/api/devices", methods=["GET"])
 def get_devices():

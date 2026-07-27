@@ -124,6 +124,22 @@
           </div>
         </div>
 
+        <!-- Circuit Breaker Status -->
+        <div id="circuit-breaker-panel" style="margin-bottom: 2rem; display: none;">
+          <div class="card glassmorphic-card">
+            <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+              <div>
+                <div class="card-title"><i class="fa-solid fa-bolt" style="margin-right: 0.5rem;"></i> Doomscroll Circuit Breaker</div>
+                <div class="card-subtitle" id="cb-subtitle">No active interventions</div>
+              </div>
+              <div id="cb-status-badge" style="padding: 0.25rem 0.75rem; border-radius: 6px; font-size: 0.85rem; font-weight: 600; background: var(--success); color: white;">Idle</div>
+            </div>
+            <div id="cb-interventions" style="margin-top: 1rem;">
+              <div style="text-align: center; color: var(--text-secondary); padding: 1rem;" id="cb-empty">All clear — no doomscroll interventions active</div>
+            </div>
+          </div>
+        </div>
+
         <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">System Management</h2>
 
         <div class="stats-grid">

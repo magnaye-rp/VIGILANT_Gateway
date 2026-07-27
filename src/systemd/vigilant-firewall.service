@@ -5,7 +5,7 @@ Before=vigilant-proxy.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/bash /home/vigilant_admin/vigilant/scripts/setup-iptables.sh
+ExecStart=/usr/bin/bash /home/vigilant-admin/vigilant_gateway/src/scripts/setup-iptables.sh
 RemainAfterExit=yes
 
 [Install]
