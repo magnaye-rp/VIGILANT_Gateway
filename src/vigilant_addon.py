@@ -785,7 +785,15 @@ def escalate_circuit_breaker(client_ip, domain, rpm_current=0, rpm_baseline=0):
         if state.get("cooldown_until", 0) > now:
             return CB_LEVEL_NONE
         
-        elapsed = now - state["first_seen"]
+        # Cooldown expired OR no cooldown — reset level so escalation can re-trigger.
+        # Without this, once at Level 3, the circuit breaker can never escalate
+        # again because `new_level > state["level"]` would require a Level 4.
+        if state["level"] != CB_LEVEL_NONE:
+            state["level"] = CB_LEVEL_NONE
+            state["first_seen"] = now
+            state["escalation_times"] = {}
+        
+        elapsed = 0
         
         # Determine level based on elapsed time
         if elapsed >= CB_BREAK_SECONDS:
@@ -1400,6 +1408,7 @@ def apply_throttle_cycle(client_ip):
 def remove_throttle_cycle(client_ip):
     """
     Remove throttle and clean up timer for a client IP.
+    Also clears the circuit breaker state so the dashboard shows accurate info.
     
     Args:
         client_ip: Client IP address to unthrottle
@@ -1415,7 +1424,11 @@ def remove_throttle_cycle(client_ip):
     with throttled_clients_lock:
         throttled_clients.discard(client_ip)
 
-    # Update throttle state
+    # Clear circuit breaker state so dashboard shows accurate info
+    with cb_state_lock:
+        circuit_breaker_state.pop(client_ip, None)
+
+    # Update throttle state in database
     save_throttle_state(client_ip, is_throttled=False, recovery_at=0)
 
     # Log recovery
