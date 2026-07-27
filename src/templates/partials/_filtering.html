@@ -1,39 +1,36 @@
       <!-- Filtering Tab -->
       <div id="tab-filtering" class="tab-content">
-        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Keyword Filtering</h2>
+        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Content Filtering</h2>
 
         <div class="settings-grid">
-          <!-- CARD 1: Keyword Enforcement Engine -->
+          <!-- CARD 1: Keyword Enforcement -->
           <div class="settings-card">
             <div class="card-header">
               <div>
-                <div class="card-title">Keyword Enforcement Engine</div>
+                <div class="card-title">Keyword Enforcement</div>
                 <div class="card-subtitle">Register phrases for URL and payload blocking</div>
               </div>
             </div>
-
             <form id="keyword-form">
               <div class="form-group">
                 <label class="form-label">Keyword</label>
                 <input type="text" id="keyword-input" class="form-input" placeholder="e.g., tung tung tung sahur" required>
                 <div class="form-hint">Keywords are converted to lowercase for matching</div>
               </div>
-
               <div style="margin-top: 1.5rem;">
                 <button type="submit" class="btn-primary">Add Keyword</button>
               </div>
             </form>
           </div>
 
-          <!-- CARD 2: Active Restraints Registry -->
+          <!-- CARD 2: Active Keywords Table -->
           <div class="settings-card">
             <div class="card-header">
               <div>
-                <div class="card-title">Active Restraints Registry</div>
-                <div class="card-subtitle">Currently blocked keywords in SQLite</div>
+                <div class="card-title">Active Keywords</div>
+                <div class="card-subtitle">Currently blocked keywords</div>
               </div>
             </div>
-
             <table class="traffic-table">
               <thead>
                 <tr>
@@ -49,15 +46,47 @@
             </table>
           </div>
 
-          <!-- CARD 3: Traffic Categorization Rules -->
+          <!-- CARD 3: Bypass List -->
+          <div class="settings-card full-width">
+            <div class="card-header">
+              <div>
+                <div class="card-title"><i class="fa-solid fa-circle-check" style="margin-right: 0.5rem;"></i> Bypass List</div>
+                <div class="card-subtitle">Domains that bypass mitmproxy inspection entirely — traffic passes through unmodified</div>
+              </div>
+            </div>
+            <div style="display: flex; gap: 0.75rem; align-items: flex-end; margin-bottom: 1.5rem;">
+              <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                <label class="form-label">Domain to bypass</label>
+                <input type="text" id="bypass-domain-input" class="form-input" placeholder="e.g., instagram.com" style="width: 100%;">
+                <div class="form-hint">All subdomains will also bypass inspection</div>
+              </div>
+              <button class="btn-primary" onclick="addBypassDomain()" style="white-space: nowrap;">
+                <i class="fa-solid fa-plus"></i> Add Domain
+              </button>
+            </div>
+            <table class="traffic-table">
+              <thead>
+                <tr>
+                  <th>Domain</th>
+                  <th style="text-align: right;">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="bypass-domains-table-body">
+                <tr>
+                  <td colspan="2" style="text-align: center; color: var(--text-secondary);">Loading...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- CARD 4: Traffic Categorization Rules -->
           <div class="settings-card full-width">
             <div class="card-header">
               <div>
                 <div class="card-title">Traffic Categorization Rules</div>
-                <div class="card-subtitle">Domain destination category router context</div>
+                <div class="card-subtitle">Domain destination category routing context</div>
               </div>
             </div>
-
             <form id="category-hint-form">
               <div class="form-row">
                 <div class="form-group">
@@ -77,12 +106,10 @@
                   <div class="form-hint">Domain to classify (converted to lowercase)</div>
                 </div>
               </div>
-
               <div style="margin-top: 1.5rem;">
                 <button type="submit" class="btn-primary">Add Routing Rule</button>
               </div>
             </form>
-
             <div style="margin-top: 2rem;">
               <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Active Routing Rules</h3>
               <table class="traffic-table">
@@ -101,40 +128,5 @@
               </table>
             </div>
           </div>
-        
-        <!-- Bypass List -->
-        <div class="card" style="margin-top: 2rem;">
-          <div class="card-header">
-            <div>
-              <div class="card-title"><i class="fa-solid fa-circle-check" style="margin-right: 0.5rem;"></i> Bypass List</div>
-              <div class="card-subtitle">Domains that bypass mitmproxy inspection entirely — traffic passes through unmodified</div>
-            </div>
-          </div>
-
-          <div style="display: flex; gap: 0.75rem; align-items: flex-end; margin-bottom: 1.5rem;">
-            <div class="form-group" style="flex: 1; margin-bottom: 0;">
-              <label class="form-label">Domain to bypass</label>
-              <input type="text" id="bypass-domain-input" class="form-input" placeholder="e.g., example.com" style="width: 100%;">
-              <div class="form-hint">All subdomains will also bypass inspection</div>
-            </div>
-            <button class="btn-primary" onclick="addBypassDomain()" style="white-space: nowrap;">
-              <i class="fa-solid fa-plus"></i> Add Domain
-            </button>
-          </div>
-
-          <table class="traffic-table">
-            <thead>
-              <tr>
-                <th>Domain</th>
-                <th style="text-align: right;">Actions</th>
-              </tr>
-            </thead>
-            <tbody id="bypass-domains-table-body">
-              <tr>
-                <td colspan="2" style="text-align: center; color: var(--text-secondary);">Loading...</td>
-              </tr>
-            </tbody>
-          </table>
         </div>
-
       </div>
