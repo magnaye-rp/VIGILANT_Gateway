@@ -307,6 +307,11 @@ def init_db() -> None:
             )
             if _table_exists(connection, "network_devices") and not _column_exists(connection, "network_devices", "doomscroll_exempt"):
                 connection.execute("ALTER TABLE network_devices ADD COLUMN doomscroll_exempt INTEGER DEFAULT 0")
+            # Reset last_seen for entries that were populated by the old _discover_network_devices()
+            # code which set last_seen = now for all dnsmasq lease entries, making disconnected
+            # devices appear active indefinitely. The addon's update_device_activity() will
+            # repopulate last_seen for devices with real traffic.
+            connection.execute("UPDATE network_devices SET last_seen = NULL WHERE last_seen IS NOT NULL")
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS throttle_events ("
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp REAL, client_ip TEXT, host TEXT, "
@@ -844,7 +849,7 @@ def get_system_interfaces() -> list:
 
     # Filter out virtual / non-physical interfaces
     if iface_names:
-        EXCLUDED_PREFIXES = ('lo', 'veth', 'docker', 'br-', 'tun', 'tap', 'wg')
+        EXCLUDED_PREFIXES = ('lo', 'veth', 'docker', 'br-', 'tun', 'tap', 'wg', 'tail')
         filtered = [iface for iface in iface_names
                     if not iface.startswith(EXCLUDED_PREFIXES)]
         if filtered:
@@ -3181,13 +3186,18 @@ def _discover_network_devices() -> list:
                     
             for ip, info in discovered_devices.items():
                 if info.get('active', True):
-                    discovered_last_seen = info.get('last_seen', now)
+                    # NOTE: last_seen is intentionally NOT set here. It is ONLY
+                    # updated by update_device_activity() in the addon when real
+                    # traffic (HTTP/DNS/TLS) is observed. dnsmasq leases persist
+                    # for 24h regardless of whether the device is connected, so
+                    # using lease data would make disconnected devices appear active.
                     connection.execute(
-                        "INSERT INTO network_devices (ip_address, mac_address, hostname, custom_name, policy, first_seen, last_seen, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                        "INSERT INTO network_devices (ip_address, mac_address, hostname, custom_name, policy, first_seen, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
                         "ON CONFLICT(ip_address) DO UPDATE SET "
-                        "  last_seen = MAX(excluded.last_seen, network_devices.last_seen),"
+                        "  mac_address = COALESCE(NULLIF(excluded.mac_address, ''), network_devices.mac_address),"
+                        "  hostname   = COALESCE(NULLIF(excluded.hostname, ''), network_devices.hostname),"
                         "  updated_at = excluded.updated_at",
-                        (ip, info.get('mac_address'), info.get('hostname'), info.get('custom_name'), info.get('policy', 'none'), info.get('first_seen', now), discovered_last_seen, now)
+                        (ip, info.get('mac_address'), info.get('hostname'), info.get('custom_name'), info.get('policy', 'none'), info.get('first_seen', now), now)
                     )
             connection.commit()
     except sqlite3.Error as e:
