@@ -1,75 +1,182 @@
       <!-- Behavioral Control Tab -->
       <div id="tab-behavioral-control" class="tab-content">
-        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Behavioral Control &amp; Habit Management <i class="fa-solid fa-info-circle tooltip-trigger" data-tooltip="Manage how the system analyzes pacing and encryption patterns to limit excessive consumption."></i></h2>
+        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">
+          Doomscroll Detection <span style="font-size: 0.9rem; color: var(--text-secondary); font-weight: 400;">— Controls how aggressively the system detects and responds to endless-scrolling behavior</span>
+        </h2>
 
-        <div class="card glassmorphic-card behavioral-card" style="background: var(--surface); box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.15); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 12px; padding: 2rem;">
-
+        <div class="card glassmorphic-card" style="margin-bottom: 2rem;">
           <form id="behavioral-form" onsubmit="saveBehavioralSettings(event)">
-            <!-- Section A -->
-            <div>
-              <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem; color: var(--primary);">Network Request Velocity</h3>
-              <div class="behavioral-preset-grid">
-                <div class="form-group">
-                  <label class="form-label">Preset Sensitivity</label>
-                  <select id="behavioral-network-preset" onchange="toggleBehavioralCustom('network')">
-                    <option value="Low">Low (200%)</option>
-                    <option value="Medium">Medium (150%)</option>
-                    <option value="High">High (110%)</option>
-                    <option value="Custom">Custom</option>
-                  </select>
-                </div>
-                <div class="form-group hidden" id="behavioral-network-custom-container">
-                  <label class="form-label">Custom Value (%)</label>
-                  <input type="number" id="behavioral-network-custom" min="50" max="500" placeholder="e.g. 150">
-                </div>
+            <!-- Quick Mode Selector -->
+            <div class="card-header" style="border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 1rem; margin-bottom: 1.5rem;">
+              <div class="card-title"><i class="fa-solid fa-gauge-high" style="margin-right: 0.5rem;"></i> Detection Strictness</div>
+              <div class="card-subtitle">Choose a preset that matches your needs, or select Custom for fine-grained control</div>
+            </div>
+
+            <div class="mode-selector" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 2rem;">
+              <label class="mode-card" id="mode-card-relaxed" onclick="selectBehavioralMode('relaxed')" style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid transparent; border-radius: 10px; cursor: pointer; transition: all 0.15s;">
+                <i class="fa-solid fa-face-smile" style="font-size: 1.5rem; color: var(--success);"></i>
+                <div style="font-weight: 600;">Relaxed</div>
+                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">Lets you browse social media normally. Only catches extreme scrolling.</div>
+                <input type="radio" name="mode" value="relaxed" style="display: none;">
+              </label>
+              <label class="mode-card" id="mode-card-balanced" onclick="selectBehavioralMode('balanced')" style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid var(--primary); border-radius: 10px; cursor: pointer; transition: all 0.15s;">
+                <i class="fa-solid fa-scale-balanced" style="font-size: 1.5rem; color: var(--primary);"></i>
+                <div style="font-weight: 600;">Balanced</div>
+                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">Default. Catches heavy doomscrolling while allowing normal use.</div>
+                <input type="radio" name="mode" value="balanced" checked style="display: none;">
+              </label>
+              <label class="mode-card" id="mode-card-strict" onclick="selectBehavioralMode('strict')" style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid transparent; border-radius: 10px; cursor: pointer; transition: all 0.15s;">
+                <i class="fa-solid fa-face-frown" style="font-size: 1.5rem; color: var(--danger);"></i>
+                <div style="font-weight: 600;">Strict</div>
+                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">Very sensitive. Flags even moderate scrolling. Best for breaking habits.</div>
+                <input type="radio" name="mode" value="strict" style="display: none;">
+              </label>
+              <label class="mode-card" id="mode-card-custom" onclick="selectBehavioralMode('custom')" style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid transparent; border-radius: 10px; cursor: pointer; transition: all 0.15s;">
+                <i class="fa-solid fa-sliders" style="font-size: 1.5rem; color: var(--warning);"></i>
+                <div style="font-weight: 600;">Custom</div>
+                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">Manually tune every parameter below.</div>
+                <input type="radio" name="mode" value="custom" style="display: none;">
+              </label>
+            </div>
+
+            <!-- Live Preview of Current Settings -->
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 2rem; padding: 1rem; background: var(--bg); border-radius: 8px;">
+              <div>
+                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.25rem;">Speed Multiplier</div>
+                <div style="font-size: 1.1rem; font-weight: 600;" id="preview-multiplier">1.5×</div>
+                <div style="font-size: 0.75rem; color: var(--text-secondary);">RPM must exceed avg × this</div>
+              </div>
+              <div>
+                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.25rem;">RPM Hard Cap</div>
+                <div style="font-size: 1.1rem; font-weight: 600;" id="preview-rpm-cap">180</div>
+                <div style="font-size: 0.75rem; color: var(--text-secondary);">Requests per minute ceiling</div>
+              </div>
+              <div>
+                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.25rem;">Reading Pause</div>
+                <div style="font-size: 1.1rem; font-weight: 600;" id="preview-pause">6s</div>
+                <div style="font-size: 0.75rem; color: var(--text-secondary);">Pause resets the counter</div>
+              </div>
+              <div>
+                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.25rem;">Throttle Rate</div>
+                <div style="font-size: 1.1rem; font-weight: 600;" id="preview-rate">32 Kbps</div>
+                <div style="font-size: 0.75rem; color: var(--text-secondary);">Speed when throttled</div>
               </div>
             </div>
 
-            <!-- Section B -->
-            <div>
-              <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem; color: var(--primary);">Physical Scroll Telemetry Control</h3>
-              <div class="behavioral-preset-grid">
-                <div class="form-group">
-                  <label class="form-label">Preset Sensitivity</label>
-                  <select id="behavioral-scroll-preset" onchange="toggleBehavioralCustom('scroll')">
-                    <option value="Low">Low (120/min)</option>
-                    <option value="Medium">Medium (75/min)</option>
-                    <option value="High">High (40/min)</option>
-                    <option value="Custom">Custom</option>
-                  </select>
-                </div>
-                <div class="form-group hidden" id="behavioral-scroll-custom-container">
-                  <label class="form-label">Custom Value (Events/Min)</label>
-                  <input type="number" id="behavioral-scroll-custom" min="1" max="500" placeholder="e.g. 75">
-                </div>
-              </div>
-            </div>
+            <!-- Advanced Settings (hidden by default, shown on Custom) -->
+            <div id="behavioral-advanced" class="d-none">
+              <h3 style="font-size: 1.1rem; font-weight: 600; margin-bottom: 1rem; color: var(--primary); border-top: 1px solid rgba(255,255,255,0.1); padding-top: 1.5rem;">
+                <i class="fa-solid fa-sliders" style="margin-right: 0.5rem;"></i> Advanced Parameters
+              </h3>
 
-            <!-- Section C -->
-            <div class="behavioral-section">
-              <h3 class="behavioral-title">SNI (Server Name Indication) Guard</h3>
-              
-              <div class="toggle-control-group">
-                <div class="toggle-label-container">
-                  <h4 class="toggle-main-label">Enable SNI Fallback Tracking</h4>
-                  <p class="toggle-sub-description">
-                    Allows VIGILANT to apply behavioral policies to encrypted apps (like Instagram &amp; TikTok) that block full SSL inspection.
-                  </p>
-                </div>
-                
-                <div class="switch-container">
-                  <span id="sni-status-text" class="switch-status-indicator" style="color: #1A938A; font-weight: bold;">ON</span>
-                  <label class="switch">
-                    <input type="checkbox" id="behavioral-sni-enabled" checked onchange="updateSNIStatusIndicator(this)">
-                    <span class="slider round"></span>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.25rem;">
+                <div class="form-group">
+                  <label class="form-label">
+                    Speed Multiplier
+                    <i class="fa-solid fa-question-circle tooltip-trigger" style="margin-left: 0.3rem;" data-tooltip="How much your request rate must exceed your personal average before the system flags you. Lower = more sensitive."></i>
                   </label>
+                  <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <input type="range" id="adv-velocity-multiplier" min="100" max="300" value="150" oninput="updateBehavioralPreview()" style="flex: 1;">
+                    <span id="adv-velocity-label" style="font-weight: 600; min-width: 3rem; text-align: right;">1.5×</span>
+                  </div>
+                  <div class="form-hint">Current RPM must be > average × <span id="adv-verbose-velocity">1.5</span></div>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label">
+                    RPM Hard Limit
+                    <i class="fa-solid fa-question-circle tooltip-trigger" style="margin-left: 0.3rem;" data-tooltip="Hard ceiling on requests per minute. If you exceed this, you get flagged regardless of your average."></i>
+                  </label>
+                  <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <input type="range" id="adv-rpm-cap" min="60" max="600" step="10" value="180" oninput="updateBehavioralPreview()" style="flex: 1;">
+                    <span id="adv-rpm-label" style="font-weight: 600; min-width: 3rem; text-align: right;">180</span>
+                  </div>
+                  <div class="form-hint">About <span id="adv-verbose-rpm">3</span> requests per second</div>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label">
+                    Reading Pause Threshold
+                    <i class="fa-solid fa-question-circle tooltip-trigger" style="margin-left: 0.3rem;" data-tooltip="If any gap between requests exceeds this, you're assumed to be reading — the doomscroll counter resets."></i>
+                  </label>
+                  <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <input type="range" id="adv-pause-threshold" min="3" max="30" value="6" oninput="updateBehavioralPreview()" style="flex: 1;">
+                    <span id="adv-pause-label" style="font-weight: 600; min-width: 3rem; text-align: right;">6s</span>
+                  </div>
+                  <div class="form-hint">A pause longer than this resets the circuit breaker</div>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label">Throttle Bandwidth</label>
+                  <select id="adv-throttle-rate" onchange="updateBehavioralPreview()">
+                    <option value="16">16 Kbps (Very strict)</option>
+                    <option value="32" selected>32 Kbps (Default)</option>
+                    <option value="64">64 Kbps (Mild)</option>
+                    <option value="128">128 Kbps (Light)</option>
+                    <option value="256">256 Kbps (Barely noticeable)</option>
+                  </select>
+                  <div class="form-hint">Maximum speed for throttled clients</div>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label">Throttle Duration</label>
+                  <select id="adv-throttle-duration" onchange="updateBehavioralPreview()">
+                    <option value="120">2 minutes</option>
+                    <option value="300">5 minutes</option>
+                    <option value="600" selected>10 minutes (Default)</option>
+                    <option value="1800">30 minutes</option>
+                    <option value="3600">1 hour</option>
+                  </select>
+                  <div class="form-hint">How long each throttle cycle lasts before auto-recovery</div>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label">SNI Fallback Tracking</label>
+                  <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer; margin-top: 0.5rem;">
+                    <input type="checkbox" id="adv-sni-enabled" checked onchange="updateSNIStatusIndicator(this)">
+                    <span id="adv-sni-status" style="font-weight: 600; color: var(--success);">Enabled</span>
+                  </label>
+                  <div class="form-hint">Track encrypted apps (Instagram, TikTok) via TLS handshake frequency</div>
+                </div>
+              </div>
+
+              <!-- Circuit Breaker Configuration -->
+              <div style="margin-top: 1.5rem; padding: 1.25rem; background: var(--bg); border-radius: 8px;">
+                <h4 style="font-size: 0.95rem; font-weight: 600; margin-bottom: 0.75rem; color: var(--primary);">
+                  <i class="fa-solid fa-bolt" style="margin-right: 0.4rem;"></i> Circuit Breaker Escalation Timeline
+                </h4>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.75rem;">
+                  <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
+                    <div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Level 1 • Nudge</div>
+                    <div style="font-weight: 600; font-size: 0.95rem;">90s</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">Log only</div>
+                  </div>
+                  <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
+                    <div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Level 2 • Pause</div>
+                    <div style="font-weight: 600; font-size: 0.95rem;">120s</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">10s @ 128 Kbps</div>
+                  </div>
+                  <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
+                    <div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Level 3 • Friction</div>
+                    <div style="font-weight: 600; font-size: 0.95rem;">180s</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">60s @ 256 Kbps</div>
+                  </div>
+                  <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
+                    <div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Level 4 • Circuit Break</div>
+                    <div style="font-weight: 600; font-size: 0.95rem;">300s+</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">120s @ 32 Kbps</div>
+                  </div>
+                  <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
+                    <div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Cooldown</div>
+                    <div style="font-weight: 600; font-size: 0.95rem;">120s</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">After circuit break</div>
+                  </div>
                 </div>
               </div>
             </div>
 
-            <!-- Action Bar -->
-            <div style="display: flex; justify-content: flex-end;">
-              <button type="submit" class="btn-primary" id="behavioral-save-btn" style="transition: all 0.3s ease; display: flex; align-items: center; gap: 0.5rem; width: auto;">
+            <div style="display: flex; justify-content: flex-end; margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid rgba(255,255,255,0.08);">
+              <button type="submit" class="btn-primary" id="behavioral-save-btn" style="display: flex; align-items: center; gap: 0.5rem;">
                 <i class="fa-solid fa-save"></i> Save Settings
               </button>
             </div>

@@ -141,12 +141,13 @@ CONFIG_DEFAULTS = DEFAULT_CONFIG
 ALLOWED_CONFIG_KEYS = set(CONFIG_DEFAULTS) | {
     "block_harmful", "block_distracting", "enable_https", "log_retention", 
     "network_velocity_preset", "network_velocity_custom", "physical_scroll_preset", 
-    "physical_scroll_custom", "sni_filtering_enabled", "request_threshold"
+    "physical_scroll_custom", "sni_filtering_enabled", "request_threshold",
+    "proxy_throttle_rate", "proxy_pinned_domains", "cb_no_pause_seconds"
 }
 BOOLEAN_CONFIG_KEYS = {"block_harmful", "block_distracting", "nlp_enabled", "throttle_enabled", "enable_https", "sni_filtering_enabled"}
 FLOAT_CONFIG_KEYS = {"network_velocity_threshold", "tfidf_classification_threshold", "tfidf_url_threshold", "tfidf_body_threshold"}
 INTEGER_CONFIG_KEYS = {"physical_scroll_threshold", "throttle_rate", "throttle_duration", "log_retention", "network_velocity_custom", "physical_scroll_custom", "request_threshold"}
-STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "upstream_dns", "nlp_accuracy", "ui_theme", "network_velocity_preset", "physical_scroll_preset"}
+STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "upstream_dns", "nlp_accuracy", "ui_theme", "network_velocity_preset", "physical_scroll_preset", "proxy_throttle_rate", "proxy_pinned_domains"}
 TRAFFIC_CATEGORIES = ("Educational", "Productive", "Distracting", "Harmful")
 L4_TRAFFIC_CATEGORIES = ("DNS_TRACKED", "SNI_PASSTHROUGH")
 DEFAULT_THROTTLE_DURATION = 300

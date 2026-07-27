@@ -536,10 +536,34 @@ async function loadUnifiedConfig() {
     }
     
     // Sync advanced settings
-    syncConfigInputs(['nlp-mode'], config.nlp_accuracy);
+    syncConfigInputs(['nlp-accuracy'], config.nlp_accuracy);
+    syncConfigInputs(['nlp-enabled'], config.nlp_enabled);
     syncConfigInputs(['throttle-rate'], config.throttle_rate);
+    syncConfigInputs(['throttle-duration'], config.throttle_duration);
     syncConfigInputs(['https-enabled'], config.enable_https);
     syncConfigInputs(['log-retention'], config.log_retention);
+    syncConfigInputs(['tfidf-page-threshold'], config.tfidf_classification_threshold);
+    syncConfigInputs(['tfidf-url-threshold'], config.tfidf_url_threshold);
+    syncConfigInputs(['tfidf-body-threshold'], config.tfidf_body_threshold);
+
+    // Update NLP status label
+    const nlpCheck = document.getElementById('nlp-enabled');
+    const nlpLabel = document.getElementById('nlp-status-label');
+    if (nlpCheck && nlpLabel) {
+      const enabled = config.nlp_enabled === true || config.nlp_enabled === 'true';
+      nlpCheck.checked = enabled;
+      nlpLabel.textContent = enabled ? 'Enabled' : 'Disabled';
+      nlpLabel.style.color = enabled ? 'var(--success)' : 'var(--danger)';
+    }
+
+    // Update throttle status label
+    const throttleCheck = document.getElementById('throttle-enabled');
+    const throttleLabel = document.getElementById('throttle-status-label');
+    if (throttleCheck && throttleLabel) {
+      const enabled = config.throttle_enabled === true || config.throttle_enabled === 'true';
+      throttleCheck.checked = enabled;
+      throttleLabel.textContent = enabled ? 'Enabled' : 'Disabled';
+    }
     
     // Update network interface dropdowns with actual values
     updateInterfaceDropdowns(config.upstream_interface, config.distribution_interface);
@@ -632,7 +656,6 @@ async function saveUnifiedConfig(e) {
   const blockHarmfulEl = document.getElementById('block-harmful');
   const blockDistractingEl = document.getElementById('block-distracting');
   const throttleEnabledEl = document.getElementById('throttle-enabled');
-  const velocityThresholdEl = document.getElementById('throttle-threshold');
   
   // Network settings
   const upstreamInterfaceEl = document.getElementById('upstream-interface');
@@ -643,10 +666,15 @@ async function saveUnifiedConfig(e) {
   const dnsServersEl = document.getElementById('dns-servers');
   
   // Advanced settings
-  const nlpModeEl = document.getElementById('nlp-mode');
+  const nlpAccuracyEl = document.getElementById('nlp-accuracy');
+  const nlpEnabledEl = document.getElementById('nlp-enabled');
   const throttleRateEl = document.getElementById('throttle-rate');
+  const throttleDurationEl = document.getElementById('throttle-duration');
   const httpsEnabledEl = document.getElementById('https-enabled');
   const logRetentionEl = document.getElementById('log-retention');
+  const tfidfPageEl = document.getElementById('tfidf-page-threshold');
+  const tfidfUrlEl = document.getElementById('tfidf-url-threshold');
+  const tfidfBodyEl = document.getElementById('tfidf-body-threshold');
 
   const payload = {
     block_harmful: Boolean(blockHarmfulEl?.checked),
@@ -660,10 +688,15 @@ async function saveUnifiedConfig(e) {
     dhcp_end: dhcpEndEl?.value || '192.168.10.50',
     upstream_dns: dnsServersEl?.value || '8.8.8.8\n8.8.4.4',
     // Advanced configuration
-    nlp_accuracy: nlpModeEl?.value || 'balanced',
-    throttle_rate: Number.parseInt(throttleRateEl?.value || '256', 10) || 256,
+    nlp_accuracy: nlpAccuracyEl?.value || 'balanced',
+    nlp_enabled: String(Boolean(nlpEnabledEl?.checked)),
+    throttle_rate: throttleRateEl?.value || '256',
+    throttle_duration: throttleDurationEl?.value || '600',
     enable_https: Boolean(httpsEnabledEl?.checked),
-    log_retention: Number.parseInt(logRetentionEl?.value || '30', 10) || 30
+    log_retention: logRetentionEl?.value || '30',
+    tfidf_classification_threshold: tfidfPageEl?.value || '0.05',
+    tfidf_url_threshold: tfidfUrlEl?.value || '0.3',
+    tfidf_body_threshold: tfidfBodyEl?.value || '0.15'
   };
 
   try {
@@ -693,99 +726,245 @@ async function saveUnifiedConfig(e) {
 async function loadBehavioralSettings() {
   try {
     const response = await fetch('/api/config/behavioral');
-    if (!response.ok) throw new Error('Failed to fetch configuration');
+    if (!response.ok) return;
     const data = await parseJsonResponse(response) || {};
-    
-    const netPreset = document.getElementById('behavioral-network-preset');
-    const netCustom = document.getElementById('behavioral-network-custom');
-    if (netPreset) netPreset.value = data.network_velocity_preset || 'Medium';
-    if (netCustom) netCustom.value = data.network_velocity_custom || 150;
-    toggleBehavioralCustom('network');
-    
-    const scrollPreset = document.getElementById('behavioral-scroll-preset');
-    const scrollCustom = document.getElementById('behavioral-scroll-custom');
-    if (scrollPreset) scrollPreset.value = data.physical_scroll_preset || 'Medium';
-    if (scrollCustom) scrollCustom.value = data.physical_scroll_custom || 75;
-    toggleBehavioralCustom('scroll');
-    
-    const sniEnabled = document.getElementById('behavioral-sni-enabled');
-    if (sniEnabled) sniEnabled.checked = data.sni_filtering_enabled;
-    if (sniEnabled) {
-      const slider = sniEnabled.nextElementSibling;
-      if (data.sni_filtering_enabled) slider.classList.add('active');
-      else slider.classList.remove('active');
-      updateSNIStatusIndicator(sniEnabled);
+
+    // Determine mode from preset values
+    const netPreset = data.network_velocity_preset || 'Medium';
+    const scrollPreset = data.physical_scroll_preset || 'Medium';
+
+    let mode = 'custom';
+    for (const [key, preset] of Object.entries(BEHAVIORAL_PRESETS)) {
+      if (preset.network_velocity_preset === netPreset && preset.physical_scroll_preset === scrollPreset) {
+        mode = key;
+        break;
+      }
     }
+    selectBehavioralMode(mode);
+
+    // Populate advanced sliders with current values
+    const multiplier = data.network_velocity_custom || 150;
+    const rpmCap = data.physical_scroll_custom || 180;
+    const throttleRate = data.throttle_rate || 32;
+    const throttleDuration = data.throttle_duration || 600;
+    const sniEnabled = data.sni_filtering_enabled !== false;
+
+    const multSlider = document.getElementById('adv-velocity-multiplier');
+    const rpmSlider = document.getElementById('adv-rpm-cap');
+    const rateSelect = document.getElementById('adv-throttle-rate');
+    const durationSelect = document.getElementById('adv-throttle-duration');
+    const sniCheck = document.getElementById('adv-sni-enabled');
+
+    if (multSlider) multSlider.value = multiplier;
+    if (rpmSlider) rpmSlider.value = rpmCap;
+    if (rateSelect) rateSelect.value = String(throttleRate);
+    if (durationSelect) durationSelect.value = String(throttleDuration);
+    if (sniCheck) {
+      sniCheck.checked = sniEnabled;
+      updateSNIStatusIndicator(sniCheck);
+    }
+
+    updateBehavioralPreview();
   } catch (e) {
-    console.error(e);
-    showToast('Error loading behavioral settings', 'danger');
+    console.error('loadBehavioralSettings:', e);
   }
 }
 
-function toggleBehavioralCustom(type) {
-  const preset = document.getElementById(`behavioral-${type}-preset`).value;
-  const container = document.getElementById(`behavioral-${type}-custom-container`);
-  if (preset === 'Custom') {
-    container.classList.remove('hidden');
-  } else {
-    container.classList.add('hidden');
+// ─── Behavioral Control (Redesigned) ───
+
+const BEHAVIORAL_PRESETS = {
+  relaxed: {
+    network_velocity_preset: 'Low',
+    physical_scroll_preset: 'Low',
+    multiplier: 200,
+    rpm_cap: 300
+  },
+  balanced: {
+    network_velocity_preset: 'Medium',
+    physical_scroll_preset: 'Medium',
+    multiplier: 150,
+    rpm_cap: 180
+  },
+  strict: {
+    network_velocity_preset: 'High',
+    physical_scroll_preset: 'High',
+    multiplier: 110,
+    rpm_cap: 120
   }
+};
+
+function selectBehavioralMode(mode) {
+  // Update card styles
+  document.querySelectorAll('.mode-card').forEach(el => {
+    el.style.borderColor = 'transparent';
+  });
+  const card = document.getElementById('mode-card-' + mode);
+  if (card) {
+    card.style.borderColor = 'var(--primary)';
+    card.querySelector('input[type="radio"]').checked = true;
+  }
+
+  const advSection = document.getElementById('behavioral-advanced');
+  if (mode === 'custom') {
+    advSection.classList.remove('d-none');
+  } else {
+    advSection.classList.add('d-none');
+    // Apply preset values to sliders for preview
+    const preset = BEHAVIORAL_PRESETS[mode] || BEHAVIORAL_PRESETS.balanced;
+    const multSlider = document.getElementById('adv-velocity-multiplier');
+    const rpmSlider = document.getElementById('adv-rpm-cap');
+    if (multSlider) multSlider.value = preset.multiplier;
+    if (rpmSlider) rpmSlider.value = preset.rpm_cap;
+  }
+  updateBehavioralPreview();
+}
+
+function updateBehavioralPreview() {
+  const multSlider = document.getElementById('adv-velocity-multiplier');
+  const rpmSlider = document.getElementById('adv-rpm-cap');
+  const pauseSlider = document.getElementById('adv-pause-threshold');
+  const rateSelect = document.getElementById('adv-throttle-rate');
+
+  if (!multSlider || !rpmSlider || !pauseSlider || !rateSelect) return;
+
+  const multiplier = parseInt(multSlider.value, 10);
+  const rpmCap = parseInt(rpmSlider.value, 10);
+  const pause = parseInt(pauseSlider.value, 10);
+  const rate = parseInt(rateSelect.value, 10);
+
+  const setText = (id, text) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+  };
+
+  setText('preview-multiplier', (multiplier / 100).toFixed(1) + '×');
+  setText('adv-velocity-label', (multiplier / 100).toFixed(1) + '×');
+  setText('adv-verbose-velocity', (multiplier / 100).toFixed(1));
+  setText('preview-rpm-cap', rpmCap);
+  setText('adv-rpm-label', rpmCap);
+  setText('adv-verbose-rpm', Math.round(rpmCap / 60));
+  setText('preview-pause', pause + 's');
+  setText('adv-pause-label', pause + 's');
+  setText('preview-rate', rate + ' Kbps');
 }
 
 async function saveBehavioralSettings(event) {
   event.preventDefault();
-  
-  const netPreset = document.getElementById('behavioral-network-preset').value;
-  const netCustom = document.getElementById('behavioral-network-custom').value;
-  const scrollPreset = document.getElementById('behavioral-scroll-preset').value;
-  const scrollCustom = document.getElementById('behavioral-scroll-custom').value;
-  const sniEnabled = document.getElementById('behavioral-sni-enabled')?.checked;
-  
-  const payload = {
-    network_velocity_preset: netPreset,
-    physical_scroll_preset: scrollPreset,
-    sni_filtering_enabled: sniEnabled
-  };
-  
-  // Read active values from DOM and cast to integers when Custom is selected
-  if (netPreset === 'Custom') {
-    const customValue = parseInt(netCustom, 10);
-    if (isNaN(customValue) || customValue <= 0) {
-      showToast('Network velocity custom value must be a positive integer', 'danger');
-      return;
+
+  // Determine which mode is selected
+  let mode = 'balanced';
+  document.querySelectorAll('.mode-card input[type="radio"]').forEach(el => {
+    if (el.checked) {
+      mode = el.value;
     }
-    payload.network_velocity_custom = customValue;
+  });
+
+  let payload = {};
+
+  if (mode === 'custom') {
+    const multiplier = parseInt(document.getElementById('adv-velocity-multiplier').value, 10);
+    const rpmCap = parseInt(document.getElementById('adv-rpm-cap').value, 10);
+    const pauseThreshold = parseInt(document.getElementById('adv-pause-threshold').value, 10);
+    const throttleRate = document.getElementById('adv-throttle-rate').value;
+    const throttleDuration = parseInt(document.getElementById('adv-throttle-duration').value, 10);
+    const sniEnabled = document.getElementById('adv-sni-enabled').checked;
+
+    payload = {
+      network_velocity_custom: multiplier,
+      physical_scroll_custom: rpmCap,
+      network_velocity_preset: 'Custom',
+      physical_scroll_preset: 'Custom',
+      sni_filtering_enabled: sniEnabled,
+      // Use proxy_ prefix keys that the addon's load_proxy_config() actually reads
+      proxy_throttle_rate: throttleRate + 'kbit',
+      proxy_pinned_domains: 'facebook.com,twitter.com,x.com,tiktok.com,instagram.com,reddit.com,youtube.com',
+      throttle_rate: String(throttleRate),
+      throttle_duration: String(throttleDuration),
+      cb_no_pause_seconds: pauseThreshold
+    };
+  } else {
+    const preset = BEHAVIORAL_PRESETS[mode] || BEHAVIORAL_PRESETS.balanced;
+    const defaultRate = mode === 'strict' ? '16' : mode === 'relaxed' ? '64' : '32';
+    payload = {
+      network_velocity_preset: preset.network_velocity_preset,
+      physical_scroll_preset: preset.physical_scroll_preset,
+      network_velocity_custom: preset.multiplier,
+      physical_scroll_custom: preset.rpm_cap,
+      sni_filtering_enabled: document.getElementById('adv-sni-enabled')?.checked ?? true,
+      proxy_throttle_rate: defaultRate + 'kbit',
+      throttle_rate: defaultRate
+    };
   }
-  
-  if (scrollPreset === 'Custom') {
-    const customValue = parseInt(scrollCustom, 10);
-    if (isNaN(customValue) || customValue <= 0) {
-      showToast('Physical scroll custom value must be a positive integer', 'danger');
-      return;
-    }
-    payload.physical_scroll_custom = customValue;
-  }
-  
+
+  const saveBtn = document.getElementById('behavioral-save-btn');
+  const originalText = saveBtn.innerHTML;
+  saveBtn.disabled = true;
+  saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+
   try {
     const response = await fetch('/api/config/behavioral', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    
+
     if (response.ok) {
-      const data = await response.json();
-      if (data.status === 'success') {
-        showToast('Behavioral settings saved successfully', 'success');
-        loadBehavioralSettings(); // Reload to verify
-      } else {
-        showToast('Failed to save behavioral settings: ' + (data.message || 'Unknown error'), 'danger');
-      }
+      showToast('Behavioral settings saved successfully', 'success');
     } else {
-      showToast('Failed to save behavioral settings', 'danger');
+      const data = await parseJsonResponse(response);
+      showToast(getResponseErrorMessage(data, 'Failed to save settings'), 'danger');
     }
   } catch (error) {
     showToast('Error saving behavioral settings', 'danger');
+  } finally {
+    saveBtn.disabled = false;
+    saveBtn.innerHTML = originalText;
+  }
+}
+
+// ─── Password Management ───
+async function handlePasswordChange() {
+  const current = document.getElementById('pwd-current');
+  const newPwd = document.getElementById('pwd-new');
+  const confirm = document.getElementById('pwd-confirm');
+  const feedback = document.getElementById('pwd-feedback');
+
+  if (!current || !newPwd || !confirm) return;
+
+  if (!newPwd.value || newPwd.value.length < 6) {
+    feedback.innerHTML = '<span style="color: var(--danger);">Password must be at least 6 characters</span>';
+    return;
+  }
+  if (newPwd.value !== confirm.value) {
+    feedback.innerHTML = '<span style="color: var(--danger);">Passwords do not match</span>';
+    return;
+  }
+
+  feedback.innerHTML = '<span style="color: var(--text-secondary);">Changing password...</span>';
+
+  try {
+    const resp = await fetch('/api/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        current_password: current.value,
+        new_password: newPwd.value,
+        confirm: confirm.value
+      })
+    });
+    const data = await resp.json();
+
+    if (resp.ok) {
+      feedback.innerHTML = '<span style="color: var(--success);">Password changed successfully</span>';
+      current.value = '';
+      newPwd.value = '';
+      confirm.value = '';
+      setTimeout(() => { feedback.innerHTML = ''; }, 3000);
+    } else {
+      feedback.innerHTML = '<span style="color: var(--danger);">' + (data.error || 'Failed to change password') + '</span>';
+    }
+  } catch (err) {
+    feedback.innerHTML = '<span style="color: var(--danger);">Connection error</span>';
   }
 }
 
@@ -929,17 +1108,24 @@ async function deleteCategoryHint(hintId) {
 
 // ─── SNI Status Indicator Update ───
 function updateSNIStatusIndicator(checkbox) {
+  // Works with both old (behavioral-sni-enabled) and new (adv-sni-enabled) toggles
   const statusText = document.getElementById('sni-status-text');
-  if (!statusText) return;
-  
-  if (checkbox.checked) {
-    statusText.textContent = 'ON';
-    statusText.style.color = '#1A938A';
-    statusText.style.fontWeight = 'bold';
-  } else {
-    statusText.textContent = 'OFF';
-    statusText.style.color = '#ff3860';
-    statusText.style.fontWeight = 'bold';
+  if (statusText) {
+    if (checkbox.checked) {
+      statusText.textContent = 'ON';
+      statusText.style.color = '#1A938A';
+      statusText.style.fontWeight = 'bold';
+    } else {
+      statusText.textContent = 'OFF';
+      statusText.style.color = '#ff3860';
+      statusText.style.fontWeight = 'bold';
+    }
+  }
+  // Also update the new advanced label
+  const advStatus = document.getElementById('adv-sni-status');
+  if (advStatus) {
+    advStatus.textContent = checkbox.checked ? 'Enabled' : 'Disabled';
+    advStatus.style.color = checkbox.checked ? 'var(--success)' : 'var(--danger)';
   }
 }
 

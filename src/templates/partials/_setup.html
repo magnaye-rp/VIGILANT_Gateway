@@ -1,188 +1,268 @@
-      <!-- Settings & Setup Tab -->
+      <!-- Setup & Configuration Tab -->
       <div id="tab-settings" class="tab-content">
-        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">Settings &amp; Setup</h2>
-
-        <div class="card" style="margin-bottom: 2rem;">
-          <div class="card-header">
-            <div class="card-title">Appearance</div>
-            <div class="card-subtitle">Customize the dashboard interface</div>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Interface Theme Preference</label>
-            <select id="theme-preference" onchange="toggleTheme(this.value)" style="width: 200px;">
-              <option value="light">Light Mode</option>
-              <option value="dark">Dark Mode</option>
-            </select>
-            <div class="form-hint">Choose between light and dark visual themes.</div>
-          </div>
-        </div>
-
-        <!-- Advanced Settings Toggle -->
-        <div style="margin-bottom: 2rem; display: flex; align-items: center; gap: 1rem;">
-          <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer;">
-            <input type="checkbox" id="advanced-toggle" onchange="toggleAdvancedSettings()">
-            <span style="font-weight: 600; color: var(--text);">Advanced Settings</span>
-          </label>
-        </div>
+        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">
+          Setup &amp; Configuration <span style="font-size: 0.9rem; color: var(--text-secondary); font-weight: 400;">— Network, filtering, and system settings</span>
+        </h2>
 
         <form id="unified-config-form" onsubmit="saveUnifiedConfig(event)">
-          <!-- Basic View (Always Visible) -->
+          <!-- ═══ Basic Configuration ═══ -->
           <div class="card" style="margin-bottom: 2rem;">
             <div class="card-header">
-              <div class="card-title">Basic Configuration</div>
-              <div class="card-subtitle">Essential network and filtering settings</div>
+              <div class="card-title"><i class="fa-solid fa-network-wired" style="margin-right: 0.5rem;"></i> Network Interfaces</div>
+              <div class="card-subtitle">Which physical network ports do what</div>
             </div>
-
             <div class="form-row">
               <div class="form-group">
-                <label class="form-label">Upstream Interface (Internet Input)</label>
+                <label class="form-label">Upstream Interface (WAN — Internet In)</label>
                 <select id="upstream-interface">
                   <option value="">Loading interfaces...</option>
                 </select>
-                <div class="form-hint">External network interface for internet connectivity</div>
+                <div class="form-hint">The port connected to your modem / internet source</div>
               </div>
               <div class="form-group">
-                <label class="form-label">Distribution Interface (Local Network AP)</label>
+                <label class="form-label">Distribution Interface (LAN — Local Network)</label>
                 <select id="distribution-interface">
                   <option value="">Loading interfaces...</option>
                 </select>
-                <div class="form-hint">Internal network interface for client devices</div>
+                <div class="form-hint">The port connected to your switch, AP, or client devices</div>
               </div>
             </div>
+          </div>
 
+          <div class="card" style="margin-bottom: 2rem;">
+            <div class="card-header">
+              <div class="card-title"><i class="fa-solid fa-diagram-project" style="margin-right: 0.5rem;"></i> IP &amp; DHCP</div>
+              <div class="card-subtitle">How devices get IP addresses on your network</div>
+            </div>
             <div class="form-row">
               <div class="form-group">
-                <label class="form-label">Gateway IP Address</label>
+                <label class="form-label">Gateway IP</label>
                 <input type="text" id="gateway-ip" placeholder="192.168.10.1" value="192.168.10.1">
-                <div class="form-hint">IP address for the admin interface</div>
+                <div class="form-hint">The gateway's own IP on the LAN side</div>
               </div>
               <div class="form-group">
                 <label class="form-label">DHCP Range Start</label>
                 <input type="text" id="dhcp-start" placeholder="192.168.10.10" value="192.168.10.10">
-                <div class="form-hint">First IP in client range</div>
+                <div class="form-hint">First IP the DHCP server gives out</div>
               </div>
               <div class="form-group">
                 <label class="form-label">DHCP Range End</label>
                 <input type="text" id="dhcp-end" placeholder="192.168.10.50" value="192.168.10.50">
-                <div class="form-hint">Last IP in client range</div>
+                <div class="form-hint">Last IP the DHCP server gives out</div>
               </div>
             </div>
-
             <div class="form-group">
-              <label class="form-label">Upstream DNS Servers</label>
+              <label class="form-label">DNS Servers</label>
               <textarea id="dns-servers" rows="2" placeholder="8.8.8.8&#10;8.8.4.4">8.8.8.8
 8.8.4.4</textarea>
-              <div class="form-hint">DNS servers for upstream resolution (one per line)</div>
+              <div class="form-hint">DNS resolvers for the LAN (one per line)</div>
             </div>
+          </div>
 
-            <div class="form-group">
-              <label class="form-label">Categories to Block</label>
+          <div class="card" style="margin-bottom: 2rem;">
+            <div class="card-header">
+              <div class="card-title"><i class="fa-solid fa-shield-halved" style="margin-right: 0.5rem;"></i> Content Blocking</div>
+              <div class="card-subtitle">Which types of content to block entirely</div>
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
               <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-                <div>
-                  <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer;">
-                    <input type="checkbox" id="block-harmful" checked>
-                    <span style="font-weight: 600; color: var(--danger);">Harmful content</span>
-                  </label>
-                  <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem; margin-left: 1.75rem;">Adult content, violence, extremism</div>
-                </div>
-                <div>
-                  <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer;">
-                    <input type="checkbox" id="block-distracting">
-                    <span style="font-weight: 600; color: var(--warning);">Distracting sites</span>
-                  </label>
-                  <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem; margin-left: 1.75rem;">Social media, entertainment, memes</div>
-                </div>
+                <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer; padding: 0.75rem; background: var(--surface); border-radius: 8px;">
+                  <input type="checkbox" id="block-harmful" checked>
+                  <div>
+                    <div style="font-weight: 600; color: var(--danger);">Harmful Content</div>
+                    <div style="font-size: 0.85rem; color: var(--text-secondary);">Violence, hate speech, extremism, self-harm, illegal content</div>
+                  </div>
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer; padding: 0.75rem; background: var(--surface); border-radius: 8px;">
+                  <input type="checkbox" id="block-distracting">
+                  <div>
+                    <div style="font-weight: 600; color: var(--warning);">Distracting Content</div>
+                    <div style="font-size: 0.85rem; color: var(--text-secondary);">Social media feeds, entertainment, memes, viral content</div>
+                  </div>
+                </label>
               </div>
             </div>
           </div>
 
-          <!-- Advanced View (Hidden by Default) -->
+          <!-- Advanced Toggle -->
+          <div style="margin-bottom: 2rem; display: flex; align-items: center; gap: 1rem; padding: 0.75rem 1.25rem; background: var(--surface); border-radius: 8px; border: 1px solid rgba(255,255,255,0.06);">
+            <i class="fa-solid fa-cog" style="color: var(--text-secondary);"></i>
+            <span style="font-weight: 500; flex: 1;">Advanced Settings</span>
+            <label class="switch" style="margin: 0;">
+              <input type="checkbox" id="advanced-toggle" onchange="toggleAdvancedSettings()">
+              <span class="slider round"></span>
+            </label>
+          </div>
+
+          <!-- ═══ Advanced Settings ═══ -->
           <div id="advanced-settings" class="d-none">
+
             <div class="card" style="margin-bottom: 2rem;">
               <div class="card-header">
-                <div class="card-title">Behavioral Control Settings</div>
-                <div class="card-subtitle">Intelligent traffic analysis and behavioral telemetry</div>
+                <div class="card-title"><i class="fa-solid fa-microchip" style="margin-right: 0.5rem;"></i> NLP &amp; Classification Engine</div>
+                <div class="card-subtitle">Content analysis settings</div>
               </div>
-
-              <div class="form-group">
-                <label class="form-label">
-                  NLP Toggle
-                  <i class="fa-solid fa-question-circle tooltip-trigger" data-tooltip="Toggles the Natural Language Processing engine mode. Fast uses less CPU, while Strict provides better accuracy for detecting harmful content."></i>
-                </label>
-                <select id="nlp-mode">
-                  <option value="fast">Fast (Lower accuracy, ~70%)</option>
-                  <option value="balanced" selected>Balanced (Good accuracy, ~85%)</option>
-                  <option value="strict">Strict (Higher accuracy, ~95%)</option>
-                </select>
-                <div class="form-hint">Trade-off between speed and accuracy</div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">NLP Engine</label>
+                  <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer; margin-top: 0.5rem;">
+                    <input type="checkbox" id="nlp-enabled" checked>
+                    <span id="nlp-status-label" style="font-weight: 600; color: var(--success);">Enabled</span>
+                  </label>
+                  <div class="form-hint">Natural language processing for content categorization</div>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Classification Accuracy</label>
+                  <select id="nlp-accuracy">
+                    <option value="fast">Fast — Lower accuracy (~70%)</option>
+                    <option value="balanced" selected>Balanced — Good accuracy (~85%)</option>
+                    <option value="strict">Strict — Highest accuracy (~95%)</option>
+                  </select>
+                  <div class="form-hint">Trade-off between CPU usage and classification quality</div>
+                </div>
               </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">TF-IDF Page Threshold</label>
+                  <input type="number" id="tfidf-page-threshold" value="0.05" min="0.01" max="0.5" step="0.01">
+                  <div class="form-hint">Minimum similarity score for full page content (default: 0.05)</div>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">TF-IDF URL Threshold</label>
+                  <input type="number" id="tfidf-url-threshold" value="0.3" min="0.01" max="0.5" step="0.01">
+                  <div class="form-hint">Minimum similarity score for domain names (default: 0.3)</div>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">TF-IDF Body Threshold</label>
+                  <input type="number" id="tfidf-body-threshold" value="0.15" min="0.01" max="0.5" step="0.01">
+                  <div class="form-hint">Minimum similarity score for response bodies (default: 0.15)</div>
+                </div>
+              </div>
+            </div>
 
+            <div class="card" style="margin-bottom: 2rem;">
+              <div class="card-header">
+                <div class="card-title"><i class="fa-solid fa-gauge" style="margin-right: 0.5rem;"></i> Throttle Settings</div>
+                <div class="card-subtitle">Bandwidth shaping defaults</div>
+              </div>
               <div class="form-row">
                 <div class="form-group">
                   <label class="form-label">Enable Throttling</label>
-                  <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer;">
+                  <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer; margin-top: 0.5rem;">
                     <input type="checkbox" id="throttle-enabled" checked>
-                    <span id="throttle-status">Enabled</span>
+                    <span id="throttle-status-label" style="font-weight: 600;">Enabled</span>
                   </label>
+                  <div class="form-hint">Master switch for bandwidth throttling</div>
                 </div>
                 <div class="form-group">
-                  <label class="form-label">Throttle Rate</label>
+                  <label class="form-label">Default Throttle Rate</label>
                   <select id="throttle-rate">
-                    <option value="128">128 Kbps (Strict)</option>
-                    <option value="256" selected>256 Kbps (Balanced)</option>
-                    <option value="512">512 Kbps (Moderate)</option>
+                    <option value="16">16 Kbps (Text only)</option>
+                    <option value="32" selected>32 Kbps (Default)</option>
+                    <option value="64">64 Kbps (Slow images)</option>
+                    <option value="128">128 Kbps (Light throttle)</option>
+                    <option value="256">256 Kbps (Mild)</option>
+                    <option value="512">512 Kbps (Barely noticeable)</option>
                   </select>
-                  <div class="form-hint">Bandwidth limit for throttled clients</div>
+                  <div class="form-hint">Bandwidth cap applied to throttled clients</div>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Throttle Cycle Duration</label>
+                  <select id="throttle-duration">
+                    <option value="120">2 minutes</option>
+                    <option value="300">5 minutes</option>
+                    <option value="600" selected>10 minutes (Default)</option>
+                    <option value="1800">30 minutes</option>
+                    <option value="3600">1 hour</option>
+                  </select>
+                  <div class="form-hint">How long a throttle cycle lasts before auto-recovery</div>
                 </div>
               </div>
             </div>
 
             <div class="card" style="margin-bottom: 2rem;">
               <div class="card-header">
-                <div class="card-title">Security &amp; Privacy</div>
-                <div class="card-subtitle">System security settings</div>
+                <div class="card-title"><i class="fa-solid fa-key" style="margin-right: 0.5rem;"></i> Admin Password</div>
+                <div class="card-subtitle">Change your dashboard login password</div>
               </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Current Password</label>
+                  <input type="password" id="pwd-current" placeholder="Enter current password">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">New Password</label>
+                  <input type="password" id="pwd-new" placeholder="At least 6 characters" minlength="6">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Confirm New Password</label>
+                  <input type="password" id="pwd-confirm" placeholder="Repeat new password">
+                </div>
+              </div>
+              <div style="display: flex; gap: 0.75rem;">
+                <button type="button" class="btn-secondary" onclick="handlePasswordChange()" style="width: auto;">
+                  <i class="fa-solid fa-key"></i> Change Password
+                </button>
+                <div id="pwd-feedback" style="font-size: 0.85rem; align-self: center;"></div>
+              </div>
+            </div>
 
-              <div class="form-group">
-                <label class="form-label">Admin Password</label>
-                <input type="password" id="admin-password" placeholder="••••••••">
-                <div class="form-hint">Leave blank to keep current password</div>
+            <div class="card" style="margin-bottom: 2rem;">
+              <div class="card-header">
+                <div class="card-title"><i class="fa-solid fa-clock" style="margin-right: 0.5rem;"></i> Logging &amp; Maintenance</div>
+                <div class="card-subtitle">Log retention and system maintenance</div>
               </div>
-              <div class="form-group">
-                <label class="form-label">Enable HTTPS</label>
-                <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer;">
-                  <input type="checkbox" id="https-enabled" checked>
-                </label>
-                <div class="form-hint">Use SSL/TLS for dashboard connection</div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Log Retention</label>
+                  <select id="log-retention">
+                    <option value="7">7 days</option>
+                    <option value="14">14 days</option>
+                    <option value="30" selected>30 days</option>
+                    <option value="60">60 days</option>
+                    <option value="90">90 days</option>
+                    <option value="0">Keep forever</option>
+                  </select>
+                  <div class="form-hint">Automatically delete logs older than this</div>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">HTTPS for Dashboard</label>
+                  <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer; margin-top: 0.5rem;">
+                    <input type="checkbox" id="https-enabled" checked>
+                    <span style="font-weight: 600;">Enabled</span>
+                  </label>
+                  <div class="form-hint">Serve the dashboard over HTTPS (requires certificate)</div>
+                </div>
               </div>
-              <div class="form-group">
-                <label class="form-label">Log Retention (days)</label>
-                <input type="number" id="log-retention" value="30" min="7" max="365">
-                <div class="form-hint">Automatically delete logs older than this</div>
+            </div>
+
+            <div class="card" style="margin-bottom: 2rem;">
+              <div class="card-header">
+                <div class="card-title"><i class="fa-solid fa-rotate" style="margin-right: 0.5rem;"></i> Backup &amp; Restore</div>
+                <div class="card-subtitle">Export or import your full configuration</div>
               </div>
+              <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: center;">
+                <button type="button" class="btn-primary" onclick="exportConfig()" style="width: auto;">
+                  <i class="fa-solid fa-download"></i> Export Configuration
+                </button>
+                <button type="button" class="btn-secondary" onclick="importConfig()" style="width: auto;">
+                  <i class="fa-solid fa-upload"></i> Import Configuration
+                </button>
+                <button type="button" class="btn-danger" onclick="confirmReset()" style="width: auto;">
+                  <i class="fa-solid fa-trash"></i> Factory Reset
+                </button>
+              </div>
+              <div class="form-hint" style="margin-top: 0.75rem;">Exported files are JSON — keep them in a safe place</div>
             </div>
           </div>
 
-          <div class="btn-group">
-            <button type="submit" class="btn-success" style="width: auto;">Save All Configuration</button>
-            <button type="button" class="btn-danger" onclick="resetConfiguration()" style="width: auto;">Reset Configuration</button>
+          <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
+            <button type="submit" class="btn-success" style="width: auto; display: flex; align-items: center; gap: 0.5rem;">
+              <i class="fa-solid fa-save"></i> Save All Settings
+            </button>
+            <button type="button" class="btn-secondary" onclick="loadConfigToUI()" style="width: auto;">
+              <i class="fa-solid fa-rotate"></i> Refresh
+            </button>
           </div>
         </form>
-
-        <div class="card card-custom mt-4" style="margin-bottom: 2rem;">
-            <div class="card-header">System Backup &amp; Configuration Recovery</div>
-            <div class="card-body">
-                <p class="text-muted">Export your keyword blocklists, MAC whitelists, and network controls to a backup file, or restore them onto this server gateway device.</p>
-                <div class="d-flex align-items-center justify-content-between flex-wrap" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;">
-                    <a href="/api/config/setup/export" class="btn-primary m-2">Download Settings JSON Backup</a>
-                    
-                    <form action="/api/config/setup/import" method="POST" enctype="multipart/form-data" class="form-inline m-2" style="display: flex; gap: 1rem; align-items: center;">
-                        <div class="form-group mr-2" style="margin-bottom: 0;">
-                            <input type="file" name="config_file" accept=".json" class="form-control-file" required>
-                        </div>
-                        <button type="submit" class="btn-warning">Restore Configuration JSON</button>
-                    </form>
-                </div>
-            </div>
-        </div>
       </div>

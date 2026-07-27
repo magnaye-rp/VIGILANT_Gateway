@@ -226,6 +226,8 @@ stage_5_network_config() {
 
     log_info "Configuring Netplan for WAN ($WAN_INTERFACE) and LAN ($LAN_INTERFACE)..."
     
+    # Both WAN and LAN are wired ethernet interfaces.
+    # (The LAN connects to a PCIe-to-Ethernet adapter → access point.)
     cat > /etc/netplan/00-installer-config.yaml << EOF
 network:
   version: 2
@@ -233,26 +235,13 @@ network:
   ethernets:
     $WAN_INTERFACE:
       dhcp4: true
+    $LAN_INTERFACE:
+      dhcp4: no
+      addresses:
+        - 192.168.10.1/24
 EOF
 
-    if [[ "$LAN_INTERFACE" == wl* ]]; then
-        cat >> /etc/netplan/00-installer-config.yaml << EOF
-  wifis:
-    $LAN_INTERFACE:
-      dhcp4: no
-      addresses:
-        - 192.168.10.1/24
-      ignore-carrier: true
-EOF
-    else
-        cat >> /etc/netplan/00-installer-config.yaml << EOF
-    $LAN_INTERFACE:
-      dhcp4: no
-      addresses:
-        - 192.168.10.1/24
-      ignore-carrier: true
-EOF
-    fi
+    log_info "WARNING: If you are connected via SSH on the LAN interface ($LAN_INTERFACE), you may lose connection during netplan apply."
 
     log_info "Applying netplan changes..."
     netplan generate > /dev/null 2>&1
@@ -303,6 +292,13 @@ stage_6_dns_dhcp() {
     endscript
 }
 EOF
+
+    log_info "Configuring logrotate for VIGILANT logs..."
+    if [ -f "$VIGILANT_HOME/src/config/vigilant-logrotate" ]; then
+        cp "$VIGILANT_HOME/src/config/vigilant-logrotate" /etc/logrotate.d/vigilant
+        chmod 644 /etc/logrotate.d/vigilant
+        log_success "VIGILANT logrotate configured"
+    fi
     log_success "DNS/DHCP configured"
 }
 
@@ -366,11 +362,24 @@ stage_8_certificates() {
     log_info "STAGE 8: MITMPROXY CERTIFICATES"
     log_info "═══════════════════════════════════════════"
     
-    sudo -u "$VIGILANT_USER" bash -c "
-        source $VIGILANT_HOME/venv/bin/activate
-        mitmdump --version > /dev/null 2>&1 || true
-    "
-    log_success "Certificates generated"
+    # Run mitmdump briefly in non-transparent mode to generate the CA certificate.
+    # mitmproxy creates ~/.mitmproxy/mitmproxy-ca-cert.pem on first start.
+    sudo -u "$VIGILANT_USER" bash << CMD
+source $VIGILANT_HOME/venv/bin/activate
+timeout 3 mitmdump --listen-port 8081 > /dev/null 2>&1 || true
+CMD
+    
+    # Verify cert was created
+    if [ -f "/home/$VIGILANT_USER/.mitmproxy/mitmproxy-ca-cert.pem" ]; then
+        log_success "mitmproxy CA certificate created"
+        
+        # Install into system trust store so local HTTPS works
+        cp "/home/$VIGILANT_USER/.mitmproxy/mitmproxy-ca-cert.pem" /usr/local/share/ca-certificates/mitmproxy.crt 2>/dev/null || true
+        update-ca-certificates --fresh > /dev/null 2>&1 || true
+        log_success "CA certificate installed in system trust store"
+    else
+        log_warn "Certificate not found — will be generated on first proxy start"
+    fi
 }
 
 # ─── Stage 9: Systemd Services ──────────────────────────────────────────────
@@ -470,136 +479,50 @@ stage_9_5_database_init() {
     log_info "STAGE 9.5: SQLITE DATABASE INITIALIZATION"
     log_info "═══════════════════════════════════════════"
     
-    cat << 'EOF' > "$VIGILANT_HOME/init_db.py"
+    log_info "Creating database directory..."
+    mkdir -p "$VIGILANT_HOME/logs"
+    
+    # Create a minimal database file with just the config_settings table seeded
+    # with the user's selected network interfaces. The app's own init_db() will
+    # create all other tables and insert remaining defaults on first run.
+    cat << 'PYEOF' > "$VIGILANT_HOME/init_db.py"
 #!/usr/bin/env python3
-import sqlite3
-import os
+"Minimal DB bootstrap — app.py init_db() handles full schema on first start."""
+import sqlite3, os, time
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'logs', 'vigilant.db')
+os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
-def init_database():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS config_settings (
-            key TEXT PRIMARY KEY,
-            value TEXT,
-            updated_at REAL
-        )
-    ''')
-    default_configs = {
-        'nlp_enabled': 'true',
-        'keywords': 'tiktok, instagram, facebook, scroll, short',
-        'network_velocity_preset': 'Medium',
-        'network_velocity_custom': '150',
-        'physical_scroll_preset': 'Medium',
-        'physical_scroll_custom': '75',
-        'sni_filtering_enabled': 'true',
-        'upstream_interface': 'eth0',
-        'distribution_interface': 'wlan0',
-        'theme_mode': 'dark',
-        'tfidf_classification_threshold': '0.05',
-        'tfidf_url_threshold': '0.3',
-        'tfidf_body_threshold': '0.15'
-    }
-    for key, value in default_configs.items():
-        cursor.execute('''
-            INSERT OR IGNORE INTO config_settings (key, value, updated_at)
-            VALUES (?, ?, ?)
-        ''', (key, value, 0))
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS keyword_blacklist (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            keyword TEXT NOT NULL UNIQUE,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    cursor.execute('SELECT COUNT(*) FROM keyword_blacklist')
-    if cursor.fetchone()[0] == 0:
-        default_keywords = ['tiktok', 'instagram', 'facebook']
-        for kw in default_keywords:
-            cursor.execute('INSERT OR IGNORE INTO keyword_blacklist (keyword) VALUES (?)', (kw,))
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS network_devices (
-            ip_address TEXT PRIMARY KEY,
-            mac_address TEXT,
-            hostname TEXT,
-            custom_name TEXT,
-            policy TEXT DEFAULT 'none',
-            first_seen REAL,
-            last_seen REAL,
-            updated_at REAL
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS traffic_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp REAL,
-            client_ip TEXT,
-            host TEXT,
-            path TEXT,
-            method TEXT,
-            category TEXT,
-            flagged INTEGER DEFAULT 0,
-            entities TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS throttle_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp REAL,
-            client_ip TEXT,
-            host TEXT,
-            rpm_current REAL,
-            rpm_baseline REAL,
-            action TEXT,
-            reason TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS sni_requests (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp REAL,
-            client_ip TEXT,
-            domain TEXT,
-            request_count INTEGER DEFAULT 1,
-            velocity_rps REAL
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS throttle_state (
-            client_ip TEXT PRIMARY KEY,
-            is_throttled INTEGER DEFAULT 0,
-            applied_at REAL,
-            recovery_at REAL,
-            cycle_count INTEGER DEFAULT 0
-        )
-    ''')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_traffic_timestamp ON traffic_log(timestamp DESC)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_throttle_timestamp ON throttle_events(timestamp DESC)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_sni_timestamp ON sni_requests(timestamp DESC)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_throttle_state_client ON throttle_state(client_ip)')
-    conn.commit()
-    conn.close()
-    print("Database initialized successfully at " + DB_PATH)
+conn = sqlite3.connect(DB_PATH)
+c = conn.cursor()
 
-if __name__ == '__main__':
-    init_database()
-EOF
+# Pre-seed network interface config so the dashboard shows correct values
+# on first load. The app inserts all other defaults in init_config_db().
+DEFAULTS = {
+    'upstream_interface': 'WAN_PLACEHOLDER',
+    'distribution_interface': 'LAN_PLACEHOLDER',
+}
+c.execute('''CREATE TABLE IF NOT EXISTS config_settings (
+    key TEXT PRIMARY KEY, value TEXT, updated_at REAL
+)''')
+for k, v in DEFAULTS.items():
+    c.execute('INSERT OR IGNORE INTO config_settings (key, value, updated_at) VALUES (?, ?, ?)',
+              (k, v, time.time()))
+conn.commit()
+conn.close()
+print("Database bootstrapped at " + DB_PATH)
+PYEOF
+
+    # Substitute the actual interface names into the placeholders
+    sed -i "s/WAN_PLACEHOLDER/$WAN_INTERFACE/g" "$VIGILANT_HOME/init_db.py"
+    sed -i "s/LAN_PLACEHOLDER/$LAN_INTERFACE/g" "$VIGILANT_HOME/init_db.py"
     
-    chmod +x "$VIGILANT_HOME/init_db.py"
-    
-    sudo -u "$VIGILANT_USER" bash -c "
-        source $VIGILANT_HOME/venv/bin/activate
-        python3 $VIGILANT_HOME/init_db.py
-    "
+    sudo -u "$VIGILANT_USER" "$VIGILANT_HOME/venv/bin/python3" "$VIGILANT_HOME/init_db.py"
     rm -f "$VIGILANT_HOME/init_db.py"
     
-    chown -R "$VIGILANT_USER:$VIGILANT_USER" "$VIGILANT_HOME/logs"
-    chmod -R 775 "$VIGILANT_HOME/logs"
-    
-    log_success "SQLite database initialized at $VIGILANT_HOME/logs/vigilant.db"
+    chown -R "$VIGILANT_USER:$VIGILANT_USER" "$VIGILANT_HOME/logs" 2>/dev/null || true
+    log_success "SQLite database bootstrapped at $VIGILANT_HOME/logs/vigilant.db"
+    log_info "Full schema + defaults will be applied by app.py on first dashboard start."
 }
 
 # ─── Stage 10: Verification ─────────────────────────────────────────────────
@@ -613,7 +536,12 @@ stage_10_verify() {
         "$VIGILANT_HOME/src/app.py"
         "$VIGILANT_HOME/src/vigilant_addon.py"
         "$VIGILANT_HOME/src/templates/dashboard.html"
+        "$VIGILANT_HOME/src/templates/login.html"
+        "$VIGILANT_HOME/src/templates/setup.html"
         "$VIGILANT_HOME/logs/vigilant.db"
+        "$VIGILANT_HOME/src/static/vendor/chartjs/chart.umd.min.js"
+        "$VIGILANT_HOME/src/static/vendor/fontawesome/all.min.css"
+        "$VIGILANT_HOME/src/static/vendor/fonts/inter.css"
         "/etc/systemd/system/vigilant-firewall.service"
         "/etc/systemd/system/vigilant-proxy.service"
         "/etc/systemd/system/vigilant-dashboard.service"
@@ -641,8 +569,10 @@ stage_11_start_services() {
     log_info "STAGE 11: STARTING SERVICES"
     log_info "═══════════════════════════════════════════"
 
-    log_info "Clearing lingering proxy/dashboard instances..."
-    killall mitmdump python3 2>/dev/null || true
+    log_info "Clearing lingering proxy instances..."
+    # Kill only the VIGILANT processes, NOT all python3 processes on the system
+    pkill -f "mitmdump.*vigilant_addon" 2>/dev/null || true
+    pkill -f "app.py.*vigilant" 2>/dev/null || true
     sleep 1
 
     log_info "Starting vigilant services..."
