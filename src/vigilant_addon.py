@@ -46,70 +46,51 @@ DEFAULT_PINNED_DOMAINS = "facebook.com,twitter.com,x.com,tiktok.com,instagram.co
 MIN_REQUESTS_BASELINE = 10
 MIN_SOCIAL_REQUESTS_BASELINE = 30  # Social requests needed before flagging (immune to app-load bursts)
 
-# --- Circuit Breaker Escalation System ----------------------------
-CB_LEVEL_NONE = 0
-CB_LEVEL_PAUSE = 1           # RPM spike or 10 min sustained: 128kbit throttle
-CB_LEVEL_FRICTION = 2        # 60s continuous at L1: 2kbit throttle
-CB_LEVEL_CIRCUIT_BREAK = 3   # 120s continuous: 1kbit hard throttle
+# --- Doomscroll Intensity Score System -------------------------------------
+# Continuous 0-100+ score that rises with rapid scrolling and decays during
+# inactivity. No state machines, no cooldowns, no pause timers. Just a fuel
+# gauge: scroll fast → score fills → throttle tightens. Stop → score drains.
 
-CB_LEVEL_NAMES = {
-    1: "Pause", 2: "Friction", 3: "Circuit Break"
+# Score increments per flagged social request (scaled by RPM ratio)
+SCORE_PER_FLAG = 1.5          # base points per flagged request
+SCORE_RPM_BOOST = 0.5         # extra points per RPM above baseline
+
+# Score decay when user is idle (no social requests)
+SCORE_DECAY_PER_CYCLE = 1.0   # points lost per decay cycle
+SCORE_DECAY_INTERVAL = 2.0    # seconds between decay checks
+SCORE_IDLE_THRESHOLD = 5.0    # seconds without social activity to start decaying
+
+# Score → throttle level thresholds
+SCORE_L1_THRESHOLD = 10   # 128kbit — mild slowdown, barely noticeable
+SCORE_L2_THRESHOLD = 25   # 32kbit  — videos struggle, text still loads
+SCORE_L3_THRESHOLD = 50   # 4kbit   — everything crawls, user gives up
+
+# Level → actual tc rate
+SCORE_LEVEL_RATE = {
+    0: None,          # no throttle
+    1: "128kbit",     # L1: Pause
+    2: "32kbit",      # L2: Friction
+    3: "4kbit",       # L3: Circuit Break
 }
 
-# Escalation time windows (seconds of continuous social media activity)
-CB_PAUSE_SECONDS = 30
-CB_FRICTION_SECONDS = 60
-CB_BREAK_SECONDS = 120
+CB_LEVEL_NONE = 0
+CB_LEVEL_PAUSE = 1
+CB_LEVEL_FRICTION = 2
+CB_LEVEL_CIRCUIT_BREAK = 3
 
-# Cooldown period after circuit break release (seconds)
-CB_COOLDOWN_SECONDS = 120
+CB_LEVEL_NAMES = {1: "Pause", 2: "Friction", 3: "Circuit Break"}
 
-# Sustained activity: seconds of any social media activity before the
-# slow-burn detector flags the device. RPM spikes trigger immediately.
-SUSTAINED_ACTIVITY_SECONDS = 600
-
-# Maximum total time a device can stay throttled before auto-release (seconds)
-# Safety net: if background traffic prevents the de-escalation pause from
-# triggering, the throttle eventually releases after this duration.
-CB_MAX_THROTTLE_DURATION = 600
+# ── Score state (in-memory only, lost on restart — intentional) ──
+_intensity_score = defaultdict(float)        # client_ip → 0-100+ score
+_intensity_last_active = defaultdict(float)   # client_ip → last social request time
+_intensity_current_level = defaultdict(int)   # client_ip → active throttle level 0-3
+_intensity_lock = threading.Lock()
+_previous_rate = {}  # client_ip → last applied rate string (avoids redundant tc)
 
 # Maximum payload body size before falling back to sampled scanning.
-MAX_PAYLOAD_SIZE = 5 * 1024 * 1024      # hard cap before we stop trying to fully decode
-SAMPLE_PREFIX_BYTES = 512 * 1024        # ~512KB from the start (headlines/titles/first posts)
-SAMPLE_SUFFIX_BYTES = 256 * 1024        # ~256KB from the end (catches trailing chunks)
-
-# Per-level de-escalation: how long the user must pause before the throttle releases.
-# Each level requires a longer pause, so lighter throttles are easier to shake off.
-# This replaces the old single-value CB_NO_PAUSE_SECONDS which never fired because
-# phones make background requests (iCloud, notifications) every 30-60 seconds.
-CB_DEESCALATION_SECONDS = {
-    CB_LEVEL_PAUSE: 60,          # L1 (128kbit): 60s pause → release
-    CB_LEVEL_FRICTION: 90,       # L2 (2kbit):  90s pause → release
-    CB_LEVEL_CIRCUIT_BREAK: 300  # L3 (1kbit): 300s (5 min) pause → release
-}
-
-
-def get_deescalation_seconds() -> dict:
-    """Load per-level de-escalation gaps from database.
-    Falls back to CB_DEESCALATION_SECONDS defaults."""
-    try:
-        conn = _connect_db()
-        cursor = conn.cursor()
-        result = dict(CB_DEESCALATION_SECONDS)
-        for level_key, cb_level in [('deescalation_l1', CB_LEVEL_PAUSE),
-                                      ('deescalation_l2', CB_LEVEL_FRICTION),
-                                      ('deescalation_l3', CB_LEVEL_CIRCUIT_BREAK)]:
-            cursor.execute("SELECT value FROM config_settings WHERE key = ?", (level_key,))
-            row = cursor.fetchone()
-            if row:
-                try:
-                    result[cb_level] = int(row[0])
-                except (ValueError, TypeError):
-                    pass
-        conn.close()
-        return result
-    except Exception:
-        return dict(CB_DEESCALATION_SECONDS)
+MAX_PAYLOAD_SIZE = 5 * 1024 * 1024
+SAMPLE_PREFIX_BYTES = 512 * 1024
+SAMPLE_SUFFIX_BYTES = 256 * 1024
 
 
 # Global asset whitelist
@@ -842,175 +823,127 @@ def _mark_client_throttled(client_ip):
         throttled_clients.add(client_ip)
         return True
 
-# Circuit breaker state per client
-# Structure: { client_ip: { "level": int, "first_seen": float, "escalation_times": {level: float}, "domain": str, "cooldown_until": float } }
-circuit_breaker_state = {}
-cb_state_lock = threading.Lock()
 
+def _intensity_decay_loop():
+    """Background thread: decay intensity scores when users are idle.
+    Runs every SCORE_DECAY_INTERVAL seconds. If a device hasn't made any
+    social requests in SCORE_IDLE_THRESHOLD seconds, its score drops.
+    When score crosses a threshold downward, the throttle is adjusted."""
+    while True:
+        time.sleep(SCORE_DECAY_INTERVAL)
+        try:
+            now = time.time()
+            with _intensity_lock:
+                for ip in list(_intensity_score.keys()):
+                    score = _intensity_score[ip]
+                    if score <= 0:
+                        continue
+                    idle = now - _intensity_last_active.get(ip, 0)
+                    if idle >= SCORE_IDLE_THRESHOLD:
+                        old_level = _intensity_current_level.get(ip, 0)
+                        _intensity_score[ip] = max(0, score - SCORE_DECAY_PER_CYCLE)
+                        new_level = _score_to_level(_intensity_score[ip])
+                        if new_level < old_level:
+                            _intensity_current_level[ip] = new_level
+                            if new_level == 0:
+                                print(f"[VIGILANT] DECAY: {ip} score {_intensity_score[ip]:.1f} → released")
+                                _previous_rate.pop(ip, None)
+                                remove_throttle_cycle(ip)
+                            else:
+                                rate = _score_to_rate(new_level)
+                                if rate and _previous_rate.get(ip) != rate:
+                                    apply_throttle(ip, rate=rate)
+                                    _previous_rate[ip] = rate
+                                    save_throttle_state(ip, is_throttled=True, recovery_at=0)
+                                    print(f"[VIGILANT] DECAY: {ip} score {_intensity_score[ip]:.1f} → L{new_level} @ {rate}")
+        except Exception as e:
+            print(f"[VIGILANT] Intensity decay error: {e}")
+            time.sleep(5)
+
+
+
+def _score_to_level(score: float) -> int:
+    """Map intensity score to circuit breaker level."""
+    if score >= SCORE_L3_THRESHOLD:
+        return CB_LEVEL_CIRCUIT_BREAK
+    if score >= SCORE_L2_THRESHOLD:
+        return CB_LEVEL_FRICTION
+    if score >= SCORE_L1_THRESHOLD:
+        return CB_LEVEL_PAUSE
+    return CB_LEVEL_NONE
+
+
+def _score_to_rate(level: int) -> str | None:
+    """Map circuit breaker level to tc rate string."""
+    return SCORE_LEVEL_RATE.get(level)
 
 
 def escalate_circuit_breaker(client_ip, domain, rpm_current=0, rpm_baseline=0):
-    """Escalate the circuit breaker level based on elapsed time.
-    
-    Args:
-        client_ip: Client IP address
-        domain: Social media domain being accessed
-        rpm_current: Current requests-per-minute (for logging)
-        rpm_baseline: Baseline session average RPM (for logging)
-    
-    Returns:
-        int: The new circuit breaker level
-    """
-    with cb_state_lock:
-        now = time.time()
-        if client_ip not in circuit_breaker_state:
-            circuit_breaker_state[client_ip] = {
-                "level": CB_LEVEL_NONE,
-                "first_seen": now,
-                "escalation_times": {},
-                "domain": domain,
-                "cooldown_until": 0
-            }
-        
-        state = circuit_breaker_state[client_ip]
-        
-        # Check cooldown — if active, block all escalation
-        if state.get("cooldown_until", 0) > now:
-            return CB_LEVEL_NONE
-        
-        # Cooldown just expired — reset first_seen so elapsed starts fresh.
-        # Without this, the old first_seen would make elapsed huge, causing
-        # immediate re-escalation on the very next request.
-        cooldown_was_active = state.get("cooldown_until", 0) > 0
-        if cooldown_was_active and state.get("cooldown_until", 0) <= now:
-            state["cooldown_until"] = 0
-            state["first_seen"] = now
-            state["level"] = CB_LEVEL_NONE
-            state["escalation_times"] = {}
-            print(f"[VIGILANT] CB cooldown expired for {client_ip}, fresh start")
-        
-        # Auto-release if throttled for too long
-        # Prevents the throttle from sticking forever when background traffic
-        # (iCloud, notifications) keeps the pause reset from triggering.
-        total_elapsed = now - state["first_seen"]
-        if total_elapsed >= CB_MAX_THROTTLE_DURATION and state["level"] != CB_LEVEL_NONE:
-            print(f"[VIGILANT] CB auto-release for {client_ip}: throttled for {total_elapsed:.0f}s, max reached")
-            # Set a cooldown so it doesn't immediately re-trigger on the next request
-            state["cooldown_until"] = now + CB_COOLDOWN_SECONDS
-            state["level"] = CB_LEVEL_NONE
-            remove_throttle_cycle(client_ip)
-            return CB_LEVEL_NONE
-        
-        # Cooldown expired OR no cooldown — reset level so escalation can re-trigger.
-        # Without this, once at Level 3, the circuit breaker can never escalate
-        # again because `new_level > state["level"]` would require a Level 4.
-        if state["level"] != CB_LEVEL_NONE:
-            state["level"] = CB_LEVEL_NONE
-            state["first_seen"] = now
-            state["escalation_times"] = {}
-            print(f"[VIGILANT] CB reset for {client_ip}: cooldown expired, fresh start")
-        
-        elapsed = now - state["first_seen"]
-        
-        # Determine level based on elapsed time — Level 0 (None) now removed.
-        # Once flagged, minimum level is PAUSE with immediate 128kbit throttle.
-        if elapsed >= CB_BREAK_SECONDS:
-            new_level = CB_LEVEL_CIRCUIT_BREAK
-        elif elapsed >= CB_FRICTION_SECONDS:
-            new_level = CB_LEVEL_FRICTION
-        else:
-            new_level = CB_LEVEL_PAUSE
-        
-        # Record escalation time if new level is higher
-        if new_level > state["level"]:
-            state["level"] = new_level
-            state["escalation_times"][new_level] = now
-            state["domain"] = domain
-            print(f"[VIGILANT] CIRCUIT BREAKER ESCALATED {client_ip} to Level {new_level} ({CB_LEVEL_NAMES[new_level]}) @ {domain}")
-        
-        return state["level"]
+    """Update intensity score based on flagged social request.
+    Score rises with RPM ratio — faster scrolling = faster escalation."""
+    with _intensity_lock:
+        _intensity_last_active[client_ip] = time.time()
+        boost = SCORE_PER_FLAG
+        if rpm_baseline > 0:
+            ratio = rpm_current / rpm_baseline
+            boost += SCORE_RPM_BOOST * max(0, ratio - 1.0)
+        _intensity_score[client_ip] += boost
+        new_level = _score_to_level(_intensity_score[client_ip])
+        old_level = _intensity_current_level.get(client_ip, 0)
+        if new_level != old_level:
+            _intensity_current_level[client_ip] = new_level
+            if new_level > old_level:
+                print(f"[VIGILANT] SCORE {client_ip}: {_intensity_score[client_ip]:.1f} → L{new_level} ({CB_LEVEL_NAMES[new_level]}) @ {domain}")
+        return new_level
+
 
 def apply_circuit_breaker_action(client_ip, domain, level, rpm_current=0, rpm_baseline=0):
-    """Apply the appropriate intervention based on circuit breaker level.
-    
-    Args:
-        client_ip: Client IP address
-        domain: Social media domain being accessed
-        level: Circuit breaker level (CB_LEVEL_*)
-        rpm_current: Current requests-per-minute (for throttle_events logging)
-        rpm_baseline: Baseline session average RPM (for throttle_events logging)
-    
-    Returns:
-        bool: True if action was applied
-    """
+    """Apply throttle if level changed and > 0. Skips if already at this rate."""
     if level == CB_LEVEL_NONE:
         return False
-    
-    if level == CB_LEVEL_PAUSE:
-        # Level 1: 128kbit — persists until escalation or pause reset
-        log_throttle(client_ip, domain, rpm_current, rpm_baseline, "CB_PAUSE", f"Circuit Breaker Level 1 - Forced Pause @ {domain}")
-        success = apply_throttle(client_ip, rate="128kbit")
-        if success:
-            # No recovery timer — throttle stays until user stops for 60s
-            # or circuit breaker escalates to a higher level.
-            save_throttle_state(client_ip, is_throttled=True, recovery_at=0)
-            print(f"[VIGILANT] CB PAUSE: {client_ip} @ 128kbit applied (persistent)")
-        return success
-    
-    elif level == CB_LEVEL_FRICTION:
-        # Level 2: 2kbit — tighter throttle, still persistent
-        log_throttle(client_ip, domain, rpm_current, rpm_baseline, "CB_FRICTION", f"Circuit Breaker Level 2 - Bandwidth Friction @ {domain}")
-        success = apply_throttle(client_ip, rate="2kbit")
-        if success:
-            save_throttle_state(client_ip, is_throttled=True, recovery_at=0)
-            print(f"[VIGILANT] CB FRICTION: {client_ip} @ 2kbit applied (persistent)")
-        return success
-    
-    elif level == CB_LEVEL_CIRCUIT_BREAK:
-        # Level 3: 1kbit — persists until user stops for 5 minutes.
-        # No timer — relies solely on the de-escalation pause check
-        # in should_throttle(). This forces the user to genuinely put
-        # their device down rather than just waiting out a countdown.
-        log_throttle(client_ip, domain, rpm_current, rpm_baseline, "CB_CIRCUIT_BREAK", f"Circuit Breaker Level 3 - Hard Circuit Break @ {domain}")
-        success = apply_throttle(client_ip, rate="1kbit")
-        if success:
-            save_throttle_state(client_ip, is_throttled=True, recovery_at=0)
-            print(f"[VIGILANT] CB CIRCUIT BREAK: {client_ip} @ 1kbit applied (persistent, needs 5 min pause)")
-        return success
-    
-    return False
+    rate = _score_to_rate(level)
+    if not rate:
+        return False
+    prev = _previous_rate.get(client_ip)
+    if prev == rate:
+        return True  # already at this rate, skip redundant tc call
+    success = apply_throttle(client_ip, rate=rate)
+    if success:
+        _previous_rate[client_ip] = rate
+        save_throttle_state(client_ip, is_throttled=True, recovery_at=0)
+        log_throttle(client_ip, domain, rpm_current, rpm_baseline,
+                     f"CB_{CB_LEVEL_NAMES[level].upper().replace(' ', '_')}",
+                     f"Score {_intensity_score.get(client_ip, 0):.0f} → L{level} @ {rate}")
+        print(f"[VIGILANT] THROTTLE {client_ip}: L{level} @ {rate} (score={_intensity_score.get(client_ip, 0):.1f})")
+    return success
+
 
 def release_circuit_breaker(client_ip):
-    """Manually release circuit breaker state for a client.
-    Sets a cooldown so the next social request doesn't immediately
-    re-trigger the throttle."""
+    """Manually release: reset score to 0, remove throttle."""
+    with _intensity_lock:
+        _intensity_score[client_ip] = 0
+        _intensity_current_level[client_ip] = 0
+    _previous_rate.pop(client_ip, None)
     remove_throttle_cycle(client_ip)
-    with cb_state_lock:
-        if client_ip in circuit_breaker_state:
-            circuit_breaker_state[client_ip]["cooldown_until"] = time.time() + CB_COOLDOWN_SECONDS
-            circuit_breaker_state[client_ip]["level"] = CB_LEVEL_NONE
-    print(f"[VIGILANT] Circuit breaker released for {client_ip} (cooldown {CB_COOLDOWN_SECONDS}s)")
+    print(f"[VIGILANT] Manual release: {client_ip} score reset to 0")
+
 
 def get_all_circuit_breaker_states():
-    """Get all active circuit breaker states for API query.
-    Only returns states with level > 0 (actively throttled).
-    Cooldown/released states (level=0) are filtered out."""
-    with cb_state_lock:
+    """Return all devices with active throttles for the dashboard API."""
+    with _intensity_lock:
         result = []
         now = time.time()
-        for ip, state in circuit_breaker_state.items():
-            if state["level"] == CB_LEVEL_NONE:
-                continue  # skip cooldown/released states
-            elapsed = now - state["first_seen"]
+        for ip, level in _intensity_current_level.items():
+            if level == CB_LEVEL_NONE:
+                continue
             result.append({
                 "client_ip": ip,
-                "level": state["level"],
-                "level_name": CB_LEVEL_NAMES.get(state["level"], "Unknown"),
-                "domain": state.get("domain", ""),
-                "elapsed_seconds": round(elapsed, 1),
-                "escalation_times": state.get("escalation_times", {}),
-                "cooldown_until": state.get("cooldown_until", 0),
-                "is_throttled": ip in throttled_clients
+                "level": level,
+                "level_name": CB_LEVEL_NAMES.get(level, "Unknown"),
+                "domain": "",
+                "elapsed_seconds": round(now - _intensity_last_active.get(ip, now), 1),
+                "score": round(_intensity_score.get(ip, 0), 1),
+                "is_throttled": True
             })
         return result
 
@@ -1119,61 +1052,10 @@ def should_throttle(client_ip, host, path=""):
     if is_youtube and not ("/shorts/" in path or "shorts" in path):
         return False, rpm_now, rpm_base
 
+    # Flag if RPM exceeds baseline * multiplier OR hard cap.
+    # The intensity score system handles escalation/de-escalation —
+    # should_throttle just answers "is this social request abnormal?"
     flagged = (rpm_now > (rpm_base * network_velocity_threshold)) or (rpm_now > physical_scroll_threshold)
-    
-    # Combined spacing check + sustained activity detector
-    # (single velocity_lock to avoid nesting issues)
-    with velocity_lock:
-        sdq = social_request_history[client_ip]
-        
-        # Sustained activity detector: if the user has been on social media for
-        # longer than SUSTAINED_ACTIVITY_SECONDS (10 min), flag them regardless of RPM.
-        if not flagged and social_count >= MIN_SOCIAL_REQUESTS_BASELINE:
-            social_elapsed = time.time() - social_session_start[client_ip]
-            if social_elapsed >= SUSTAINED_ACTIVITY_SECONDS:
-                flagged = True
-                print(f"[VIGILANT] Sustained social media for {client_ip}: {social_elapsed:.0f}s active, flagging")
-        
-        # Burst detection (only if already flagged)
-        if flagged and len(sdq) >= physical_scroll_threshold:
-            sdq_list_burst = list(sdq)
-            time_for_threshold_reqs = time.time() - sdq_list_burst[-physical_scroll_threshold]
-            if time_for_threshold_reqs < 10:
-                print(f"[VIGILANT] Burst detected for {client_ip}: "
-                      f"{physical_scroll_threshold} social requests in {time_for_threshold_reqs:.1f}s")
-        
-        # Spacing check: if avg gap between social requests < 30s, flag.
-        # Uses social-only deque so DNS/iCloud bursts don't create false positives.
-        social_elapsed = time.time() - social_session_start[client_ip]
-        if len(sdq) >= 10 and social_elapsed >= 90:
-            sdq_list = list(sdq)
-            time_gaps = []
-            for i in range(len(sdq_list) - 1):
-                gap = sdq_list[i + 1] - sdq_list[i]
-                time_gaps.append(gap)
-            if time_gaps:
-                avg_gap = sum(time_gaps) / len(time_gaps)
-                if avg_gap < 30:
-                    flagged = True
-                    print(f"[VIGILANT] Rapid spacing detect for {client_ip}: avg_gap={avg_gap:.1f}s (social-only)")
-                # Per-level de-escalation: check if the user paused long enough
-                # to recover from the current throttle level.
-                # L1 (128kbit): needs 60s pause → release
-                # L2 (2kbit):   needs 90s pause → release
-                # L3 (1kbit):   needs 300s (5 min) pause → release
-                max_gap = max(time_gaps) if time_gaps else 0
-                with cb_state_lock:
-                    current_level = circuit_breaker_state.get(client_ip, {}).get("level", CB_LEVEL_NONE)
-                deescalation_gap = get_deescalation_seconds().get(current_level, 120)
-                if max_gap > deescalation_gap:
-                    with cb_state_lock:
-                        if client_ip in circuit_breaker_state:
-                            circuit_breaker_state[client_ip]["cooldown_until"] = time.time() + CB_COOLDOWN_SECONDS
-                            circuit_breaker_state[client_ip]["level"] = CB_LEVEL_NONE
-                            print(f"[VIGILANT] CB RESET: {client_ip} paused {max_gap:.0f}s at L{current_level} (>{deescalation_gap}s) — releasing, {CB_COOLDOWN_SECONDS}s cooldown")
-                    remove_throttle_cycle(client_ip)
-                    flagged = False
-
     return flagged, rpm_now, rpm_base
 
 def normalize_text_simple(text: str) -> str:
@@ -1873,6 +1755,10 @@ class VIGILANTAddon:
         restore_thread.start()
         print("[VIGILANT] Throttle state restoration thread started")
 
+        intensity_thread = threading.Thread(target=_intensity_decay_loop, daemon=True)
+        intensity_thread.start()
+        print("[VIGILANT] Intensity score decay loop started (interval=%ss)" % SCORE_DECAY_INTERVAL)
+
     def _refresh_rule_cache(self):
         """Fetch blacklisted keywords and category hints from the database."""
         try:
@@ -2052,6 +1938,8 @@ class VIGILANTAddon:
 
             # 3. Extract Client IP
             client_ip = self._extract_client_ip_from_tls(data)
+            if not client_ip:
+                return
             config = load_proxy_config()
             # load_proxy_config returns sni_filtering_enabled as a bool already;
             # do NOT call .lower() on it (was causing an AttributeError that silently
@@ -2199,6 +2087,8 @@ class VIGILANTAddon:
     def request(self, flow: http.HTTPFlow):
         try:
             client_ip = flow.client_conn.peername[0]
+            if not client_ip:
+                return
             update_device_activity(client_ip)
         except (AttributeError, IndexError, TypeError) as e:
             print(f"[VIGILANT] Request: Failed to extract client IP from peername: {e}")
@@ -2302,6 +2192,8 @@ class VIGILANTAddon:
     def response(self, flow: http.HTTPFlow):
         try:
             client_ip = flow.client_conn.peername[0]
+            if not client_ip:
+                return
         except (AttributeError, IndexError, TypeError) as e:
             print(f"[VIGILANT] Response: Failed to extract client IP from peername: {e}")
             return
