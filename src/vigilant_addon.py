@@ -63,6 +63,11 @@ CB_BREAK_SECONDS = 120
 # Cooldown period after circuit break release (seconds)
 CB_COOLDOWN_SECONDS = 120
 
+# Maximum total time a device can stay throttled before auto-release (seconds)
+# Prevents throttles from sticking forever due to background traffic preventing
+# the 3-minute pause reset from triggering.
+CB_MAX_THROTTLE_DURATION = 300
+
 # Maximum payload body size before falling back to sampled scanning.
 MAX_PAYLOAD_SIZE = 5 * 1024 * 1024      # hard cap before we stop trying to fully decode
 SAMPLE_PREFIX_BYTES = 512 * 1024        # ~512KB from the start (headlines/titles/first posts)
@@ -785,6 +790,18 @@ def escalate_circuit_breaker(client_ip, domain, rpm_current=0, rpm_baseline=0):
         if state.get("cooldown_until", 0) > now:
             return CB_LEVEL_NONE
         
+        # Auto-release if throttled for too long
+        # Prevents the throttle from sticking forever when background traffic
+        # (iCloud, notifications) keeps the pause reset from triggering.
+        total_elapsed = now - state["first_seen"]
+        if total_elapsed >= CB_MAX_THROTTLE_DURATION and state["level"] != CB_LEVEL_NONE:
+            print(f"[VIGILANT] CB auto-release for {client_ip}: throttled for {total_elapsed:.0f}s, max reached")
+            # Set a cooldown so it doesn't immediately re-trigger on the next request
+            state["cooldown_until"] = now + CB_COOLDOWN_SECONDS
+            state["level"] = CB_LEVEL_NONE
+            remove_throttle_cycle(client_ip)
+            return CB_LEVEL_NONE
+        
         # Cooldown expired OR no cooldown — reset level so escalation can re-trigger.
         # Without this, once at Level 3, the circuit breaker can never escalate
         # again because `new_level > state["level"]` would require a Level 4.
@@ -792,8 +809,9 @@ def escalate_circuit_breaker(client_ip, domain, rpm_current=0, rpm_baseline=0):
             state["level"] = CB_LEVEL_NONE
             state["first_seen"] = now
             state["escalation_times"] = {}
+            print(f"[VIGILANT] CB reset for {client_ip}: cooldown expired, fresh start")
         
-        elapsed = 0
+        elapsed = now - state["first_seen"]
         
         # Determine level based on elapsed time
         if elapsed >= CB_BREAK_SECONDS:
