@@ -52,8 +52,8 @@ MIN_SOCIAL_REQUESTS_BASELINE = 30  # Social requests needed before flagging (imm
 # gauge: scroll fast → score fills → throttle tightens. Stop → score drains.
 
 # Score increments per flagged social request (scaled by RPM ratio)
-SCORE_PER_FLAG = 1.5          # base points per flagged request
-SCORE_RPM_BOOST = 0.5         # extra points per RPM above baseline
+SCORE_PER_FLAG = 0.8          # base points per flagged request
+SCORE_RPM_BOOST = 0.2         # extra points per RPM above baseline
 
 # Score decay when user is idle (no social requests)
 SCORE_DECAY_PER_CYCLE = 5.0    # points lost per decay cycle
@@ -1052,22 +1052,18 @@ def should_throttle(client_ip, host, path=""):
     if is_youtube and not ("/shorts/" in path or "shorts" in path):
         return False, rpm_now, rpm_base
 
-    # ── Detection: two independent triggers ──
-    # 1. RPM spike: current rate exceeds baseline × multiplier OR hard cap.
-    #    Catches initial app-load bursts and sudden scrolling frenzies.
-    # 2. Steady doomscroll: sustained 5+ social RPM for 90+ seconds.
-    #    Catches the slow, endless scrolling that RPM checks miss because
-    #    the initial burst inflated the baseline.
+    # ── Detection: steady doomscroll only ──
+    # RPM spike catches app-load bursts (30+ connections in 1s when opening
+    # Instagram) which isn't real doomscrolling. The steady detector requires
+    # 90s of sustained 5+ social RPM — this is actual human scrolling.
     with velocity_lock:
         sdq = social_request_history[client_ip]
         social_rpm = len(sdq)  # social requests in last 60s
         social_elapsed = time.time() - social_session_start[client_ip]
 
-    spike = (rpm_now > (rpm_base * network_velocity_threshold)) or (rpm_now > physical_scroll_threshold)
-    steady = social_elapsed >= 90 and social_rpm >= 5
-    flagged = spike or steady
+    flagged = social_elapsed >= 90 and social_rpm >= 5
 
-    if flagged and steady and not spike:
+    if flagged:
         print(f"[VIGILANT] Steady doomscroll: {client_ip} @ {social_rpm} social RPM for {social_elapsed:.0f}s")
 
     return flagged, rpm_now, rpm_base
