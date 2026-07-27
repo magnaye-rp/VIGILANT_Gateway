@@ -47,20 +47,18 @@ MIN_REQUESTS_BASELINE = 10
 
 # --- Circuit Breaker Escalation System ----------------------------
 CB_LEVEL_NONE = 0
-CB_LEVEL_NUDGE = 1           # 90s: Awareness - log only, notify frontend
-CB_LEVEL_PAUSE = 2           # 120s: 3-second bandwidth pause
-CB_LEVEL_FRICTION = 3        # 180s: Light throttle 256kbit + input delay
-CB_LEVEL_CIRCUIT_BREAK = 4   # 300s+: Hard throttle 32kbit for 2 min
+CB_LEVEL_PAUSE = 1           # 30s: Brief bandwidth pause
+CB_LEVEL_FRICTION = 2        # 60s: Light throttle 256kbit
+CB_LEVEL_CIRCUIT_BREAK = 3   # 120s+: Hard throttle 32kbit
 
 CB_LEVEL_NAMES = {
-    0: "None", 1: "Nudge", 2: "Pause", 3: "Friction", 4: "Circuit Break"
+    0: "None", 1: "Pause", 2: "Friction", 3: "Circuit Break"
 }
 
 # Escalation time windows (seconds of continuous social media activity)
-CB_NUDGE_SECONDS = 90
-CB_PAUSE_SECONDS = 120
-CB_FRICTION_SECONDS = 180
-CB_BREAK_SECONDS = 300
+CB_PAUSE_SECONDS = 30
+CB_FRICTION_SECONDS = 60
+CB_BREAK_SECONDS = 120
 
 # Cooldown period after circuit break release (seconds)
 CB_COOLDOWN_SECONDS = 120
@@ -72,7 +70,7 @@ SAMPLE_SUFFIX_BYTES = 256 * 1024        # ~256KB from the end (catches trailing 
 
 # No reading pause threshold: if a single inter-request gap exceeds this,
 # the user is assumed to be reading/pausing, not doomscrolling.
-CB_NO_PAUSE_SECONDS = 6
+CB_NO_PAUSE_SECONDS = 60
 
 # Global asset whitelist
 GLOBAL_WHITELIST = {
@@ -796,8 +794,6 @@ def escalate_circuit_breaker(client_ip, domain, rpm_current=0, rpm_baseline=0):
             new_level = CB_LEVEL_FRICTION
         elif elapsed >= CB_PAUSE_SECONDS:
             new_level = CB_LEVEL_PAUSE
-        elif elapsed >= CB_NUDGE_SECONDS:
-            new_level = CB_LEVEL_NUDGE
         else:
             new_level = CB_LEVEL_NONE
         
@@ -826,15 +822,9 @@ def apply_circuit_breaker_action(client_ip, domain, level, rpm_current=0, rpm_ba
     if level == CB_LEVEL_NONE:
         return False
     
-    if level == CB_LEVEL_NUDGE:
-        # Level 1: Log only - awareness intervention (no throttle)
-        log_throttle(client_ip, domain, rpm_current, rpm_baseline, "CB_NUDGE", f"Circuit Breaker Level 1 - Awareness @ {domain}")
-        print(f"[VIGILANT] CB NUDGE: {client_ip} has been scrolling {domain} for {CB_NUDGE_SECONDS}s")
-        return True
-    
-    elif level == CB_LEVEL_PAUSE:
-        # Level 2: 3-second forced pause via 10s throttle burst
-        log_throttle(client_ip, domain, rpm_current, rpm_baseline, "CB_PAUSE", f"Circuit Breaker Level 2 - Forced Pause @ {domain}")
+    if level == CB_LEVEL_PAUSE:
+        # Level 1: Brief bandwidth pause
+        log_throttle(client_ip, domain, rpm_current, rpm_baseline, "CB_PAUSE", f"Circuit Breaker Level 1 - Forced Pause @ {domain}")
         # Apply a brief 128kbit throttle for 10 seconds as a "pause" intervention
         success = apply_throttle(client_ip, rate="128kbit")
         if success:
@@ -848,22 +838,22 @@ def apply_circuit_breaker_action(client_ip, domain, level, rpm_current=0, rpm_ba
         return success
     
     elif level == CB_LEVEL_FRICTION:
-        # Level 3: Light throttle 256kbit for 60 seconds
-        log_throttle(client_ip, domain, rpm_current, rpm_baseline, "CB_FRICTION", f"Circuit Breaker Level 3 - Bandwidth Friction @ {domain}")
+        # Level 2: Moderate throttle 256kbit for 30 seconds
+        log_throttle(client_ip, domain, rpm_current, rpm_baseline, "CB_FRICTION", f"Circuit Breaker Level 2 - Bandwidth Friction @ {domain}")
         success = apply_throttle(client_ip, rate="256kbit")
         if success:
-            save_throttle_state(client_ip, is_throttled=True, recovery_at=time.time() + 60)
-            recovery_timer = threading.Timer(60, remove_throttle_cycle, args=[client_ip])
+            save_throttle_state(client_ip, is_throttled=True, recovery_at=time.time() + 30)
+            recovery_timer = threading.Timer(30, remove_throttle_cycle, args=[client_ip])
             with throttle_timers_lock:
                 _cancel_timer(client_ip)
                 throttle_timers[client_ip] = recovery_timer
             recovery_timer.start()
-            print(f"[VIGILANT] CB FRICTION: {client_ip} - 60s @ 256kbit applied")
+            print(f"[VIGILANT] CB FRICTION: {client_ip} - 30s @ 256kbit applied")
         return success
     
     elif level == CB_LEVEL_CIRCUIT_BREAK:
-        # Level 4: Full hard throttle 32kbit for 2 minutes with cooldown
-        log_throttle(client_ip, domain, rpm_current, rpm_baseline, "CB_CIRCUIT_BREAK", f"Circuit Breaker Level 4 - Hard Circuit Break @ {domain}")
+        # Level 3: Full hard throttle 32kbit for 2 minutes with cooldown
+        log_throttle(client_ip, domain, rpm_current, rpm_baseline, "CB_CIRCUIT_BREAK", f"Circuit Breaker Level 3 - Hard Circuit Break @ {domain}")
         success = apply_throttle(client_ip, rate="32kbit")
         if success:
             recovery_duration = 120  # 2 minutes
@@ -1538,7 +1528,7 @@ def tail_dnsmasq_log():
                                         if level >= CB_LEVEL_PAUSE:
                                             _mark_client_throttled(client_ip)
                                         apply_circuit_breaker_action(client_ip, domain, level, rpm_now, rpm_base)
-                                        if level >= CB_LEVEL_NUDGE:
+                                        if level >= CB_LEVEL_PAUSE:
                                             print(f"[VIGILANT] DNS CB Level {level} ({CB_LEVEL_NAMES[level]}) {client_ip} @ {domain} "
                                                   f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
 
@@ -1882,7 +1872,7 @@ class VIGILANTAddon:
                     if level >= CB_LEVEL_PAUSE:
                         _mark_client_throttled(client_ip)
                     apply_circuit_breaker_action(client_ip, server_name, level, rpm_now, rpm_base)
-                    if level >= CB_LEVEL_NUDGE:
+                    if level >= CB_LEVEL_PAUSE:
                         print(f"[VIGILANT] TLS CB Level {level} ({CB_LEVEL_NAMES[level]}) {client_ip} @ {server_name} "
                               f"RPM={rpm_now:.1f} baseline={rpm_base:.1f} RPS={velocity_rps:.2f}")
 
@@ -2059,7 +2049,7 @@ class VIGILANTAddon:
             if level >= CB_LEVEL_PAUSE:
                 _mark_client_throttled(client_ip)
             apply_circuit_breaker_action(client_ip, host, level, rpm_now, rpm_base)
-            if level >= CB_LEVEL_NUDGE:
+            if level >= CB_LEVEL_PAUSE:
                 print(f"[VIGILANT] HTTP CB Level {level} ({CB_LEVEL_NAMES[level]}) {client_ip} @ {host} "
                       f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
 
