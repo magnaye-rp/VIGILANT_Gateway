@@ -2276,18 +2276,18 @@ function startDashboardPolling() {
     if (document.hidden) {
       if (dashboardPollInterval) {
         clearInterval(dashboardPollInterval);
-        dashboardPollInterval = setInterval(fetchSummary, 10000);
+        dashboardPollInterval = setInterval(fetchSummary, 60000);
       }
     } else {
       if (dashboardPollInterval) {
         clearInterval(dashboardPollInterval);
-        dashboardPollInterval = setInterval(fetchSummary, 3000);
+        dashboardPollInterval = setInterval(fetchSummary, 15000);
       }
       fetchSummary(); // Immediate refresh when tab becomes visible
     }
   });
 
-  dashboardPollInterval = setInterval(fetchSummary, 3000);
+  dashboardPollInterval = setInterval(fetchSummary, 15000);
 }
 
 // ─── Circuit Breaker Status ───
@@ -2328,9 +2328,10 @@ async function loadCircuitBreakerState() {
     
     subtitle.textContent = `${cbData.length} device(s) under intervention`;
     
-    // Build intervention list
+    // Build intervention list — show intensity score and level
     const levelColors = {0: '#666', 1: '#1A938A', 2: '#ffa500', 3: '#ff3860'};
     const levelIcons = {0: 'fa-circle', 1: 'fa-pause-circle', 2: 'fa-gauge-high', 3: 'fa-bolt'};
+    const levelRates = {1: '128kbit', 2: '32kbit', 3: '4kbit'};
     
     interventions.innerHTML = cbData.map(s => `
       <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 1rem; background: var(--surface); border-radius: 8px; margin-bottom: 0.5rem; border-left: 4px solid ${levelColors[s.level] || '#1A938A'};">
@@ -2338,7 +2339,7 @@ async function loadCircuitBreakerState() {
           <i class="fa-solid ${levelIcons[s.level] || 'fa-circle-info'}" style="color: ${levelColors[s.level] || '#1A938A'}; font-size: 1.2rem;"></i>
           <div>
             <div style="font-weight: 600; font-size: 0.95rem;">${s.client_ip}</div>
-            <div style="font-size: 0.8rem; color: var(--text-secondary);">${s.domain} \u2022 ${Math.floor(s.elapsed_seconds)}s elapsed</div>
+            <div style="font-size: 0.8rem; color: var(--text-secondary);">Score: ${s.score || 0} • ${levelRates[s.level] || '?'} • idle ${Math.floor(s.elapsed_seconds || 0)}s</div>
           </div>
         </div>
         <div style="display: flex; align-items: center; gap: 0.75rem;">
