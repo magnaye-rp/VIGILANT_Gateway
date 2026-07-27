@@ -2055,7 +2055,9 @@ class VIGILANTAddon:
             print(f"[VIGILANT] TLS ClientHello error: {e}")
 
     def tls_failed_client(self, data: tls.TlsData):
-        """Automatically catch TLS pinning rejections and register for dynamic passthrough."""
+        """Automatically catch TLS pinning rejections and register for persistent pass-through.
+        Saves the domain to both mitmproxy's runtime ignore_hosts AND the database
+        custom_bypass_domains so it survives proxy restarts."""
         server_name = getattr(data.conn, "sni", None)
 
         if server_name and server_name not in self.pinned_hosts:
@@ -2071,6 +2073,43 @@ class VIGILANTAddon:
                 current_ignores.append(pattern)
                 ctx.options.ignore_hosts = current_ignores
                 print(f"[VIGILANT] Added {server_name} to mitmproxy ignore_hosts rule.")
+
+            # Persist to database so it survives proxy restarts
+            self._persist_bypass_domain(server_name)
+
+
+    def _persist_bypass_domain(self, domain):
+        """Add a domain to the custom_bypass_domains config in the database."""
+        try:
+            with db_lock:
+                conn = _connect_db()
+                # Extract the base domain (e.g. "graph.facebook.com" -> "facebook.com")  
+                clean = domain.removeprefix("www.").lower()
+                # Read current bypass list
+                cursor = conn.execute("SELECT value FROM config_settings WHERE key = 'custom_bypass_domains'")
+                row = cursor.fetchone()
+                existing = set()
+                if row and row[0]:
+                    existing = set(d.strip() for d in row[0].split(",") if d.strip())
+                
+                # Add the exact domain and its base domain
+                added = False
+                for d in [clean]:
+                    if d and d not in existing:
+                        existing.add(d)
+                        added = True
+                
+                if added:
+                    new_value = ",".join(sorted(existing))
+                    conn.execute(
+                        "INSERT OR REPLACE INTO config_settings (key, value, updated_at) VALUES (?, ?, ?)",
+                        ("custom_bypass_domains", new_value, time.time())
+                    )
+                    conn.commit()
+                    print(f"[VIGILANT] Persisted {clean} to custom_bypass_domains (total: {len(existing)} domains)")
+                conn.close()
+        except Exception as e:
+            print(f"[VIGILANT] Failed to persist bypass domain {domain}: {e}")
 
 
     def log_to_dashboard(self, client_ip: str, sni: str):

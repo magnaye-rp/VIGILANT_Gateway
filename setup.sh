@@ -501,6 +501,7 @@ c = conn.cursor()
 DEFAULTS = {
     'upstream_interface': 'WAN_PLACEHOLDER',
     'distribution_interface': 'LAN_PLACEHOLDER',
+    'custom_bypass_domains': 'fbcdn.net,i.instagram.com,api.instagram.com,graph.instagram.com,b.i.instagram.com,graph.facebook.com,b-graph.facebook.com,rupload.facebook.com,tiktokcdn.com,tiktokv.com,api.tiktokv.com,api.tiktok.com,googlevideo.com,ytimg.com,x.com,twitter.com',
 }
 c.execute('''CREATE TABLE IF NOT EXISTS config_settings (
     key TEXT PRIMARY KEY, value TEXT, updated_at REAL
