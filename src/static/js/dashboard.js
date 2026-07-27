@@ -1620,44 +1620,87 @@ function toggleThemeMode(isDark) {
 let sniScrollChart = null;
 let sniDomainChart = null;
 
+// ─── SNI Monitoring ───
+
+let currentSniPage = 1;
+const SNI_PAGE_SIZE = 20;
+
 async function loadSNIDashboard() {
   const timeWindowSelect = document.getElementById('sni-time-window');
   const clientFilterSelect = document.getElementById('sni-client-filter');
-  if (!timeWindowSelect || !clientFilterSelect) {
-    return;
-  }
+  if (!timeWindowSelect || !clientFilterSelect) return;
 
+  const timeWindow = timeWindowSelect.value;
+  const clientIP = clientFilterSelect.value;
+  
   try {
-    const timeWindow = timeWindowSelect.value;
-    const clientIP = clientFilterSelect.value;
-    
-    // Load scroll rates
+    // Load scroll rates for charts
     const scrollResponse = await fetch(`/api/sni/scroll-rates?time_window=${timeWindow}&client_ip=${clientIP}`);
     const scrollData = await parseJsonResponse(scrollResponse) || {};
+    updateSNICharts(scrollResponse.ok && scrollData.status === 'success' ? scrollData.scroll_rates : []);
     
-    if (scrollResponse.ok && scrollData.status === 'success') {
-      updateSNICharts(scrollData.scroll_rates);
-    } else {
-      updateSNICharts([]);
-    }
+    // Load the first page of SNI logs
+    currentSniPage = 1;
+    await loadSNILogPage(1);
     
-    // Load SNI logs
-    const logsResponse = await fetch(`/api/sni/requests?limit=20&client_ip=${clientIP}`);
-    const logsData = await parseJsonResponse(logsResponse) || {};
-    
-    if (logsResponse.ok && logsData.status === 'success') {
-      updateSNILogTable(logsData.logs);
-    } else {
-      updateSNILogTable([]);
-    }
-    
-    // Load client filter options
+    // Load client filter dropdown
     await loadSNIClientFilter();
-    
   } catch (error) {
     console.error('Error loading SNI dashboard:', error);
-    showToast('Error loading SNI dashboard', 'danger');
   }
+}
+
+async function loadSNILogPage(page) {
+  const clientFilterSelect = document.getElementById('sni-client-filter');
+  const searchInput = document.getElementById('sni-log-search');
+  if (!clientFilterSelect) return;
+
+  const clientIP = clientFilterSelect.value || '';
+  const domain = searchInput ? searchInput.value.trim() : '';
+  const offset = (page - 1) * SNI_PAGE_SIZE;
+
+  try {
+    let url = `/api/sni/requests?limit=${SNI_PAGE_SIZE}&offset=${offset}&client_ip=${encodeURIComponent(clientIP)}`;
+    if (domain) url += `&domain=${encodeURIComponent(domain)}`;
+
+    const response = await fetch(url);
+    const data = await parseJsonResponse(response) || {};
+
+    if (response.ok && data.status === 'success') {
+      currentSniPage = page;
+      updateSNILogTable(data.logs || []);
+      updateSNIPagination(data.pagination || {});
+    } else {
+      updateSNILogTable([]);
+      updateSNIPagination({});
+    }
+  } catch (error) {
+    console.error('Error loading SNI log page:', error);
+    updateSNILogTable([]);
+  }
+}
+
+function updateSNIPagination(pagination) {
+  const container = document.getElementById('sni-pagination');
+  const pageInfo = document.getElementById('sni-page-info');
+  const pageNums = document.getElementById('sni-page-nums');
+  const prevBtn = document.getElementById('sni-prev-page');
+  const nextBtn = document.getElementById('sni-next-page');
+
+  if (!container || !pagination.total_count === undefined) { container.style.display = 'none'; return; }
+
+  const total = pagination.total_count || 0;
+  const limit = pagination.limit || SNI_PAGE_SIZE;
+  const offset = pagination.offset || 0;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+
+  if (total === 0) { container.style.display = 'none'; return; }
+
+  container.style.display = 'flex';
+  if (pageInfo) pageInfo.textContent = `${offset + 1}-${Math.min(offset + limit, total)} of ${total}`;
+  if (pageNums) pageNums.textContent = `Page ${currentSniPage} of ${totalPages}`;
+  if (prevBtn) prevBtn.disabled = currentSniPage <= 1;
+  if (nextBtn) nextBtn.disabled = currentSniPage >= totalPages;
 }
 
 function renderSNIChartFallback(canvasId, items, labelFormatter) {

@@ -2223,7 +2223,10 @@ def get_sni_scroll_rates():
             '1m': 60,
             '5m': 300,
             '15m': 900,
-            '1h': 3600
+            '1h': 3600,
+            '3h': 10800,
+            '5h': 18000,
+            '12h': 43200
         }.get(time_window, 300)
 
         start_time = time.time() - window_seconds

@@ -1,79 +1,103 @@
-<!-- SNI Monitoring Tab -->
+      <!-- SNI Monitoring Tab -->
       <div id="tab-sni-monitoring" class="tab-content">
-        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">SNI Monitoring &amp; Encrypted App Telemetry</h2>
+        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">
+          SNI Monitoring <span style="font-size: 0.9rem; color: var(--text-secondary); font-weight: 400;">— Encrypted app telemetry via TLS handshake analysis</span>
+        </h2>
 
+        <!-- Dashboard Row -->
         <div class="card" style="margin-bottom: 2rem;">
           <div class="card-header">
             <div>
-              <div class="card-title">SNI Request Dashboard</div>
+              <div class="card-title"><i class="fa-solid fa-chart-line" style="margin-right: 0.5rem;"></i> SNI Request Dashboard</div>
               <div class="card-subtitle">Monitor encrypted app traffic patterns via Server Name Indication</div>
             </div>
             <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
-              <select id="sni-time-window" style="width: auto; padding: 0.5rem 0.75rem; font-size: 0.85rem;">
+              <select id="sni-time-window" style="width: auto; padding: 0.4rem 0.7rem; font-size: 0.85rem; border-radius: 6px; background: var(--surface); color: var(--text); border: 1px solid rgba(255,255,255,0.1);">
                 <option value="1m">Last 1 minute</option>
                 <option value="5m" selected>Last 5 minutes</option>
                 <option value="15m">Last 15 minutes</option>
                 <option value="1h">Last 1 hour</option>
+                <option value="3h">Last 3 hours</option>
+                <option value="5h">Last 5 hours</option>
+                <option value="12h">Last 12 hours</option>
               </select>
-              <select id="sni-client-filter" style="width: auto; padding: 0.5rem 0.75rem; font-size: 0.85rem;">
+              <select id="sni-client-filter" style="width: auto; padding: 0.4rem 0.7rem; font-size: 0.85rem; border-radius: 6px; background: var(--surface); color: var(--text); border: 1px solid rgba(255,255,255,0.1);">
                 <option value="">All Clients</option>
               </select>
-              <button class="btn-secondary" onclick="exportSNI()" style="padding: 0.5rem 1rem; font-size: 0.85rem;">
-                <i class="fa-solid fa-file-csv"></i> Export CSV
+              <button class="btn-secondary" onclick="exportSNI()" style="padding: 0.4rem 0.9rem; font-size: 0.85rem;">
+                <i class="fa-solid fa-file-csv"></i> Export
               </button>
-              <button class="btn-primary" onclick="refreshSNI()" style="padding: 0.5rem 1rem; font-size: 0.85rem;">
+              <button class="btn-primary" onclick="refreshSNI()" style="padding: 0.4rem 0.9rem; font-size: 0.85rem;">
                 <i class="fa-solid fa-arrows-rotate"></i> Refresh
               </button>
             </div>
-                </div>
+          </div>
 
           <!-- Charts Row -->
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem;">
             <div>
-              <h6 style="font-size: 0.95rem; font-weight: 600; margin-bottom: 0.75rem; color: var(--text);">Avg Scroll Rate by Domain (RPS)</h6>
-              <div style="background: var(--surface-lighter); border-radius: 8px; padding: 1rem; min-height: 300px; position: relative; overflow: hidden;">
+              <h6 style="font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--text);">Avg Scroll Rate by Domain (RPS)</h6>
+              <div style="background: var(--surface); border-radius: 8px; padding: 0.75rem; min-height: 260px; position: relative; overflow: hidden;">
                 <canvas id="sni-scroll-chart"></canvas>
               </div>
             </div>
             <div>
-              <h6 style="font-size: 0.95rem; font-weight: 600; margin-bottom: 0.75rem; color: var(--text);">Top Domains by Request Count</h6>
-              <div style="background: var(--surface-lighter); border-radius: 8px; padding: 1rem; min-height: 300px; position: relative; overflow: hidden;">
+              <h6 style="font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--text);">Top Domains by Request Count</h6>
+              <div style="background: var(--surface); border-radius: 8px; padding: 0.75rem; min-height: 260px; position: relative; overflow: hidden;">
                 <canvas id="sni-domain-chart"></canvas>
               </div>
             </div>
           </div>
+        </div>
 
-          <!-- SNI Log Table -->
-          <div>
-            <h6 style="font-size: 0.95rem; font-weight: 600; margin-bottom: 0.75rem; color: var(--text);">SNI Request Log</h6>
-            <div style="overflow-x: auto;">
-              <table class="traffic-table">
-                <thead>
-                  <tr>
-                    <th>Time</th>
-                    <th>Client IP</th>
-                    <th>Domain</th>
-                    <th>Velocity (RPS)</th>
-                  </tr>
-                </thead>
-                <tbody id="sni-log-table">
-                  <tr>
-                    <td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">
-                      <span class="spinner"></span> Loading SNI requests...
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+        <!-- SNI Log Table with Pagination -->
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title"><i class="fa-solid fa-list" style="margin-right: 0.5rem;"></i> SNI Request Log</div>
+              <div class="card-subtitle">Raw TLS handshake records from encrypted apps</div>
+            </div>
+            <div style="display: flex; gap: 0.75rem; align-items: center;">
+              <input type="text" id="sni-log-search" placeholder="Search domain..." style="padding: 0.4rem 0.7rem; font-size: 0.85rem; border-radius: 6px; background: var(--surface); color: var(--text); border: 1px solid rgba(255,255,255,0.1); width: 180px;" onkeydown="if(event.key==='Enter') loadSNILogPage(1)">
             </div>
           </div>
-
-          <!-- Empty state for no SNI data (hidden by default) -->
+          <div style="overflow-x: auto;">
+            <table class="traffic-table">
+              <thead>
+                <tr>
+                  <th>Time (PHT)</th>
+                  <th>Client IP</th>
+                  <th>Domain</th>
+                  <th>Velocity (RPS)</th>
+                </tr>
+              </thead>
+              <tbody id="sni-log-table">
+                <tr>
+                  <td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">
+                    <span class="spinner"></span> Loading SNI requests...
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <!-- Pagination Controls -->
+          <div id="sni-pagination" style="display: none; justify-content: space-between; align-items: center; padding: 0.75rem 0; margin-top: 0.5rem; border-top: 1px solid rgba(255,255,255,0.08);">
+            <div style="font-size: 0.85rem; color: var(--text-secondary);">
+              Showing <span id="sni-page-info">0-0 of 0</span>
+            </div>
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
+              <button class="btn-secondary" id="sni-prev-page" onclick="loadSNILogPage(currentSniPage - 1)" style="padding: 0.35rem 0.8rem; font-size: 0.85rem;" disabled>&larr; Prev</button>
+              <span id="sni-page-nums" style="font-size: 0.85rem; color: var(--text-secondary);">Page 1</span>
+              <button class="btn-secondary" id="sni-next-page" onclick="loadSNILogPage(currentSniPage + 1)" style="padding: 0.35rem 0.8rem; font-size: 0.85rem;" disabled>Next &rarr;</button>
+            </div>
+          </div>
+          <!-- Empty state -->
           <div id="sni-empty-state" class="hidden" style="text-align: center; padding: 3rem 1.5rem; color: var(--text-secondary);">
-            <div class="empty-state-icon" style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.5;">
+            <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.5;">
               <i class="fa-solid fa-chart-line"></i>
             </div>
             <p style="font-weight: 600; margin-bottom: 0.5rem;">No SNI Records Found</p>
-            <p style="font-size: 0.85rem;">Encrypted app monitoring data will appear here once SNI traffic is detected through the gateway.</p>
+            <p style="font-size: 0.85rem;">Encrypted app monitoring data will appear here once SNI traffic is detected.</p>
           </div>
         </div>
-</div>
+      </div>
