@@ -886,7 +886,7 @@ def escalate_circuit_breaker(client_ip, domain, rpm_current=0, rpm_baseline=0):
         boost = SCORE_PER_FLAG
         if rpm_baseline > 0:
             ratio = rpm_current / rpm_baseline
-            boost += SCORE_RPM_BOOST * max(0, ratio - 1.0)
+            boost += SCORE_RPM_BOOST * min(max(0, ratio - 1.0), 5.0)  # cap boost at 5x
         _intensity_score[client_ip] += boost
         new_level = _score_to_level(_intensity_score[client_ip])
         old_level = _intensity_current_level.get(client_ip, 0)
@@ -1789,11 +1789,6 @@ class VIGILANTAddon:
                 for category, domain in cursor.fetchall():
                     hints.setdefault(category, set()).add(domain)
                     
-            cursor = conn.execute(
-                "SELECT client_ip FROM throttle_state WHERE is_throttled = 1"
-            )
-            currently_throttled_ips = [row[0] for row in cursor.fetchall()]
-            
             # Load exempt devices
             try:
                 cursor = conn.execute(
@@ -1807,21 +1802,7 @@ class VIGILANTAddon:
             with self._cache_lock:
                 self.cached_keywords = keywords
                 self.cached_hints = hints
-                
-                # Sync throttled_clients set
-                current_set = set(currently_throttled_ips)
-                
-                # If an IP was released in DB but is still in our set, unthrottle it
-                with throttled_clients_lock:
-                    for ip in list(throttled_clients):
-                        if ip not in current_set:
-                            print(f"[VIGILANT] Sync: {ip} was released externally, removing from throttle set.")
-                            throttled_clients.discard(ip)
-                            # We don't call remove_throttle_cycle because app.py already removed the TC rule.
-                            
-                            # Cleanup timer if it exists
-                            with throttle_timers_lock:
-                                _cancel_timer(ip)
+                self.cached_exempt_devices = exempt_ips
 
                 self._last_cache_refresh = time.time()
                 self.cached_exempt_devices = exempt_ips
