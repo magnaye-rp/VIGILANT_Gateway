@@ -2330,8 +2330,6 @@ async function loadCircuitBreakerState() {
       </div>
     `).join('');
     
-    // Hide the empty state if it exists
-    const empty = document.getElementById('cb-empty');
     if (empty) empty.style.display = 'none';
   } catch (error) {
     console.error('Error loading circuit breaker state:', error);
