@@ -2011,19 +2011,18 @@ class VIGILANTAddon:
             if not server_name:
                 return
 
-            # 2. Extract Client IP (robust fallback for transparent proxy REDIRECT)
+            # 2. Bypass check — run FIRST, before any IP extraction or logging.
+            # This ensures domains in the bypass list skip ALL processing.
+            if is_custom_bypass(server_name):
+                data.ignore_connection = True
+                return
+
+            # 3. Extract Client IP (robust fallback for transparent proxy REDIRECT)
             client_ip = self._extract_client_ip_from_tls(data)
             if not client_ip:
                 return
 
             update_device_activity(client_ip)
-
-            # 3. Bypass check for user-configured domains — skip all processing
-            # if this host is in the bypass list. Do this BEFORE any logging,
-            # velocity tracking, or throttling.
-            if is_custom_bypass(server_name):
-                data.ignore_connection = True
-                return
 
             # 4. SNI Filtering & Behavioral Checks (do this BEFORE bypassing pinned apps)
             config = load_proxy_config()
