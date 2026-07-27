@@ -201,16 +201,28 @@ stage_4_copy_files() {
     find "$VIGILANT_HOME" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
     
     CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    if [ "$CURRENT_DIR" != "$VIGILANT_HOME" ]; then
-        log_info "Syncing files from $CURRENT_DIR to $VIGILANT_HOME..."
-        cp -a "$CURRENT_DIR/." "$VIGILANT_HOME/"
+    
+    # Always sync the src/ directory from the repo to the runtime location.
+    # The static/templates can be copied as whole directories.
+    if [ -d "$CURRENT_DIR/src" ]; then
+        log_info "Syncing src/ from $CURRENT_DIR to $VIGILANT_HOME..."
+        rsync -a --delete "$CURRENT_DIR/src/" "$VIGILANT_HOME/src/" 2>/dev/null || \
+            cp -a "$CURRENT_DIR/src/." "$VIGILANT_HOME/src/" 2>/dev/null || true
     fi
+    
+    # Also sync setup.sh and requirements.txt if they changed
+    for f in setup.sh requirements.txt vigilant_boot.sh; do
+        if [ -f "$CURRENT_DIR/$f" ]; then
+            cp -a "$CURRENT_DIR/$f" "$VIGILANT_HOME/" 2>/dev/null || true
+        fi
+    done
 
     # Make setup scripts executable
     chmod +x "$VIGILANT_HOME/src/scripts/setup-iptables.sh" 2>/dev/null || true
+    chmod +x "$VIGILANT_HOME/setup.sh" 2>/dev/null || true
     
     chown -R "$VIGILANT_USER:$VIGILANT_USER" "$VIGILANT_HOME"
-    log_success "Application files verified"
+    log_success "Application files updated"
 }
 
 # ─── Stage 5: Network Configuration ─────────────────────────────────────────
