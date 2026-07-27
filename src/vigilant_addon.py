@@ -63,6 +63,11 @@ CB_BREAK_SECONDS = 120
 # Cooldown period after circuit break release (seconds)
 CB_COOLDOWN_SECONDS = 120
 
+# Session warmup: when a device first connects to social media, give it this
+# many seconds of full speed before the circuit breaker activates. Prevents
+# app startup bursts (loading images, API calls) from being throttled as doomscrolling.
+CB_SESSION_WARMUP_SECONDS = 60
+
 # Maximum total time a device can stay throttled before auto-release (seconds)
 # Prevents throttles from sticking forever due to background traffic preventing
 # the 3-minute pause reset from triggering.
@@ -838,6 +843,12 @@ def escalate_circuit_breaker(client_ip, domain, rpm_current=0, rpm_baseline=0):
             }
         
         state = circuit_breaker_state[client_ip]
+        
+        # Session warmup: give the app 60s of full speed to load before
+        # the circuit breaker activates. Prevents Instagram/Facebook startup
+        # bursts (loading API, images, video thumbnails) from being throttled.
+        if now - state["first_seen"] < CB_SESSION_WARMUP_SECONDS:
+            return CB_LEVEL_NONE
         
         # Check cooldown
         if state.get("cooldown_until", 0) > now:
