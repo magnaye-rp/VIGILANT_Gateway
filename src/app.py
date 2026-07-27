@@ -1701,6 +1701,24 @@ def clear_loopback_sni():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route('/api/sni/clear', methods=['POST'])
+@require_auth
+def clear_all_sni():
+    """Clear ALL SNI request logs from the database."""
+    try:
+        if not DB_PATH.exists():
+            return jsonify({"status": "success", "message": "No database found"})
+        with _open_db() as connection:
+            if _table_exists(connection, "sni_requests"):
+                cursor = connection.execute("DELETE FROM sni_requests")
+                deleted_count = cursor.rowcount
+                connection.commit()
+                return jsonify({"status": "success", "message": f"Cleared {deleted_count} SNI request logs"})
+            return jsonify({"status": "success", "message": "SNI table does not exist"})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route('/api/logs/clear', methods=['POST'])
 @require_auth
 def clear_logs():

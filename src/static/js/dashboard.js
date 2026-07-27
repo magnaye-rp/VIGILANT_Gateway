@@ -2053,16 +2053,15 @@ async function clearSNILogs() {
   if (!confirm("Clear ALL SNI request logs? This cannot be undone.")) return;
 
   try {
-    const resp = await fetch("/api/sni/clear-loopback", { method: "POST" });
-    // Also clear all SNI entries via logs/clear
-    const resp2 = await fetch("/api/logs/clear", { method: "POST" });
+    const resp = await fetch("/api/sni/clear", { method: "POST" });
+    const data = await resp.json();
     
     if (resp.ok) {
-      showToast("SNI logs cleared", "success");
+      showToast(data.message || "SNI logs cleared", "success");
       currentSniPage = 1;
       loadSNIDashboard();
     } else {
-      showToast("Failed to clear SNI logs", "danger");
+      showToast(data.error || "Failed to clear SNI logs", "danger");
     }
   } catch (error) {
     showToast("Error clearing SNI logs", "danger");
@@ -2073,7 +2072,7 @@ async function resetAllThrottles() {
   if (!confirm("Release ALL active circuit breakers and throttle states? This will restore full speed to all devices.")) return;
 
   try {
-    // Release all circuit breakers
+    // Get all active circuit breaker states
     const cbResp = await fetch("/api/circuit-breaker/state");
     const cbData = await cbResp.json();
     
@@ -2087,8 +2086,21 @@ async function resetAllThrottles() {
       }
     }
     
-    // Also clear throttle events
-    await fetch("/api/logs/clear", { method: "POST" });
+    // Also get throttled devices and release each one individually
+    const devResp = await fetch("/api/devices/throttled");
+    const devData = await devResp.json();
+    if (devData.throttled_devices) {
+      for (const dev of devData.throttled_devices) {
+        const ip = dev.client_ip || dev.ip_address;
+        if (ip) {
+          await fetch("/api/devices/release-throttle", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ip_address: ip })
+          });
+        }
+      }
+    }
     
     showToast("All throttles released, full speed restored", "success");
     
