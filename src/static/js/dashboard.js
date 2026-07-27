@@ -786,19 +786,34 @@ const BEHAVIORAL_PRESETS = {
     network_velocity_preset: 'Low',
     physical_scroll_preset: 'Low',
     multiplier: 200,
-    rpm_cap: 300
+    rpm_cap: 300,
+    deescalation_l1: 60,
+    deescalation_l2: 90,
+    deescalation_l3: 120,
+    throttle_rate: '64',
+    description: 'Lets you browse social normally. Only catches heavy doomscrolling after 30s. Recovers quickly (60s pause).'
   },
   balanced: {
     network_velocity_preset: 'Medium',
     physical_scroll_preset: 'Medium',
     multiplier: 150,
-    rpm_cap: 180
+    rpm_cap: 180,
+    deescalation_l1: 60,
+    deescalation_l2: 90,
+    deescalation_l3: 120,
+    throttle_rate: '32',
+    description: 'Default. Flags scrolling after 30s. Moderate recovery times (60-120s pause).'
   },
   strict: {
     network_velocity_preset: 'High',
     physical_scroll_preset: 'High',
     multiplier: 110,
-    rpm_cap: 120
+    rpm_cap: 120,
+    deescalation_l1: 30,
+    deescalation_l2: 60,
+    deescalation_l3: 90,
+    throttle_rate: '16',
+    description: 'Very sensitive. Quick to throttle, hard to recover. Best for breaking habits.'
   }
 };
 
@@ -897,18 +912,17 @@ async function saveBehavioralSettings(event) {
     };
   } else {
     const preset = BEHAVIORAL_PRESETS[mode] || BEHAVIORAL_PRESETS.balanced;
-    const defaultRate = mode === 'strict' ? '16' : mode === 'relaxed' ? '64' : '32';
     payload = {
       network_velocity_preset: preset.network_velocity_preset,
       physical_scroll_preset: preset.physical_scroll_preset,
       network_velocity_custom: preset.multiplier,
       physical_scroll_custom: preset.rpm_cap,
       sni_filtering_enabled: document.getElementById('adv-sni-enabled')?.checked ?? true,
-      proxy_throttle_rate: defaultRate + 'kbit',
-      throttle_rate: defaultRate,
-      deescalation_l1: document.getElementById('adv-deescalation-l1')?.value || '60',
-      deescalation_l2: document.getElementById('adv-deescalation-l2')?.value || '90',
-      deescalation_l3: document.getElementById('adv-deescalation-l3')?.value || '120'
+      proxy_throttle_rate: (preset.throttle_rate || '32') + 'kbit',
+      throttle_rate: preset.throttle_rate || '32',
+      deescalation_l1: String(preset.deescalation_l1 || 60),
+      deescalation_l2: String(preset.deescalation_l2 || 90),
+      deescalation_l3: String(preset.deescalation_l3 || 120)
     };
   }
 
@@ -2032,6 +2046,61 @@ function exportSNI() {
   showToast('Exporting SNI data to CSV...', 'success');
 }
 
+
+
+// ─── SNI Clear & Throttle Reset ───
+async function clearSNILogs() {
+  if (!confirm("Clear ALL SNI request logs? This cannot be undone.")) return;
+
+  try {
+    const resp = await fetch("/api/sni/clear-loopback", { method: "POST" });
+    // Also clear all SNI entries via logs/clear
+    const resp2 = await fetch("/api/logs/clear", { method: "POST" });
+    
+    if (resp.ok) {
+      showToast("SNI logs cleared", "success");
+      currentSniPage = 1;
+      loadSNIDashboard();
+    } else {
+      showToast("Failed to clear SNI logs", "danger");
+    }
+  } catch (error) {
+    showToast("Error clearing SNI logs", "danger");
+  }
+}
+
+async function resetAllThrottles() {
+  if (!confirm("Release ALL active circuit breakers and throttle states? This will restore full speed to all devices.")) return;
+
+  try {
+    // Release all circuit breakers
+    const cbResp = await fetch("/api/circuit-breaker/state");
+    const cbData = await cbResp.json();
+    
+    if (cbData.states && cbData.states.length > 0) {
+      for (const state of cbData.states) {
+        await fetch("/api/circuit-breaker/release", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ client_ip: state.client_ip })
+        });
+      }
+    }
+    
+    // Also clear throttle events
+    await fetch("/api/logs/clear", { method: "POST" });
+    
+    showToast("All throttles released, full speed restored", "success");
+    
+    // Reload dashboard
+    if (typeof loadCircuitBreakerState === "function") loadCircuitBreakerState();
+    currentSniPage = 1;
+    loadSNIDashboard();
+    
+  } catch (error) {
+    showToast("Error resetting throttles", "danger");
+  }
+}
 function refreshSNI() {
   loadSNIDashboard();
   showToast('SNI dashboard refreshed', 'success');

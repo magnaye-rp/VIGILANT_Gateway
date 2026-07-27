@@ -16,19 +16,19 @@
               <label class="mode-card" id="mode-card-relaxed" onclick="selectBehavioralMode('relaxed')" style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid transparent; border-radius: 10px; cursor: pointer; transition: all 0.15s;">
                 <i class="fa-solid fa-face-smile" style="font-size: 1.5rem; color: var(--success);"></i>
                 <div style="font-weight: 600;">Relaxed</div>
-                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">Lets you browse social media normally. Only catches extreme scrolling.</div>
+                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">Easy recovery (60s pause clears). Best for light monitoring.</div>
                 <input type="radio" name="mode" value="relaxed" style="display: none;">
               </label>
               <label class="mode-card" id="mode-card-balanced" onclick="selectBehavioralMode('balanced')" style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid var(--primary); border-radius: 10px; cursor: pointer; transition: all 0.15s;">
                 <i class="fa-solid fa-scale-balanced" style="font-size: 1.5rem; color: var(--primary);"></i>
                 <div style="font-weight: 600;">Balanced</div>
-                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">Default. Catches heavy doomscrolling while allowing normal use.</div>
+                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">Flags after 30s continuous scrolling. 60s-120s pause to recover.</div>
                 <input type="radio" name="mode" value="balanced" checked style="display: none;">
               </label>
               <label class="mode-card" id="mode-card-strict" onclick="selectBehavioralMode('strict')" style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid transparent; border-radius: 10px; cursor: pointer; transition: all 0.15s;">
                 <i class="fa-solid fa-face-frown" style="font-size: 1.5rem; color: var(--danger);"></i>
                 <div style="font-weight: 600;">Strict</div>
-                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">Very sensitive. Flags even moderate scrolling. Best for breaking habits.</div>
+                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">Quick to throttle, hard to recover (30-90s pause). Breaks habits.</div>
                 <input type="radio" name="mode" value="strict" style="display: none;">
               </label>
               <label class="mode-card" id="mode-card-custom" onclick="selectBehavioralMode('custom')" style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid transparent; border-radius: 10px; cursor: pointer; transition: all 0.15s;">
