@@ -2011,16 +2011,26 @@ class VIGILANTAddon:
             if not server_name:
                 return
 
-            # 2. Extract Client IP (robust fallback for transparent proxy REDIRECT)
-            client_ip = self._extract_client_ip_from_tls(data)
-            if not client_ip:
+            # 2. Bypass list check — skip TLS interception immediately to avoid
+            # latency on video/CDN connections. Throttling is still applied via
+            # tc on the interface, which runs at the kernel level regardless of
+            # mitmproxy's involvement.
+            if is_custom_bypass(server_name):
+                # Still check if this device should be throttled — the circuit
+                # breaker state persists across connections even when bypassed.
+                # Extract client IP quickly for the throttle check.
+                client_ip = self._extract_client_ip_from_tls(data)
+                if client_ip:
+                    flagged, rpm_now, rpm_base = should_throttle(client_ip, server_name)
+                    if flagged and not is_device_exempt(client_ip):
+                        level = escalate_circuit_breaker(client_ip, server_name, rpm_now, rpm_base)
+                        if level >= CB_LEVEL_PAUSE:
+                            _mark_client_throttled(client_ip)
+                        apply_circuit_breaker_action(client_ip, server_name, level, rpm_now, rpm_base)
+                data.ignore_connection = True
                 return
 
-            update_device_activity(client_ip)
-
-            # 3. SNI Filtering & Behavioral Checks — run for ALL domains including
-            # bypassed ones, so throttling still works on social apps while
-            # the actual SSL decryption is skipped below.
+            # 3. Extract Client IP
             config = load_proxy_config()
             # load_proxy_config returns sni_filtering_enabled as a bool already;
             # do NOT call .lower() on it (was causing an AttributeError that silently
@@ -2049,13 +2059,7 @@ class VIGILANTAddon:
                         print(f"[VIGILANT] TLS CB Level {level} ({CB_LEVEL_NAMES[level]}) {client_ip} @ {server_name} "
                               f"RPM={rpm_now:.1f} baseline={rpm_base:.1f} RPS={velocity_rps:.2f}")
 
-            # 4. Bypass list check — run AFTER throttling so tc rules still apply,
-            # but BEFORE TLS interception so content isn't decrypted.
-            if is_custom_bypass(server_name):
-                data.ignore_connection = True
-                return
-
-            # 5. Certificate Pinning Dynamic Bypass (AFTER logging and throttling)
+            # 4. Certificate Pinning Dynamic Bypass (AFTER logging and throttling)
             if server_name in self.pinned_hosts:
                 print(f"[VIGILANT DEBUG] SSL pinned, bypassing: {server_name}")
                 data.ignore_connection = True
