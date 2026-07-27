@@ -70,7 +70,7 @@ SAMPLE_SUFFIX_BYTES = 256 * 1024        # ~256KB from the end (catches trailing 
 
 # No reading pause threshold: if a single inter-request gap exceeds this,
 # the user is assumed to be reading/pausing, not doomscrolling.
-CB_NO_PAUSE_SECONDS = 60
+CB_NO_PAUSE_SECONDS = 180
 
 # Global asset whitelist
 GLOBAL_WHITELIST = {
@@ -823,46 +823,38 @@ def apply_circuit_breaker_action(client_ip, domain, level, rpm_current=0, rpm_ba
         return False
     
     if level == CB_LEVEL_PAUSE:
-        # Level 1: 4kbit = 512 B/s — barely enough for text, videos impossible
+        # Level 1: 4kbit — persists until escalation or pause reset
         log_throttle(client_ip, domain, rpm_current, rpm_baseline, "CB_PAUSE", f"Circuit Breaker Level 1 - Forced Pause @ {domain}")
         success = apply_throttle(client_ip, rate="4kbit")
         if success:
-            save_throttle_state(client_ip, is_throttled=True, recovery_at=time.time() + 10)
-            recovery_timer = threading.Timer(10, remove_throttle_cycle, args=[client_ip])
-            with throttle_timers_lock:
-                _cancel_timer(client_ip)
-                throttle_timers[client_ip] = recovery_timer
-            recovery_timer.start()
-            print(f"[VIGILANT] CB PAUSE: {client_ip} - 10s bandwidth pause applied")
+            # No recovery timer — throttle stays until user stops for 60s
+            # or circuit breaker escalates to a higher level.
+            save_throttle_state(client_ip, is_throttled=True, recovery_at=0)
+            print(f"[VIGILANT] CB PAUSE: {client_ip} @ 4kbit applied (persistent)")
         return success
     
     elif level == CB_LEVEL_FRICTION:
-        # Level 2: 2kbit = 256 B/s — text loads slowly, images stall
+        # Level 2: 2kbit — tighter throttle, still persistent
         log_throttle(client_ip, domain, rpm_current, rpm_baseline, "CB_FRICTION", f"Circuit Breaker Level 2 - Bandwidth Friction @ {domain}")
         success = apply_throttle(client_ip, rate="2kbit")
         if success:
-            save_throttle_state(client_ip, is_throttled=True, recovery_at=time.time() + 30)
-            recovery_timer = threading.Timer(30, remove_throttle_cycle, args=[client_ip])
-            with throttle_timers_lock:
-                _cancel_timer(client_ip)
-                throttle_timers[client_ip] = recovery_timer
-            recovery_timer.start()
-            print(f"[VIGILANT] CB FRICTION: {client_ip} - 30s @ 2kbit applied")
+            save_throttle_state(client_ip, is_throttled=True, recovery_at=0)
+            print(f"[VIGILANT] CB FRICTION: {client_ip} @ 2kbit applied (persistent)")
         return success
     
     elif level == CB_LEVEL_CIRCUIT_BREAK:
-        # Level 3: 1kbit = 128 B/s — completely unusable
+        # Level 3: 1kbit — lasts 2 minutes, then cooldown
         log_throttle(client_ip, domain, rpm_current, rpm_baseline, "CB_CIRCUIT_BREAK", f"Circuit Breaker Level 3 - Hard Circuit Break @ {domain}")
         success = apply_throttle(client_ip, rate="1kbit")
         if success:
-            recovery_duration = 120  # 2 minutes
+            recovery_duration = 120
             save_throttle_state(client_ip, is_throttled=True, recovery_at=time.time() + recovery_duration)
+            # Only Level 3 gets a recovery timer — the "cool off" period
             recovery_timer = threading.Timer(recovery_duration, remove_throttle_cycle, args=[client_ip])
             with throttle_timers_lock:
                 _cancel_timer(client_ip)
                 throttle_timers[client_ip] = recovery_timer
             recovery_timer.start()
-            # Set cooldown after recovery
             with cb_state_lock:
                 if client_ip in circuit_breaker_state:
                     circuit_breaker_state[client_ip]["cooldown_until"] = time.time() + recovery_duration + CB_COOLDOWN_SECONDS
@@ -984,24 +976,27 @@ def should_throttle(client_ip, host, path=""):
 
     flagged = (rpm_now > (rpm_base * network_velocity_threshold)) or (rpm_now > physical_scroll_threshold)
     
-    if flagged:
-        # Burst detection: confirm that a burst just occurred (requests clustered
-        # tightly in time).  We still flag it — the exemption was removed because
-        # app-initialization bursts are exactly what we want to rate-limit.
-        # The 16k burst buffer on the tc class lets header/TLS traffic through
-        # before the steady 32kbit rate kicks in, so this no longer needs a
-        # code-level bypass.
-        with velocity_lock:
-            dq = request_history[client_ip]
-            if len(dq) >= physical_scroll_threshold:
-                time_for_threshold_reqs = time.time() - dq[-physical_scroll_threshold]
-                if time_for_threshold_reqs < 10:
-                    print(f"[VIGILANT] Burst detected for {client_ip}: "
-                          f"{physical_scroll_threshold} requests in {time_for_threshold_reqs:.1f}s — throttling anyway")
-
-    # Spacing check: if requests are consistently less than 20 seconds apart, throttle
+    # Combined spacing check + sustained activity detector
+    # (single velocity_lock to avoid nesting issues)
     with velocity_lock:
         dq = request_history[client_ip]
+        
+        # Sustained activity detector: if the user has been on social media for
+        # longer than the pause threshold (30s), flag them regardless of RPM.
+        if not flagged and session_totals[client_ip] >= MIN_REQUESTS_BASELINE:
+            session_elapsed = time.time() - session_start[client_ip]
+            if session_elapsed >= CB_PAUSE_SECONDS:
+                flagged = True
+                print(f"[VIGILANT] Sustained social media for {client_ip}: {session_elapsed:.0f}s active, flagging")
+        
+        # Burst detection (only if already flagged)
+        if flagged and len(dq) >= physical_scroll_threshold:
+            time_for_threshold_reqs = time.time() - dq[-physical_scroll_threshold]
+            if time_for_threshold_reqs < 10:
+                print(f"[VIGILANT] Burst detected for {client_ip}: "
+                      f"{physical_scroll_threshold} requests in {time_for_threshold_reqs:.1f}s")
+        
+        # Spacing check: if avg gap between requests < 20s, flag
         if len(dq) >= 10:
             time_gaps = []
             for i in range(len(dq) - 1):
@@ -1012,16 +1007,16 @@ def should_throttle(client_ip, host, path=""):
                 if avg_gap < 20:
                     flagged = True
                     print(f"[VIGILANT] Rapid spacing detect for {client_ip}: avg_gap={avg_gap:.1f}s")
-            # Circuit breaker: check if any single gap exceeds the no-pause threshold
-            # If user pauses >6 seconds, they're reading/interacting, not doomscrolling
-            max_gap = max(time_gaps) if time_gaps else 0
-            if max_gap > CB_NO_PAUSE_SECONDS:
-                # User paused - reset the circuit breaker state
-                with cb_state_lock:
-                    if client_ip in circuit_breaker_state:
-                        del circuit_breaker_state[client_ip]
-                        print(f"[VIGILANT] CB RESET: {client_ip} paused for {max_gap:.1f}s (> {CB_NO_PAUSE_SECONDS}s threshold)")
-                flagged = False
+                # Circuit breaker reset: if any single gap exceeds the pause threshold
+                max_gap = max(time_gaps)
+                if max_gap > CB_NO_PAUSE_SECONDS:
+                    with cb_state_lock:
+                        if client_ip in circuit_breaker_state:
+                            del circuit_breaker_state[client_ip]
+                            print(f"[VIGILANT] CB RESET: {client_ip} paused for {max_gap:.1f}s (> {CB_NO_PAUSE_SECONDS}s threshold)")
+                    # Also remove the actual tc throttle so the user gets full speed back
+                    flagged = False
+                    remove_throttle_cycle(client_ip)
 
     return flagged, rpm_now, rpm_base
 
@@ -1276,7 +1271,7 @@ def apply_throttle(client_ip, rate=None):
         # Store mapping for later removal
         _throttle_map[client_ip] = class_id
         
-        print(f"[VIGILANT] Throttling applied to {client_ip} on {interface} at {throttle_rate} burst=16k (classId={class_id})")
+        print(f"[VIGILANT] Throttling applied to {client_ip} on {interface} at {throttle_rate} burst=2k (classId={class_id})")
         return True
     except Exception as e:
         print(f"[VIGILANT] Throttling FAILED for {client_ip} on {interface}: {e}")
