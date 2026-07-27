@@ -73,9 +73,39 @@ MAX_PAYLOAD_SIZE = 5 * 1024 * 1024      # hard cap before we stop trying to full
 SAMPLE_PREFIX_BYTES = 512 * 1024        # ~512KB from the start (headlines/titles/first posts)
 SAMPLE_SUFFIX_BYTES = 256 * 1024        # ~256KB from the end (catches trailing chunks)
 
-# No reading pause threshold: if a single inter-request gap exceeds this,
-# the user is assumed to be reading/pausing, not doomscrolling.
-CB_NO_PAUSE_SECONDS = 180
+# Per-level de-escalation: how long the user must pause before the throttle releases.
+# Each level requires a longer pause, so lighter throttles are easier to shake off.
+# This replaces the old single-value CB_NO_PAUSE_SECONDS which never fired because
+# phones make background requests (iCloud, notifications) every 30-60 seconds.
+CB_DEESCALATION_SECONDS = {
+    CB_LEVEL_PAUSE: 60,          # L1 (4kbit):  60s pause → release
+    CB_LEVEL_FRICTION: 90,       # L2 (2kbit):  90s pause → release
+    CB_LEVEL_CIRCUIT_BREAK: 120  # L3 (1kbit): 120s pause → release
+}
+
+
+def get_deescalation_seconds() -> dict:
+    """Load per-level de-escalation gaps from database.
+    Falls back to CB_DEESCALATION_SECONDS defaults."""
+    try:
+        conn = _connect_db()
+        cursor = conn.cursor()
+        result = dict(CB_DEESCALATION_SECONDS)
+        for level_key, cb_level in [('deescalation_l1', CB_LEVEL_PAUSE),
+                                      ('deescalation_l2', CB_LEVEL_FRICTION),
+                                      ('deescalation_l3', CB_LEVEL_CIRCUIT_BREAK)]:
+            cursor.execute("SELECT value FROM config_settings WHERE key = ?", (level_key,))
+            row = cursor.fetchone()
+            if row:
+                try:
+                    result[cb_level] = int(row[0])
+                except (ValueError, TypeError):
+                    pass
+        conn.close()
+        return result
+    except Exception:
+        return dict(CB_DEESCALATION_SECONDS)
+
 
 # Global asset whitelist
 GLOBAL_WHITELIST = {
@@ -85,6 +115,7 @@ GLOBAL_WHITELIST = {
     "mzstatic.com", "icloud.com", "aws.amazon.com", "cloudfront.net", "cdnjs.cloudflare.com"
 }
 
+
 def is_whitelisted(host: str) -> bool:
     """Check if a host (or its parent domain) is in the global whitelist."""
     clean = host.removeprefix("www.")
@@ -92,6 +123,28 @@ def is_whitelisted(host: str) -> bool:
         if clean == w or clean.endswith('.' + w):
             return True
     return False
+
+
+def is_custom_bypass(host: str) -> bool:
+    """Check if a host matches a user-configured bypass domain."""
+    try:
+        conn = _connect_db()
+        cursor = conn.execute("SELECT value FROM config_settings WHERE key = 'custom_bypass_domains'")
+        row = cursor.fetchone()
+        conn.close()
+        if not row or not row[0]:
+            return False
+        clean = host.removeprefix("www.").lower()
+        for domain in row[0].split(','):
+            domain = domain.strip().lower()
+            if not domain:
+                continue
+            if clean == domain or clean.endswith('.' + domain):
+                return True
+    except Exception:
+        pass
+    return False
+
 
 # Default social domains for doomscroll detection
 DEFAULT_SOCIAL_DOMAINS = {
@@ -1033,16 +1086,22 @@ def should_throttle(client_ip, host, path=""):
                 if avg_gap < 20:
                     flagged = True
                     print(f"[VIGILANT] Rapid spacing detect for {client_ip}: avg_gap={avg_gap:.1f}s")
-                # Circuit breaker reset: if any single gap exceeds the pause threshold
-                max_gap = max(time_gaps)
-                if max_gap > CB_NO_PAUSE_SECONDS:
+                # Per-level de-escalation: check if the user paused long enough
+                # to recover from the current throttle level.
+                # L1 (4kbit): needs 60s pause → release
+                # L2 (2kbit): needs 90s pause → release
+                # L3 (1kbit): needs 120s pause → release
+                max_gap = max(time_gaps) if time_gaps else 0
+                with cb_state_lock:
+                    current_level = circuit_breaker_state.get(client_ip, {}).get("level", CB_LEVEL_NONE)
+                deescalation_gap = get_deescalation_seconds().get(current_level, 120)
+                if max_gap > deescalation_gap:
                     with cb_state_lock:
                         if client_ip in circuit_breaker_state:
                             del circuit_breaker_state[client_ip]
-                            print(f"[VIGILANT] CB RESET: {client_ip} paused for {max_gap:.1f}s (> {CB_NO_PAUSE_SECONDS}s threshold)")
-                    # Also remove the actual tc throttle so the user gets full speed back
-                    flagged = False
+                            print(f"[VIGILANT] CB RESET: {client_ip} paused {max_gap:.0f}s at L{current_level} (>{deescalation_gap}s) — releasing")
                     remove_throttle_cycle(client_ip)
+                    flagged = False
 
     return flagged, rpm_now, rpm_base
 
@@ -2043,7 +2102,7 @@ class VIGILANTAddon:
 
         # Whitelist bypass: asset subdomains (kept ahead of everything else - these
         # are infrastructure/CDN domains, not user-navigable content).
-        if is_whitelisted(host):
+        if is_whitelisted(host) or is_custom_bypass(host):
             log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Educational", False, [], None)
             print(f"[VIGILANT] WHITELIST BYPASS (request): {host} -> {client_ip}")
             return
@@ -2144,7 +2203,7 @@ class VIGILANTAddon:
         method       = flow.request.method
         content_type = flow.response.headers.get("content-type", "")
 
-        if is_whitelisted(host):
+        if is_whitelisted(host) or is_custom_bypass(host):
             log_request(client_ip, host, path, method, "Educational", False, [], None)
             print(f"[VIGILANT] WHITELIST BYPASS (response): {host} -> {client_ip}")
             return

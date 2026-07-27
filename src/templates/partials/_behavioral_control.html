@@ -52,9 +52,9 @@
                 <div style="font-size: 0.75rem; color: var(--text-secondary);">Requests per minute ceiling</div>
               </div>
               <div>
-                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.25rem;">Reading Pause</div>
-                <div style="font-size: 1.1rem; font-weight: 600;" id="preview-pause">180s</div>
-                <div style="font-size: 0.75rem; color: var(--text-secondary);">3 min pause needed to reset</div>
+                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.25rem;">Auto-Release</div>
+                <div style="font-size: 1.1rem; font-weight: 600;" id="preview-pause">60-120s</div>
+                <div style="font-size: 0.75rem; color: var(--text-secondary);">Pause duration by level</div>
               </div>
               <div>
                 <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.25rem;">Throttle Rate</div>
@@ -131,6 +131,46 @@
                 </div>
 
                 <div class="form-group">
+                  <label class="form-label">
+                    Auto-Release Pause by Level
+                    <i class="fa-solid fa-question-circle tooltip-trigger" style="margin-left: 0.3rem;" data-tooltip="How long the user must pause before the throttle releases at each level. Lighter throttles recover faster."></i>
+                  </label>
+                  <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
+                    <div style="flex: 1; min-width: 90px;">
+                      <label style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">L1 Pause (4kbit)</label>
+                      <select id="adv-deescalation-l1" style="width: 100%;">
+                        <option value="30">30s</option>
+                        <option value="60" selected>60s</option>
+                        <option value="90">90s</option>
+                        <option value="120">120s</option>
+                        <option value="180">180s</option>
+                      </select>
+                    </div>
+                    <div style="flex: 1; min-width: 90px;">
+                      <label style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">L2 Pause (2kbit)</label>
+                      <select id="adv-deescalation-l2" style="width: 100%;">
+                        <option value="60">60s</option>
+                        <option value="90" selected>90s</option>
+                        <option value="120">120s</option>
+                        <option value="180">180s</option>
+                        <option value="300">300s</option>
+                      </select>
+                    </div>
+                    <div style="flex: 1; min-width: 90px;">
+                      <label style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">L3 Pause (1kbit)</label>
+                      <select id="adv-deescalation-l3" style="width: 100%;">
+                        <option value="60">60s</option>
+                        <option value="90">90s</option>
+                        <option value="120" selected>120s</option>
+                        <option value="180">180s</option>
+                        <option value="300">300s</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="form-hint">Pause longer than this at each level = throttle releases</div>
+                </div>
+
+                <div class="form-group">
                   <label class="form-label">SNI Fallback Tracking</label>
                   <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer; margin-top: 0.5rem;">
                     <input type="checkbox" id="adv-sni-enabled" checked onchange="updateSNIStatusIndicator(this)">
@@ -145,21 +185,21 @@
                 <h4 style="font-size: 0.95rem; font-weight: 600; margin-bottom: 0.75rem; color: var(--primary);">
                   <i class="fa-solid fa-bolt" style="margin-right: 0.4rem;"></i> Circuit Breaker Escalation Timeline
                 </h4>
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.75rem;">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 0.75rem;">
                   <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
                     <div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Level 1 • Pause</div>
-                    <div style="font-weight: 600; font-size: 0.95rem;">30s</div>
-                    <div style="font-size: 0.75rem; color: var(--text-secondary);">10s @ 128 Kbps</div>
+                    <div style="font-weight: 600; font-size: 0.95rem;">30s trigger</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">4kbit • pause 60s to release</div>
                   </div>
                   <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
                     <div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Level 2 • Friction</div>
-                    <div style="font-weight: 600; font-size: 0.95rem;">60s</div>
-                    <div style="font-size: 0.75rem; color: var(--text-secondary);">30s @ 256 Kbps</div>
+                    <div style="font-weight: 600; font-size: 0.95rem;">60s trigger</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">2kbit • pause 90s to release</div>
                   </div>
                   <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
                     <div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Level 3 • Circuit Break</div>
-                    <div style="font-weight: 600; font-size: 0.95rem;">120s+</div>
-                    <div style="font-size: 0.75rem; color: var(--text-secondary);">120s @ 32 Kbps</div>
+                    <div style="font-weight: 600; font-size: 0.95rem;">120s trigger</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">1kbit • pause 120s to release</div>
                   </div>
                   <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
                     <div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Cooldown</div>

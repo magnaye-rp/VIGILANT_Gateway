@@ -101,5 +101,40 @@
               </table>
             </div>
           </div>
+        
+        <!-- Bypass List -->
+        <div class="card" style="margin-top: 2rem;">
+          <div class="card-header">
+            <div>
+              <div class="card-title"><i class="fa-solid fa-circle-check" style="margin-right: 0.5rem;"></i> Bypass List</div>
+              <div class="card-subtitle">Domains that bypass mitmproxy inspection entirely — traffic passes through unmodified</div>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 0.75rem; align-items: flex-end; margin-bottom: 1.5rem;">
+            <div class="form-group" style="flex: 1; margin-bottom: 0;">
+              <label class="form-label">Domain to bypass</label>
+              <input type="text" id="bypass-domain-input" class="form-input" placeholder="e.g., example.com" style="width: 100%;">
+              <div class="form-hint">All subdomains will also bypass inspection</div>
+            </div>
+            <button class="btn-primary" onclick="addBypassDomain()" style="white-space: nowrap;">
+              <i class="fa-solid fa-plus"></i> Add Domain
+            </button>
+          </div>
+
+          <table class="traffic-table">
+            <thead>
+              <tr>
+                <th>Domain</th>
+                <th style="text-align: right;">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="bypass-domains-table-body">
+              <tr>
+                <td colspan="2" style="text-align: center; color: var(--text-secondary);">Loading...</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
+
       </div>

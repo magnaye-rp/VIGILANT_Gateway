@@ -95,6 +95,7 @@ function switchTab(tabId, triggerElement = null) {
   if (tabId === 'filtering') {
     loadCategoryHints();
     loadKeywords();
+    loadBypassDomains();
   }
   if (tabId === 'behavioral-control') {
     loadBehavioralSettings();
@@ -764,6 +765,14 @@ async function loadBehavioralSettings() {
       updateSNIStatusIndicator(sniCheck);
     }
 
+    // Load de-escalation pause values
+    const deL1 = document.getElementById('adv-deescalation-l1');
+    const deL2 = document.getElementById('adv-deescalation-l2');
+    const deL3 = document.getElementById('adv-deescalation-l3');
+    if (deL1) deL1.value = String(data.deescalation_l1 || 60);
+    if (deL2) deL2.value = String(data.deescalation_l2 || 90);
+    if (deL3) deL3.value = String(data.deescalation_l3 || 120);
+
     updateBehavioralPreview();
   } catch (e) {
     console.error('loadBehavioralSettings:', e);
@@ -880,7 +889,11 @@ async function saveBehavioralSettings(event) {
       proxy_pinned_domains: 'facebook.com,twitter.com,x.com,tiktok.com,instagram.com,reddit.com,youtube.com',
       throttle_rate: String(throttleRate),
       throttle_duration: String(throttleDuration),
-      cb_no_pause_seconds: pauseThreshold
+      cb_no_pause_seconds: pauseThreshold,
+      // Per-level de-escalation pauses
+      deescalation_l1: document.getElementById('adv-deescalation-l1')?.value || '60',
+      deescalation_l2: document.getElementById('adv-deescalation-l2')?.value || '90',
+      deescalation_l3: document.getElementById('adv-deescalation-l3')?.value || '120'
     };
   } else {
     const preset = BEHAVIORAL_PRESETS[mode] || BEHAVIORAL_PRESETS.balanced;
@@ -892,7 +905,10 @@ async function saveBehavioralSettings(event) {
       physical_scroll_custom: preset.rpm_cap,
       sni_filtering_enabled: document.getElementById('adv-sni-enabled')?.checked ?? true,
       proxy_throttle_rate: defaultRate + 'kbit',
-      throttle_rate: defaultRate
+      throttle_rate: defaultRate,
+      deescalation_l1: document.getElementById('adv-deescalation-l1')?.value || '60',
+      deescalation_l2: document.getElementById('adv-deescalation-l2')?.value || '90',
+      deescalation_l3: document.getElementById('adv-deescalation-l3')?.value || '120'
     };
   }
 
@@ -1019,6 +1035,103 @@ window.deleteKeyword = async function(keywordId) {
 };
 
 // ─── Category Hints Management ───
+
+// ─── Bypass Domain List ───
+async function loadBypassDomains() {
+  const tableBody = document.getElementById("bypass-domains-table-body");
+  if (!tableBody) return;
+
+  try {
+    const response = await fetch("/api/config");
+    const config = await response.json();
+    const domainsStr = config.custom_bypass_domains || "";
+    const domains = domainsStr ? domainsStr.split(",").map(d => d.trim()).filter(Boolean) : [];
+
+    if (domains.length === 0) {
+      tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No bypass domains configured</td></tr>';
+      return;
+    }
+
+    tableBody.innerHTML = domains.map(d => `
+      <tr>
+        <td style="font-family: monospace;">${d}</td>
+        <td style="text-align: right;">
+          <a href="#" onclick="removeBypassDomain('${d}'); return false;" style="color: var(--danger);">[Remove]</a>
+        </td>
+      </tr>
+    `).join("");
+  } catch (error) {
+    showToast("Failed to load bypass domains", "danger");
+  }
+}
+
+async function addBypassDomain() {
+  const input = document.getElementById("bypass-domain-input");
+  if (!input) return;
+  
+  const domain = input.value.trim().toLowerCase();
+  if (!domain) {
+    showToast("Enter a domain to bypass", "danger");
+    return;
+  }
+
+  try {
+    const resp = await fetch("/api/config");
+    const config = await resp.json();
+    const existing = config.custom_bypass_domains || "";
+    const domains = existing ? existing.split(",").map(d => d.trim()).filter(Boolean) : [];
+    
+    if (domains.includes(domain)) {
+      showToast("Domain already in bypass list", "warning");
+      return;
+    }
+    
+    domains.push(domain);
+    
+    const saveResp = await fetch("/api/config/setup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ custom_bypass_domains: domains.join(",") })
+    });
+    
+    if (saveResp.ok) {
+      showToast("Domain added to bypass list", "success");
+      input.value = "";
+      loadBypassDomains();
+    } else {
+      showToast("Failed to save bypass list", "danger");
+    }
+  } catch (error) {
+    showToast("Error adding bypass domain", "danger");
+  }
+}
+
+async function removeBypassDomain(domain) {
+  if (!confirm("Remove " + domain + " from the bypass list?")) return;
+
+  try {
+    const resp = await fetch("/api/config");
+    const config = await resp.json();
+    const existing = config.custom_bypass_domains || "";
+    const domains = existing ? existing.split(",").map(d => d.trim()).filter(Boolean) : [];
+    const filtered = domains.filter(d => d !== domain);
+    
+    const saveResp = await fetch("/api/config/setup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ custom_bypass_domains: filtered.join(",") })
+    });
+    
+    if (saveResp.ok) {
+      showToast("Domain removed from bypass list", "success");
+      loadBypassDomains();
+    } else {
+      showToast("Failed to save bypass list", "danger");
+    }
+  } catch (error) {
+    showToast("Error removing bypass domain", "danger");
+  }
+}
 async function loadCategoryHints() {
   const tableBody = document.getElementById('category-hints-table-body');
 
