@@ -791,7 +791,7 @@ const BEHAVIORAL_PRESETS = {
     deescalation_l2: 90,
     deescalation_l3: 120,
     throttle_rate: '64',
-    description: 'Lets you browse social normally. Only catches heavy doomscrolling after 30s. Recovers quickly (60s pause).'
+    description: '10 min sustained or RPM spike triggers. Easy recovery (60s pause). Light 64kbit throttle.'
   },
   balanced: {
     network_velocity_preset: 'Medium',
@@ -802,7 +802,7 @@ const BEHAVIORAL_PRESETS = {
     deescalation_l2: 90,
     deescalation_l3: 120,
     throttle_rate: '32',
-    description: 'Default. Flags scrolling after 30s. Moderate recovery times (60-120s pause).'
+    description: 'Default. 10 min sustained or RPM spike triggers. Moderate recovery (60-120s).'
   },
   strict: {
     network_velocity_preset: 'High',
@@ -813,7 +813,7 @@ const BEHAVIORAL_PRESETS = {
     deescalation_l2: 60,
     deescalation_l3: 90,
     throttle_rate: '16',
-    description: 'Very sensitive. Quick to throttle, hard to recover. Best for breaking habits.'
+    description: 'Very sensitive. Quick to throttle (5 min sustained), harder to recover (30-90s). 16kbit.'
   }
 };
 
@@ -2145,12 +2145,7 @@ function startDashboardPolling() {
         interfaceThroughput.textContent = `Rx: ${data.system.throughput_rx_mbps} Mbps / Tx: ${data.system.throughput_tx_mbps} Mbps`;
       }
 
-      const interfaceMode = document.getElementById('nerve-interface-mode');
-      if (interfaceMode && data.network_config) {
-        const upstream = data.network_config.upstream_interface || 'Unknown';
-        const distribution = data.network_config.distribution_interface || 'Unknown';
-        interfaceMode.textContent = `${upstream} → ${distribution}`;
-      }
+
 
       const sysThroughput = document.getElementById('sys-throughput');
       if (sysThroughput) {
@@ -2182,6 +2177,11 @@ function startDashboardPolling() {
           }
           if (nlpStatus && nerveData.nlp_status) {
             nlpStatus.textContent = nerveData.nlp_status;
+          }
+          // Use auto-detected system interfaces for the interface mode display
+          const interfaceMode = document.getElementById('nerve-interface-mode');
+          if (interfaceMode && nerveData.upstream_interface && nerveData.distribution_interface) {
+            interfaceMode.textContent = `${nerveData.upstream_interface} → ${nerveData.distribution_interface}`;
           }
         }
       } catch (error) {

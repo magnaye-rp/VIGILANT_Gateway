@@ -16,19 +16,19 @@
               <label class="mode-card" id="mode-card-relaxed" onclick="selectBehavioralMode('relaxed')" style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid transparent; border-radius: 10px; cursor: pointer; transition: all 0.15s;">
                 <i class="fa-solid fa-face-smile" style="font-size: 1.5rem; color: var(--success);"></i>
                 <div style="font-weight: 600;">Relaxed</div>
-                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">Easy recovery (60s pause clears). Best for light monitoring.</div>
+                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">10 min steady scroll or RPM spike triggers throttle. 60s pause clears. Light 64kbit.</div>
                 <input type="radio" name="mode" value="relaxed" style="display: none;">
               </label>
               <label class="mode-card" id="mode-card-balanced" onclick="selectBehavioralMode('balanced')" style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid var(--primary); border-radius: 10px; cursor: pointer; transition: all 0.15s;">
                 <i class="fa-solid fa-scale-balanced" style="font-size: 1.5rem; color: var(--primary);"></i>
                 <div style="font-weight: 600;">Balanced</div>
-                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">Flags after 30s continuous scrolling. 60s-120s pause to recover.</div>
+                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">10 min scroll or RPM spike triggers. 60-120s pause to recover. 32kbit default.</div>
                 <input type="radio" name="mode" value="balanced" checked style="display: none;">
               </label>
               <label class="mode-card" id="mode-card-strict" onclick="selectBehavioralMode('strict')" style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid transparent; border-radius: 10px; cursor: pointer; transition: all 0.15s;">
                 <i class="fa-solid fa-face-frown" style="font-size: 1.5rem; color: var(--danger);"></i>
                 <div style="font-weight: 600;">Strict</div>
-                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">Quick to throttle, hard to recover (30-90s pause). Breaks habits.</div>
+                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">Immediate on spike, 5 min sustained. 30-90s pause. 16kbit. Breaks habits.</div>
                 <input type="radio" name="mode" value="strict" style="display: none;">
               </label>
               <label class="mode-card" id="mode-card-custom" onclick="selectBehavioralMode('custom')" style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid transparent; border-radius: 10px; cursor: pointer; transition: all 0.15s;">
@@ -103,7 +103,7 @@
                     <input type="range" id="adv-pause-threshold" min="30" max="300" step="10" value="180" oninput="updateBehavioralPreview()" style="flex: 1;">
                     <span id="adv-pause-label" style="font-weight: 600; min-width: 3rem; text-align: right;">180s</span>
                   </div>
-                  <div class="form-hint">Stop scrolling for this long to clear the throttle (3 min default)</div>
+                  <div class="form-hint">Stop scrolling for this long to clear the throttle (~3 min default)</div>
                 </div>
 
                 <div class="form-group">
@@ -137,7 +137,7 @@
                   </label>
                   <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
                     <div style="flex: 1; min-width: 90px;">
-                      <label style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">L1 Pause (4kbit)</label>
+                      <label style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">L1 Pause (64kbit)</label>
                       <select id="adv-deescalation-l1" style="width: 100%;">
                         <option value="30">30s</option>
                         <option value="60" selected>60s</option>
@@ -188,23 +188,23 @@
                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 0.75rem;">
                   <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
                     <div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Level 1 • Pause</div>
-                    <div style="font-weight: 600; font-size: 0.95rem;">30s trigger</div>
-                    <div style="font-size: 0.75rem; color: var(--text-secondary);">4kbit • pause 60s to release</div>
+                    <div style="font-weight: 600; font-size: 0.95rem;">RPM spike or 10 min</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">64kbit • pause 60s to release</div>
                   </div>
                   <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
                     <div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Level 2 • Friction</div>
-                    <div style="font-weight: 600; font-size: 0.95rem;">60s trigger</div>
+                    <div style="font-weight: 600; font-size: 0.95rem;">60s at L1</div>
                     <div style="font-size: 0.75rem; color: var(--text-secondary);">2kbit • pause 90s to release</div>
                   </div>
                   <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
                     <div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Level 3 • Circuit Break</div>
-                    <div style="font-weight: 600; font-size: 0.95rem;">120s trigger</div>
+                    <div style="font-weight: 600; font-size: 0.95rem;">120s at L2</div>
                     <div style="font-size: 0.75rem; color: var(--text-secondary);">1kbit • pause 120s to release</div>
                   </div>
                   <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
-                    <div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Cooldown</div>
-                    <div style="font-weight: 600; font-size: 0.95rem;">120s</div>
-                    <div style="font-size: 0.75rem; color: var(--text-secondary);">After circuit break</div>
+                    <div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Recovery</div>
+                    <div style="font-weight: 600; font-size: 0.95rem;">Pause clears all</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">Return to normal after pause</div>
                   </div>
                 </div>
               </div>

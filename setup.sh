@@ -275,7 +275,7 @@ stage_6_dns_dhcp() {
     
     log_info "Generating dnsmasq.conf with LAN interface $LAN_INTERFACE..."
     if [ -f "$VIGILANT_HOME/src/config/dnsmasq.conf" ]; then
-        sed "s/interface=enp0s6/interface=$LAN_INTERFACE/g" "$VIGILANT_HOME/src/config/dnsmasq.conf" > /tmp/dnsmasq-vigilant.conf
+        sed "s/interface=__LAN_INTERFACE__/interface=$LAN_INTERFACE/g" "$VIGILANT_HOME/src/config/dnsmasq.conf" > /tmp/dnsmasq-vigilant.conf
         cat /tmp/dnsmasq-vigilant.conf > /etc/dnsmasq.conf
         rm -f /tmp/dnsmasq-vigilant.conf
     fi

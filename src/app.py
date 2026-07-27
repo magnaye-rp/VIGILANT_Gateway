@@ -117,8 +117,8 @@ except Exception as exc:
     DB_PATH = LOCAL_DB_PATH
 
 DEFAULT_CONFIG = {
-    "upstream_interface": "eth0",
-    "distribution_interface": "eth1",
+    "upstream_interface": "enp0s31f6",
+    "distribution_interface": "enp1s0",
     "gateway_ip": "192.168.10.1",
     "dhcp_start": "192.168.10.10",
     "dhcp_end": "192.168.10.50",
@@ -129,7 +129,7 @@ DEFAULT_CONFIG = {
     "physical_scroll_threshold": "180",
     "throttle_enabled": "true",
     "throttle_rate": "256",
-    "throttle_duration": "300",
+    "throttle_duration": "600",
     "ui_theme": "light",
     "tfidf_classification_threshold": "0.05",
     "tfidf_url_threshold": "0.3",
@@ -152,7 +152,7 @@ INTEGER_CONFIG_KEYS = {"physical_scroll_threshold", "throttle_rate", "throttle_d
 STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "upstream_dns", "nlp_accuracy", "ui_theme", "network_velocity_preset", "physical_scroll_preset", "proxy_throttle_rate", "proxy_pinned_domains", "custom_bypass_domains"}
 TRAFFIC_CATEGORIES = ("Educational", "Productive", "Distracting", "Harmful")
 L4_TRAFFIC_CATEGORIES = ("DNS_TRACKED", "SNI_PASSTHROUGH")
-DEFAULT_THROTTLE_DURATION = 300
+DEFAULT_THROTTLE_DURATION = 600
 ACTIVE_DEVICE_WINDOW_SECONDS = 120  # 2 minutes — a device seen within this window is considered recently active
 
 # Philippine Time (UTC+8) for dashboard timestamps
@@ -308,11 +308,14 @@ def init_db() -> None:
             )
             if _table_exists(connection, "network_devices") and not _column_exists(connection, "network_devices", "doomscroll_exempt"):
                 connection.execute("ALTER TABLE network_devices ADD COLUMN doomscroll_exempt INTEGER DEFAULT 0")
-            # Reset last_seen for entries that were populated by the old _discover_network_devices()
-            # code which set last_seen = now for all dnsmasq lease entries, making disconnected
-            # devices appear active indefinitely. The addon's update_device_activity() will
-            # repopulate last_seen for devices with real traffic.
-            connection.execute("UPDATE network_devices SET last_seen = NULL WHERE last_seen IS NOT NULL")
+            # One-time migration: reset last_seen for entries that were populated by the old
+            # _discover_network_devices() code which set last_seen = now for all dnsmasq lease
+            # entries, making disconnected devices appear active indefinitely.
+            # The addon's update_device_activity() is the only source of last_seen going forward.
+            connection.execute("CREATE TABLE IF NOT EXISTS _migrations (key TEXT PRIMARY KEY)")
+            if connection.execute("SELECT 1 FROM _migrations WHERE key = 'reset_last_seen_v1'").fetchone() is None:
+                connection.execute("UPDATE network_devices SET last_seen = NULL WHERE last_seen IS NOT NULL")
+                connection.execute("INSERT INTO _migrations (key) VALUES ('reset_last_seen_v1')")
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS throttle_events ("
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp REAL, client_ip TEXT, host TEXT, "
@@ -850,7 +853,7 @@ def get_system_interfaces() -> list:
 
     # Filter out virtual / non-physical interfaces
     if iface_names:
-        EXCLUDED_PREFIXES = ('lo', 'veth', 'docker', 'br-', 'tun', 'tap', 'wg', 'tail')
+        EXCLUDED_PREFIXES = ('lo', 'veth', 'docker', 'br-', 'tun', 'tap', 'wg')
         filtered = [iface for iface in iface_names
                     if not iface.startswith(EXCLUDED_PREFIXES)]
         if filtered:
@@ -1680,14 +1683,31 @@ def api_config_reset():
                 now_ts = time.time()
                 for key, value in CONFIG_DEFAULTS.items():
                     connection.execute("INSERT INTO config_settings (key, value, updated_at) VALUES (?, ?, ?)", (key, str(value), now_ts))
+                # Reset all throttle state and SNI logs
+                if _table_exists(connection, "throttle_state"):
+                    connection.execute("DELETE FROM throttle_state")
+                if _table_exists(connection, "sni_requests"):
+                    connection.execute("DELETE FROM sni_requests")
                 connection.commit()
             except Exception as tx_exc:
                 connection.rollback()
                 return jsonify({"error": str(tx_exc)}), 500
         
+        # Release all circuit breaker states in the running addon
+        try:
+            import importlib
+            vigilant_cb = importlib.import_module("vigilant_addon")
+            if hasattr(vigilant_cb, "release_all_circuit_breakers"):
+                vigilant_cb.release_all_circuit_breakers()
+            elif hasattr(vigilant_cb, "circuit_breaker_state"):
+                with vigilant_cb.cb_state_lock:
+                    vigilant_cb.circuit_breaker_state.clear()
+        except Exception:
+            pass
+        
         _write_dnsmasq_config(CONFIG_DEFAULTS)
         _write_netplan_config(CONFIG_DEFAULTS)
-        return jsonify({"status": "success", "message": "Configuration restored to defaults"})
+        return jsonify({"status": "success", "message": "Configuration restored to defaults, throttle state and SNI logs cleared"})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
@@ -1713,17 +1733,31 @@ def clear_loopback_sni():
 @app.route('/api/sni/clear', methods=['POST'])
 @require_auth
 def clear_all_sni():
-    """Clear ALL SNI request logs from the database."""
+    """Clear ALL SNI request logs from the database and reset circuit breaker/throttle state."""
     try:
         if not DB_PATH.exists():
             return jsonify({"status": "success", "message": "No database found"})
         with _open_db() as connection:
+            deleted_count = 0
             if _table_exists(connection, "sni_requests"):
                 cursor = connection.execute("DELETE FROM sni_requests")
                 deleted_count = cursor.rowcount
-                connection.commit()
-                return jsonify({"status": "success", "message": f"Cleared {deleted_count} SNI request logs"})
-            return jsonify({"status": "success", "message": "SNI table does not exist"})
+            # Also reset throttle_state so throttled devices are fully released
+            if _table_exists(connection, "throttle_state"):
+                connection.execute("DELETE FROM throttle_state")
+            connection.commit()
+        # Release all circuit breaker states in the running addon
+        try:
+            import importlib
+            vigilant_cb = importlib.import_module("vigilant_addon")
+            if hasattr(vigilant_cb, "release_all_circuit_breakers"):
+                vigilant_cb.release_all_circuit_breakers()
+            elif hasattr(vigilant_cb, "circuit_breaker_state"):
+                with vigilant_cb.cb_state_lock:
+                    vigilant_cb.circuit_breaker_state.clear()
+        except Exception:
+            pass
+        return jsonify({"status": "success", "message": f"Cleared {deleted_count} SNI request logs and reset throttle/circuit breaker state"})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
@@ -3056,17 +3090,26 @@ def get_nerve_center_metrics():
         nlp_enabled = _coerce_bool(config.get("nlp_enabled", "true"))
         nlp_status = "Active" if nlp_enabled else "Idle"
         
+        # Auto-detect actual system interfaces instead of trusting stale config values
+        system_ifaces = get_system_interfaces()
+        upstream_interface = system_ifaces[0] if len(system_ifaces) >= 1 else "Unknown"
+        distribution_interface = system_ifaces[1] if len(system_ifaces) >= 2 else (system_ifaces[0] if len(system_ifaces) == 1 else "Unknown")
+        
         return jsonify({
             "active_count": active_count,
             "throttled_count": throttled_count,
-            "nlp_status": nlp_status
+            "nlp_status": nlp_status,
+            "upstream_interface": upstream_interface,
+            "distribution_interface": distribution_interface
         })
     except Exception as exc:
         app.logger.error("Failed to get nerve center metrics: %s", exc)
         return jsonify({
             "active_count": 0,
             "throttled_count": 0,
-            "nlp_status": "Unknown"
+            "nlp_status": "Unknown",
+            "upstream_interface": "Unknown",
+            "distribution_interface": "Unknown"
         })
 
 
@@ -3182,7 +3225,7 @@ def _discover_network_devices() -> list:
             # Use the lease timestamp (when the lease was granted/renewed), not "now".
             # A dnsmasq lease only means an IP was assigned — the device may have
             # disconnected hours ago while the lease (24h) is still valid.
-            'last_seen': lease['timestamp'],
+            'last_seen': None,  # Only set by addon's update_device_activity() for real traffic
             'bytes': 0
         }
     

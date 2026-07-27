@@ -52,7 +52,7 @@ CB_LEVEL_FRICTION = 2        # 60s: Light throttle 256kbit
 CB_LEVEL_CIRCUIT_BREAK = 3   # 120s+: Hard throttle 32kbit
 
 CB_LEVEL_NAMES = {
-    0: "None", 1: "Pause", 2: "Friction", 3: "Circuit Break"
+    1: "Pause", 2: "Friction", 3: "Circuit Break"
 }
 
 # Escalation time windows (seconds of continuous social media activity)
@@ -63,8 +63,9 @@ CB_BREAK_SECONDS = 120
 # Cooldown period after circuit break release (seconds)
 CB_COOLDOWN_SECONDS = 120
 
-# Cooldown period after circuit break release (seconds)
-CB_COOLDOWN_SECONDS = 120
+# Sustained activity: seconds of any social media activity before the
+# slow-burn detector flags the device. RPM spikes trigger immediately.
+SUSTAINED_ACTIVITY_SECONDS = 600
 
 # Maximum total time a device can stay throttled before auto-release (seconds)
 # Prevents throttles from sticking forever due to background traffic preventing
@@ -889,7 +890,7 @@ def escalate_circuit_breaker(client_ip, domain, rpm_current=0, rpm_baseline=0):
         elapsed = now - state["first_seen"]
         
         # Determine level based on elapsed time — Level 0 (None) now removed.
-        # Once flagged, minimum level is PAUSE with immediate 4kbit throttle.
+        # Once flagged, minimum level is PAUSE with immediate 64kbit throttle.
         if elapsed >= CB_BREAK_SECONDS:
             new_level = CB_LEVEL_CIRCUIT_BREAK
         elif elapsed >= CB_FRICTION_SECONDS:
@@ -923,14 +924,14 @@ def apply_circuit_breaker_action(client_ip, domain, level, rpm_current=0, rpm_ba
         return False
     
     if level == CB_LEVEL_PAUSE:
-        # Level 1: 4kbit — persists until escalation or pause reset
+        # Level 1: 64kbit — persists until escalation or pause reset
         log_throttle(client_ip, domain, rpm_current, rpm_baseline, "CB_PAUSE", f"Circuit Breaker Level 1 - Forced Pause @ {domain}")
-        success = apply_throttle(client_ip, rate="4kbit")
+        success = apply_throttle(client_ip, rate="64kbit")
         if success:
             # No recovery timer — throttle stays until user stops for 60s
             # or circuit breaker escalates to a higher level.
             save_throttle_state(client_ip, is_throttled=True, recovery_at=0)
-            print(f"[VIGILANT] CB PAUSE: {client_ip} @ 4kbit applied (persistent)")
+            print(f"[VIGILANT] CB PAUSE: {client_ip} @ 64kbit applied (persistent)")
         return success
     
     elif level == CB_LEVEL_FRICTION:
@@ -1085,7 +1086,7 @@ def should_throttle(client_ip, host, path=""):
         # longer than the pause threshold (30s), flag them regardless of RPM.
         if not flagged and session_totals[client_ip] >= MIN_REQUESTS_BASELINE:
             session_elapsed = time.time() - session_start[client_ip]
-            if session_elapsed >= CB_PAUSE_SECONDS:
+            if session_elapsed >= SUSTAINED_ACTIVITY_SECONDS:
                 flagged = True
                 print(f"[VIGILANT] Sustained social media for {client_ip}: {session_elapsed:.0f}s active, flagging")
         
@@ -1109,7 +1110,7 @@ def should_throttle(client_ip, host, path=""):
                     print(f"[VIGILANT] Rapid spacing detect for {client_ip}: avg_gap={avg_gap:.1f}s")
                 # Per-level de-escalation: check if the user paused long enough
                 # to recover from the current throttle level.
-                # L1 (4kbit): needs 60s pause → release
+                # L1 (64kbit): needs 60s pause → release
                 # L2 (2kbit): needs 90s pause → release
                 # L3 (1kbit): needs 120s pause → release
                 max_gap = max(time_gaps) if time_gaps else 0
@@ -1295,7 +1296,7 @@ def get_distribution_interface():
     except OSError:
         pass
     
-    return "eth1"
+    return "enp1s0"
 
 def apply_throttle(client_ip, rate=None):
     """
@@ -2022,6 +2023,7 @@ class VIGILANTAddon:
                 return
 
             # 3. Extract Client IP
+            client_ip = self._extract_client_ip_from_tls(data)
             config = load_proxy_config()
             # load_proxy_config returns sni_filtering_enabled as a bool already;
             # do NOT call .lower() on it (was causing an AttributeError that silently
