@@ -1137,15 +1137,65 @@ def categorize_content(text, host=""):
 
 # ─── Traffic Control Throttling ───────────────────────────────────────
 def get_distribution_interface():
-    """Get the distribution interface from database config or use default"""
+    """Get the distribution interface from database config or auto-detect.
+    
+    First tries the database config. If that's missing or the interface doesn't
+    exist, scans /proc/net/dev for the interface that carries the gateway IP
+    (192.168.10.1). This ensures tc rules are applied to the correct interface
+    even if the database has stale defaults like "eth1".
+    """
     try:
         conn = _connect_db()
         cursor = conn.execute("SELECT value FROM config_settings WHERE key = 'distribution_interface'")
         row = cursor.fetchone()
         conn.close()
-        return row[0] if row else "eth1"
+        candidate = row[0] if row else None
+        # Verify the configured interface actually exists
+        if candidate:
+            try:
+                with open("/proc/net/dev") as f:
+                    for line in f:
+                        if line.strip().startswith(candidate + ":"):
+                            return candidate
+            except OSError:
+                pass
     except Exception:
-        return "eth1"
+        pass
+    
+    # Auto-detect: find the interface with the LAN gateway IP (192.168.10.1)
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["ip", "-4", "addr", "show"],
+            capture_output=True, text=True, check=False, timeout=3
+        )
+        current_iface = None
+        for line in result.stdout.split("\n"):
+            # Line with interface name: "2: enp1s0: <BROADCAST,...>"
+            if ": " in line and "state" in line:
+                parts = line.split(":")
+                if len(parts) >= 2:
+                    name = parts[1].strip().split()[0] if parts[1].strip() else None
+                    if name:
+                        current_iface = name
+            # Line with IP address: "    inet 192.168.10.1/24 ..."
+            if current_iface and "inet 192.168.10." in line:
+                return current_iface
+    except Exception:
+        pass
+    
+    # Last resort: scan /proc/net/dev for any eth/en interface that's UP
+    try:
+        with open("/proc/net/dev") as f:
+            for line in f:
+                if "eth" in line or "enp" in line or "enx" in line:
+                    iface = line.split(":")[0].strip()
+                    if iface and iface != "lo":
+                        return iface
+    except OSError:
+        pass
+    
+    return "eth1"
 
 def apply_throttle(client_ip, rate=None):
     """
@@ -1225,7 +1275,7 @@ def apply_throttle(client_ip, rate=None):
         print(f"[VIGILANT] Throttling applied to {client_ip} on {interface} at {throttle_rate} burst=16k (classId={class_id})")
         return True
     except Exception as e:
-        print(f"[VIGILANT] Throttling failed for {client_ip}: {e}")
+        print(f"[VIGILANT] Throttling FAILED for {client_ip} on {interface}: {e}")
         return False
 
 def remove_throttle(client_ip, client_ip_only=False):
