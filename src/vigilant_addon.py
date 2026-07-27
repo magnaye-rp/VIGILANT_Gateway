@@ -823,10 +823,9 @@ def apply_circuit_breaker_action(client_ip, domain, level, rpm_current=0, rpm_ba
         return False
     
     if level == CB_LEVEL_PAUSE:
-        # Level 1: Brief bandwidth pause
+        # Level 1: 4kbit = 512 B/s — barely enough for text, videos impossible
         log_throttle(client_ip, domain, rpm_current, rpm_baseline, "CB_PAUSE", f"Circuit Breaker Level 1 - Forced Pause @ {domain}")
-        # Apply a brief 128kbit throttle for 10 seconds as a "pause" intervention
-        success = apply_throttle(client_ip, rate="128kbit")
+        success = apply_throttle(client_ip, rate="4kbit")
         if success:
             save_throttle_state(client_ip, is_throttled=True, recovery_at=time.time() + 10)
             recovery_timer = threading.Timer(10, remove_throttle_cycle, args=[client_ip])
@@ -838,9 +837,9 @@ def apply_circuit_breaker_action(client_ip, domain, level, rpm_current=0, rpm_ba
         return success
     
     elif level == CB_LEVEL_FRICTION:
-        # Level 2: Moderate throttle 256kbit for 30 seconds
+        # Level 2: 2kbit = 256 B/s — text loads slowly, images stall
         log_throttle(client_ip, domain, rpm_current, rpm_baseline, "CB_FRICTION", f"Circuit Breaker Level 2 - Bandwidth Friction @ {domain}")
-        success = apply_throttle(client_ip, rate="256kbit")
+        success = apply_throttle(client_ip, rate="2kbit")
         if success:
             save_throttle_state(client_ip, is_throttled=True, recovery_at=time.time() + 30)
             recovery_timer = threading.Timer(30, remove_throttle_cycle, args=[client_ip])
@@ -848,13 +847,13 @@ def apply_circuit_breaker_action(client_ip, domain, level, rpm_current=0, rpm_ba
                 _cancel_timer(client_ip)
                 throttle_timers[client_ip] = recovery_timer
             recovery_timer.start()
-            print(f"[VIGILANT] CB FRICTION: {client_ip} - 30s @ 256kbit applied")
+            print(f"[VIGILANT] CB FRICTION: {client_ip} - 30s @ 2kbit applied")
         return success
     
     elif level == CB_LEVEL_CIRCUIT_BREAK:
-        # Level 3: Full hard throttle 32kbit for 2 minutes with cooldown
+        # Level 3: 1kbit = 128 B/s — completely unusable
         log_throttle(client_ip, domain, rpm_current, rpm_baseline, "CB_CIRCUIT_BREAK", f"Circuit Breaker Level 3 - Hard Circuit Break @ {domain}")
-        success = apply_throttle(client_ip, rate="32kbit")
+        success = apply_throttle(client_ip, rate="1kbit")
         if success:
             recovery_duration = 120  # 2 minutes
             save_throttle_state(client_ip, is_throttled=True, recovery_at=time.time() + recovery_duration)
@@ -867,7 +866,7 @@ def apply_circuit_breaker_action(client_ip, domain, level, rpm_current=0, rpm_ba
             with cb_state_lock:
                 if client_ip in circuit_breaker_state:
                     circuit_breaker_state[client_ip]["cooldown_until"] = time.time() + recovery_duration + CB_COOLDOWN_SECONDS
-            print(f"[VIGILANT] CB CIRCUIT BREAK: {client_ip} - 120s @ 32kbit + {CB_COOLDOWN_SECONDS}s cooldown")
+            print(f"[VIGILANT] CB CIRCUIT BREAK: {client_ip} - 120s @ 1kbit + {CB_COOLDOWN_SECONDS}s cooldown")
         return success
     
     return False
@@ -1210,7 +1209,14 @@ def apply_throttle(client_ip, rate=None):
         bool: True if throttle applied successfully, False otherwise
     """
     config = load_proxy_config()
-    throttle_rate = rate or config['throttle_rate']
+    # Use the explicit rate if provided (e.g. from circuit breaker),
+    # otherwise fall back to the configured default from the database.
+    # NOTE: we check `rate is not None` rather than `rate or ...` because
+    # an empty string "" is falsy but should be treated as a valid rate.
+    if rate is not None:
+        throttle_rate = str(rate)
+    else:
+        throttle_rate = config['throttle_rate']
     interface = get_distribution_interface()
     
     # Derive a unique classId from the client IP (1:10 through 1:fffe)
@@ -1234,15 +1240,13 @@ def apply_throttle(client_ip, rate=None):
         remove_throttle(client_ip)
 
         # Add a dedicated class for this client IP.
-        # burst=16k allows the first 2KB-16KB of a TCP flow through at line rate
-        # so initial HTTP request line / TLS handshake complete quickly, then the
-        # steady rate kicks in.  This is critical for user-perceptible throttle:
-        # pages partially render (text/headers) but images and video stall.
-        # cburst=16k applies the same burst control to the ceil limit.
+        # burst=2k allows only ~2KB at line rate before the throttle kicks in.
+        # This means the TCP handshake completes but the very first data packet
+        # gets shaped, making throttling immediately noticeable.
         result = subprocess.run(
             ["tc", "class", "add", "dev", interface, "parent", "1:", "classid", class_id,
              "htb", "rate", throttle_rate, "ceil", throttle_rate,
-             "burst", "16k", "cburst", "16k"],
+             "burst", "2k", "cburst", "2k"],
             check=False, capture_output=True, text=True
         )
         if result.returncode != 0:
