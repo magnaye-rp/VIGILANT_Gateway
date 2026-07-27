@@ -44,6 +44,7 @@ DEFAULT_VELOCITY_THRESHOLD = 1.5
 DEFAULT_THROTTLE_RATE = "32kbit"
 DEFAULT_PINNED_DOMAINS = "facebook.com,twitter.com,x.com,tiktok.com,instagram.com,reddit.com,youtube.com"
 MIN_REQUESTS_BASELINE = 10
+MIN_SOCIAL_REQUESTS_BASELINE = 30  # Social requests needed before flagging (immune to app-load bursts)
 
 # --- Circuit Breaker Escalation System ----------------------------
 CB_LEVEL_NONE = 0
@@ -68,9 +69,9 @@ CB_COOLDOWN_SECONDS = 120
 SUSTAINED_ACTIVITY_SECONDS = 600
 
 # Maximum total time a device can stay throttled before auto-release (seconds)
-# Prevents throttles from sticking forever due to background traffic preventing
-# the 3-minute pause reset from triggering.
-CB_MAX_THROTTLE_DURATION = 300
+# Safety net: if background traffic prevents the de-escalation pause from
+# triggering, the throttle eventually releases after this duration.
+CB_MAX_THROTTLE_DURATION = 600
 
 # Maximum payload body size before falling back to sampled scanning.
 MAX_PAYLOAD_SIZE = 5 * 1024 * 1024      # hard cap before we stop trying to fully decode
@@ -82,9 +83,9 @@ SAMPLE_SUFFIX_BYTES = 256 * 1024        # ~256KB from the end (catches trailing 
 # This replaces the old single-value CB_NO_PAUSE_SECONDS which never fired because
 # phones make background requests (iCloud, notifications) every 30-60 seconds.
 CB_DEESCALATION_SECONDS = {
-    CB_LEVEL_PAUSE: 60,          # L1 (4kbit):  60s pause → release
+    CB_LEVEL_PAUSE: 60,          # L1 (128kbit): 60s pause → release
     CB_LEVEL_FRICTION: 90,       # L2 (2kbit):  90s pause → release
-    CB_LEVEL_CIRCUIT_BREAK: 120  # L3 (1kbit): 120s pause → release
+    CB_LEVEL_CIRCUIT_BREAK: 300  # L3 (1kbit): 300s (5 min) pause → release
 }
 
 
@@ -816,6 +817,17 @@ def compute_sni_velocity(client_ip, domain):
 request_history   = defaultdict(lambda: deque())
 session_totals    = defaultdict(int)
 session_start     = defaultdict(float)
+
+# Social-only tracking — immune to DNS/iCloud/Google noise.
+# Only counts requests to social media domains (fb, ig, tiktok, etc.).
+# This prevents the initial app-load burst (50+ requests in 2s when
+# opening Instagram) from looking like an RPM spike against a low
+# baseline. By the time 30 social requests accumulate, the burst
+# has passed and normal scrolling patterns emerge.
+social_request_history = defaultdict(lambda: deque())
+social_session_totals  = defaultdict(int)
+social_session_start   = defaultdict(float)
+
 throttled_clients = set()
 throttled_clients_lock = threading.Lock()
 velocity_lock     = threading.Lock()
@@ -890,7 +902,7 @@ def escalate_circuit_breaker(client_ip, domain, rpm_current=0, rpm_baseline=0):
         elapsed = now - state["first_seen"]
         
         # Determine level based on elapsed time — Level 0 (None) now removed.
-        # Once flagged, minimum level is PAUSE with immediate 64kbit throttle.
+        # Once flagged, minimum level is PAUSE with immediate 128kbit throttle.
         if elapsed >= CB_BREAK_SECONDS:
             new_level = CB_LEVEL_CIRCUIT_BREAK
         elif elapsed >= CB_FRICTION_SECONDS:
@@ -924,14 +936,14 @@ def apply_circuit_breaker_action(client_ip, domain, level, rpm_current=0, rpm_ba
         return False
     
     if level == CB_LEVEL_PAUSE:
-        # Level 1: 64kbit — persists until escalation or pause reset
+        # Level 1: 128kbit — persists until escalation or pause reset
         log_throttle(client_ip, domain, rpm_current, rpm_baseline, "CB_PAUSE", f"Circuit Breaker Level 1 - Forced Pause @ {domain}")
-        success = apply_throttle(client_ip, rate="64kbit")
+        success = apply_throttle(client_ip, rate="128kbit")
         if success:
             # No recovery timer — throttle stays until user stops for 60s
             # or circuit breaker escalates to a higher level.
             save_throttle_state(client_ip, is_throttled=True, recovery_at=0)
-            print(f"[VIGILANT] CB PAUSE: {client_ip} @ 64kbit applied (persistent)")
+            print(f"[VIGILANT] CB PAUSE: {client_ip} @ 128kbit applied (persistent)")
         return success
     
     elif level == CB_LEVEL_FRICTION:
@@ -944,22 +956,15 @@ def apply_circuit_breaker_action(client_ip, domain, level, rpm_current=0, rpm_ba
         return success
     
     elif level == CB_LEVEL_CIRCUIT_BREAK:
-        # Level 3: 1kbit — lasts 2 minutes, then cooldown
+        # Level 3: 1kbit — persists until user stops for 5 minutes.
+        # No timer — relies solely on the de-escalation pause check
+        # in should_throttle(). This forces the user to genuinely put
+        # their device down rather than just waiting out a countdown.
         log_throttle(client_ip, domain, rpm_current, rpm_baseline, "CB_CIRCUIT_BREAK", f"Circuit Breaker Level 3 - Hard Circuit Break @ {domain}")
         success = apply_throttle(client_ip, rate="1kbit")
         if success:
-            recovery_duration = 120
-            save_throttle_state(client_ip, is_throttled=True, recovery_at=time.time() + recovery_duration)
-            # Only Level 3 gets a recovery timer — the "cool off" period
-            recovery_timer = threading.Timer(recovery_duration, remove_throttle_cycle, args=[client_ip])
-            with throttle_timers_lock:
-                _cancel_timer(client_ip)
-                throttle_timers[client_ip] = recovery_timer
-            recovery_timer.start()
-            with cb_state_lock:
-                if client_ip in circuit_breaker_state:
-                    circuit_breaker_state[client_ip]["cooldown_until"] = time.time() + recovery_duration + CB_COOLDOWN_SECONDS
-            print(f"[VIGILANT] CB CIRCUIT BREAK: {client_ip} - 120s @ 1kbit + {CB_COOLDOWN_SECONDS}s cooldown")
+            save_throttle_state(client_ip, is_throttled=True, recovery_at=0)
+            print(f"[VIGILANT] CB CIRCUIT BREAK: {client_ip} @ 1kbit applied (persistent, needs 5 min pause)")
         return success
     
     return False
@@ -1022,6 +1027,9 @@ def _cleanup_stale_velocity_state():
             del request_history[ip]
             session_totals.pop(ip, None)
             session_start.pop(ip, None)
+            social_request_history.pop(ip, None)
+            social_session_totals.pop(ip, None)
+            social_session_start.pop(ip, None)
 
 def should_throttle(client_ip, host, path=""):
     config = load_proxy_config()
@@ -1067,12 +1075,29 @@ def should_throttle(client_ip, host, path=""):
     if not is_social:
         return False, rpm_now, rpm_base
 
+    # ── Social-only tracking: accumulate velocity for social media
+    # domains separately from the global request_history. This prevents
+    # the initial app-load burst (50+ requests in 2s when opening
+    # Instagram/TikTok) from triggering the RPM spike detector against
+    # a low baseline. By the time 30 social requests accumulate, the
+    # burst has passed and normal scrolling patterns emerge.
+    with velocity_lock:
+        if social_session_start[client_ip] == 0:
+            social_session_start[client_ip] = time.time()
+        sdq = social_request_history[client_ip]
+        now = time.time()
+        while sdq and now - sdq[0] > VELOCITY_WINDOW:
+            sdq.popleft()
+        sdq.append(now)
+        social_session_totals[client_ip] += 1
+        social_count = social_session_totals[client_ip]
+
+    if social_count < MIN_SOCIAL_REQUESTS_BASELINE:
+        return False, rpm_now, rpm_base
+
     # Optional: YouTube / IG short-form detection
     is_youtube = "youtube.com" in clean_host or "googlevideo.com" in clean_host
     if is_youtube and not ("/shorts/" in path or "shorts" in path):
-        return False, rpm_now, rpm_base
-
-    if session_totals[client_ip] < MIN_REQUESTS_BASELINE:
         return False, rpm_now, rpm_base
 
     flagged = (rpm_now > (rpm_base * network_velocity_threshold)) or (rpm_now > physical_scroll_threshold)
@@ -1080,39 +1105,43 @@ def should_throttle(client_ip, host, path=""):
     # Combined spacing check + sustained activity detector
     # (single velocity_lock to avoid nesting issues)
     with velocity_lock:
-        dq = request_history[client_ip]
+        sdq = social_request_history[client_ip]
         
         # Sustained activity detector: if the user has been on social media for
-        # longer than the pause threshold (30s), flag them regardless of RPM.
-        if not flagged and session_totals[client_ip] >= MIN_REQUESTS_BASELINE:
-            session_elapsed = time.time() - session_start[client_ip]
-            if session_elapsed >= SUSTAINED_ACTIVITY_SECONDS:
+        # longer than SUSTAINED_ACTIVITY_SECONDS (10 min), flag them regardless of RPM.
+        if not flagged and social_count >= MIN_SOCIAL_REQUESTS_BASELINE:
+            social_elapsed = time.time() - social_session_start[client_ip]
+            if social_elapsed >= SUSTAINED_ACTIVITY_SECONDS:
                 flagged = True
-                print(f"[VIGILANT] Sustained social media for {client_ip}: {session_elapsed:.0f}s active, flagging")
+                print(f"[VIGILANT] Sustained social media for {client_ip}: {social_elapsed:.0f}s active, flagging")
         
         # Burst detection (only if already flagged)
-        if flagged and len(dq) >= physical_scroll_threshold:
-            time_for_threshold_reqs = time.time() - dq[-physical_scroll_threshold]
+        if flagged and len(sdq) >= physical_scroll_threshold:
+            sdq_list_burst = list(sdq)
+            time_for_threshold_reqs = time.time() - sdq_list_burst[-physical_scroll_threshold]
             if time_for_threshold_reqs < 10:
                 print(f"[VIGILANT] Burst detected for {client_ip}: "
-                      f"{physical_scroll_threshold} requests in {time_for_threshold_reqs:.1f}s")
+                      f"{physical_scroll_threshold} social requests in {time_for_threshold_reqs:.1f}s")
         
-        # Spacing check: if avg gap between requests < 20s, flag
-        if len(dq) >= 10:
+        # Spacing check: if avg gap between social requests < 30s, flag.
+        # Uses social-only deque so DNS/iCloud bursts don't create false positives.
+        social_elapsed = time.time() - social_session_start[client_ip]
+        if len(sdq) >= 10 and social_elapsed >= 90:
+            sdq_list = list(sdq)
             time_gaps = []
-            for i in range(len(dq) - 1):
-                gap = dq[i + 1] - dq[i]
+            for i in range(len(sdq_list) - 1):
+                gap = sdq_list[i + 1] - sdq_list[i]
                 time_gaps.append(gap)
             if time_gaps:
                 avg_gap = sum(time_gaps) / len(time_gaps)
-                if avg_gap < 20:
+                if avg_gap < 30:
                     flagged = True
-                    print(f"[VIGILANT] Rapid spacing detect for {client_ip}: avg_gap={avg_gap:.1f}s")
+                    print(f"[VIGILANT] Rapid spacing detect for {client_ip}: avg_gap={avg_gap:.1f}s (social-only)")
                 # Per-level de-escalation: check if the user paused long enough
                 # to recover from the current throttle level.
-                # L1 (64kbit): needs 60s pause → release
-                # L2 (2kbit): needs 90s pause → release
-                # L3 (1kbit): needs 120s pause → release
+                # L1 (128kbit): needs 60s pause → release
+                # L2 (2kbit):   needs 90s pause → release
+                # L3 (1kbit):   needs 300s (5 min) pause → release
                 max_gap = max(time_gaps) if time_gaps else 0
                 with cb_state_lock:
                     current_level = circuit_breaker_state.get(client_ip, {}).get("level", CB_LEVEL_NONE)

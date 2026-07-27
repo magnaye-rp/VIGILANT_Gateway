@@ -16,7 +16,7 @@
               <label class="mode-card" id="mode-card-relaxed" onclick="selectBehavioralMode('relaxed')" style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid transparent; border-radius: 10px; cursor: pointer; transition: all 0.15s;">
                 <i class="fa-solid fa-face-smile" style="font-size: 1.5rem; color: var(--success);"></i>
                 <div style="font-weight: 600;">Relaxed</div>
-                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">10 min steady scroll or RPM spike triggers throttle. 60s pause clears. Light 64kbit.</div>
+                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">10 min steady scroll or RPM spike triggers throttle. 60s pause clears. Light 128kbit.</div>
                 <input type="radio" name="mode" value="relaxed" style="display: none;">
               </label>
               <label class="mode-card" id="mode-card-balanced" onclick="selectBehavioralMode('balanced')" style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid var(--primary); border-radius: 10px; cursor: pointer; transition: all 0.15s;">
@@ -137,7 +137,7 @@
                   </label>
                   <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
                     <div style="flex: 1; min-width: 90px;">
-                      <label style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">L1 Pause (64kbit)</label>
+                      <label style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">L1 Pause (128kbit)</label>
                       <select id="adv-deescalation-l1" style="width: 100%;">
                         <option value="30">30s</option>
                         <option value="60" selected>60s</option>
@@ -161,9 +161,9 @@
                       <select id="adv-deescalation-l3" style="width: 100%;">
                         <option value="60">60s</option>
                         <option value="90">90s</option>
-                        <option value="120" selected>120s</option>
+                        <option value="120">120s</option>
                         <option value="180">180s</option>
-                        <option value="300">300s</option>
+                        <option value="300" selected>300s (5 min)</option>
                       </select>
                     </div>
                   </div>
@@ -189,7 +189,7 @@
                   <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
                     <div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Level 1 • Pause</div>
                     <div style="font-weight: 600; font-size: 0.95rem;">RPM spike or 10 min</div>
-                    <div style="font-size: 0.75rem; color: var(--text-secondary);">64kbit • pause 60s to release</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">128kbit • pause 60s to release</div>
                   </div>
                   <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
                     <div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Level 2 • Friction</div>
@@ -199,7 +199,7 @@
                   <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
                     <div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Level 3 • Circuit Break</div>
                     <div style="font-weight: 600; font-size: 0.95rem;">120s at L2</div>
-                    <div style="font-size: 0.75rem; color: var(--text-secondary);">1kbit • pause 120s to release</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">1kbit • pause 5 min to release</div>
                   </div>
                   <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
                     <div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Recovery</div>

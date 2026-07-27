@@ -771,7 +771,7 @@ async function loadBehavioralSettings() {
     const deL3 = document.getElementById('adv-deescalation-l3');
     if (deL1) deL1.value = String(data.deescalation_l1 || 60);
     if (deL2) deL2.value = String(data.deescalation_l2 || 90);
-    if (deL3) deL3.value = String(data.deescalation_l3 || 120);
+    if (deL3) deL3.value = String(data.deescalation_l3 || 300);
 
     updateBehavioralPreview();
   } catch (e) {
@@ -789,9 +789,9 @@ const BEHAVIORAL_PRESETS = {
     rpm_cap: 300,
     deescalation_l1: 60,
     deescalation_l2: 90,
-    deescalation_l3: 120,
+    deescalation_l3: 300,
     throttle_rate: '64',
-    description: '10 min sustained or RPM spike triggers. Easy recovery (60s pause). Light 64kbit throttle.'
+    description: '10 min sustained or RPM spike triggers. Easy recovery (60s pause). Light 128kbit throttle.'
   },
   balanced: {
     network_velocity_preset: 'Medium',
@@ -800,7 +800,7 @@ const BEHAVIORAL_PRESETS = {
     rpm_cap: 180,
     deescalation_l1: 60,
     deescalation_l2: 90,
-    deescalation_l3: 120,
+    deescalation_l3: 300,
     throttle_rate: '32',
     description: 'Default. 10 min sustained or RPM spike triggers. Moderate recovery (60-120s).'
   },
@@ -908,7 +908,7 @@ async function saveBehavioralSettings(event) {
       // Per-level de-escalation pauses
       deescalation_l1: document.getElementById('adv-deescalation-l1')?.value || '60',
       deescalation_l2: document.getElementById('adv-deescalation-l2')?.value || '90',
-      deescalation_l3: document.getElementById('adv-deescalation-l3')?.value || '120'
+      deescalation_l3: document.getElementById('adv-deescalation-l3')?.value || '300'
     };
   } else {
     const preset = BEHAVIORAL_PRESETS[mode] || BEHAVIORAL_PRESETS.balanced;
@@ -922,7 +922,7 @@ async function saveBehavioralSettings(event) {
       throttle_rate: preset.throttle_rate || '32',
       deescalation_l1: String(preset.deescalation_l1 || 60),
       deescalation_l2: String(preset.deescalation_l2 || 90),
-      deescalation_l3: String(preset.deescalation_l3 || 120)
+      deescalation_l3: String(preset.deescalation_l3 || 300)
     };
   }
 
