@@ -380,6 +380,12 @@ def init_db():
     except sqlite3.Error:
         pass
 
+    # Clean up any loopback entries that may have been stored before the guard was added
+    try:
+        c.execute("DELETE FROM network_devices WHERE ip_address LIKE '127.%' OR ip_address = '::1'")
+    except sqlite3.Error:
+        pass
+
     conn.commit()
     conn.close()
 
@@ -591,7 +597,11 @@ def log_request(client_ip, host, path, method, category, flagged, entities, bloc
         print(f"[VIGILANT] Unexpected error in log_request: {e}")
 
 def update_device_activity(client_ip):
-    """Update or insert the last_seen timestamp for a device in network_devices."""
+    """Update or insert the last_seen timestamp for a device in network_devices.
+    Skips loopback addresses (127.0.0.1, ::1) which appear in transparent proxy
+    mode when iptables REDIRECT causes peername to resolve to localhost."""
+    if not client_ip or client_ip.startswith("127.") or client_ip == "::1":
+        return
     try:
         with db_lock:
             conn = _connect_db()
