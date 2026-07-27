@@ -1,0 +1,13 @@
+# VIGILANT Gateway - Log rotation configuration
+# Install: sudo cp vigilant-logrotate /etc/logrotate.d/vigilant
+
+/home/vigilant-admin/vigilant_gateway/logs/*.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    maxsize 50M
+}

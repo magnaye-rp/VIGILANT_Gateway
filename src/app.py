@@ -1,4 +1,5 @@
 import os
+import secrets
 import sqlite3
 import subprocess
 import time
@@ -7,11 +8,18 @@ import importlib.util
 import csv
 import io
 import socket
+import functools
 import ipaddress
 from contextlib import contextmanager
 from pathlib import Path
 import json
-from flask import Flask, jsonify, render_template, request, make_response, send_file, redirect, flash, url_for
+from flask import (
+    Flask, jsonify, render_template, request, make_response,
+    send_file, redirect, flash, url_for, session
+)
+
+# Password hashing using werkzeug (ships with Flask)
+from werkzeug.security import generate_password_hash, check_password_hash
 
 # Global network interface configuration - can be overridden via environment variable
 GATEWAY_INTERFACE = os.getenv("GATEWAY_INTERFACE", "eth1")
@@ -57,8 +65,28 @@ app = Flask(
     template_folder=str(TEMPLATE_DIR),
     static_folder=str(STATIC_DIR)
 )
-CORS(app, resources={r"/*": {"origins": "*"}})
-app.secret_key = "super_secret_vigilant_key"
+# Allow credentials for session-based auth
+CORS(app, resources={r"/api/*": {"origins": "*", "supports_credentials": True}})
+
+# Generate a persistent secret key — stored in a file so it survives restarts.
+# Falls back to a random key each startup if file is unwritable (sessions invalidate).
+_SECRET_KEY_FILE = LOG_DIR / ".secret_key"
+if _SECRET_KEY_FILE.exists():
+    app.secret_key = _SECRET_KEY_FILE.read_text().strip()
+else:
+    app.secret_key = secrets.token_hex(32)
+    try:
+        _SECRET_KEY_FILE.write_text(app.secret_key)
+    except OSError:
+        pass
+
+# Session configuration
+app.config.update(
+    SESSION_COOKIE_NAME="vigilant_session",
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    PERMANENT_SESSION_LIFETIME=28800,  # 8 hours
+)
 
 SERVER_IP = "192.168.10.1"
 PRODUCTION_DB_PATH = Path("/home/vigilant-admin/vigilant_gateway/logs/vigilant.db")
@@ -129,6 +157,78 @@ DEFAULT_SYSTEM_METRICS = {
     "disk_percent": 52.0,
 }
 
+
+# ══════════════════════════════════════════════════════════════════
+# ─── Authentication ────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+
+def _get_password_hash() -> str | None:
+    """Retrieve the stored password hash from config_settings."""
+    try:
+        if DB_PATH.exists():
+            with _open_db() as conn:
+                if _table_exists(conn, "config_settings"):
+                    row = conn.execute(
+                        "SELECT value FROM config_settings WHERE key = ?",
+                        ("admin_password_hash",),
+                    ).fetchone()
+                    if row:
+                        return row[0]
+        return None
+    except Exception:
+        return None
+
+
+def _set_password(password: str) -> bool:
+    """Hash and store the admin password."""
+    try:
+        hashed = generate_password_hash(password)
+        with _open_db() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO config_settings (key, value, updated_at) VALUES (?, ?, ?)",
+                ("admin_password_hash", hashed, time.time()),
+            )
+            conn.commit()
+        return True
+    except Exception as exc:
+        app.logger.error("Failed to set password: %s", exc)
+        return False
+
+
+def _is_password_set() -> bool:
+    """Check whether an admin password has been configured."""
+    return _get_password_hash() is not None
+
+
+def _verify_password(password: str) -> bool:
+    """Verify a plaintext password against the stored hash."""
+    stored = _get_password_hash()
+    if stored is None:
+        return False
+    return check_password_hash(stored, password)
+
+
+def require_auth(f):
+    """Decorator: protect a route with session-based authentication.
+    
+    API routes return 401 JSON; page routes redirect to /login.
+    """
+    @functools.wraps(f)
+    def decorated(*args, **kwargs):
+        if session.get("authenticated"):
+            return f(*args, **kwargs)
+        
+        # If no password is set, redirect to setup flow instead
+        if not _is_password_set():
+            if request.path.startswith("/api/"):
+                return jsonify({"error": "No password configured", "setup_required": True, "status": 401}), 401
+            return redirect(url_for("setup_first_run"))
+        
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Authentication required", "status": 401}), 401
+        return redirect(url_for("login_page", next=request.path))
+    
+    return decorated
 
 
 def _coerce_config_value(key, val):
@@ -1143,6 +1243,7 @@ def _get_current_throttled_devices(connection: sqlite3.Connection, config: dict 
 # ==========================================
 
 @app.route('/api/stats')
+@require_auth
 def get_stats():
     """Optimized metrics controller utilizing a single database workflow block."""
     try:
@@ -1257,14 +1358,115 @@ def get_stats():
         return jsonify({"error": "Internal server error"}), 500
 
 
+# ══════════════════════════════════════════════════════════════════
+# ─── Authentication Routes ─────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+
+@app.route("/login", methods=["GET"])
+def login_page():
+    """Render the login page. If already authenticated, redirect to dashboard."""
+    if session.get("authenticated"):
+        return redirect(url_for("dashboard"))
+    # If no password is set, redirect to setup
+    if not _is_password_set():
+        return redirect(url_for("setup_first_run"))
+    return render_template("login.html", error=request.args.get("error"))
+
+
+@app.route("/api/login", methods=["POST"])
+def api_login():
+    """Authenticate with password. Returns session cookie on success."""
+    data = request.get_json(silent=True) or {}
+    password = data.get("password", "")
+
+    if not _is_password_set():
+        return jsonify({"status": "error", "error": "No password configured", "setup_required": True}), 401
+
+    if _verify_password(password):
+        session.permanent = True
+        session["authenticated"] = True
+        session["login_time"] = time.time()
+        return jsonify({"status": "success"})
+
+    return jsonify({"status": "error", "error": "Invalid password"}), 401
+
+
+@app.route("/api/logout", methods=["POST"])
+def api_logout():
+    """Clear the session and log out."""
+    session.clear()
+    return jsonify({"status": "success"})
+
+
+@app.route("/setup", methods=["GET"])
+def setup_first_run():
+    """First-run setup page: create the admin password."""
+    if _is_password_set() and not session.get("authenticated"):
+        return redirect(url_for("login_page"))
+    if _is_password_set() and session.get("authenticated"):
+        return redirect(url_for("dashboard"))
+    return render_template("setup.html", error=request.args.get("error"))
+
+
+@app.route("/api/setup-password", methods=["POST"])
+def api_setup_password():
+    """Create the initial admin password (only works if no password set yet)."""
+    if _is_password_set():
+        return jsonify({"status": "error", "error": "Password already configured"}), 400
+
+    data = request.get_json(silent=True) or {}
+    password = data.get("password", "")
+    confirm = data.get("confirm", "")
+
+    if len(password) < 6:
+        return jsonify({"status": "error", "error": "Password must be at least 6 characters"}), 400
+    if password != confirm:
+        return jsonify({"status": "error", "error": "Passwords do not match"}), 400
+
+    if _set_password(password):
+        session.permanent = True
+        session["authenticated"] = True
+        session["login_time"] = time.time()
+        return jsonify({"status": "success"})
+
+    return jsonify({"status": "error", "error": "Failed to save password"}), 500
+
+
+@app.route("/api/change-password", methods=["POST"])
+@require_auth
+def api_change_password():
+    """Change the admin password (requires current password)."""
+    data = request.get_json(silent=True) or {}
+    current = data.get("current_password", "")
+    new_pass = data.get("new_password", "")
+    confirm = data.get("confirm", "")
+
+    if not _verify_password(current):
+        return jsonify({"status": "error", "error": "Current password is incorrect"}), 403
+    if len(new_pass) < 6:
+        return jsonify({"status": "error", "error": "New password must be at least 6 characters"}), 400
+    if new_pass != confirm:
+        return jsonify({"status": "error", "error": "Passwords do not match"}), 400
+
+    if _set_password(new_pass):
+        return jsonify({"status": "success"})
+    return jsonify({"status": "error", "error": "Failed to save password"}), 500
+
+
+# ══════════════════════════════════════════════════════════════════
+# ─── Existing Routes (all protected by @require_auth) ─────────────
+# ══════════════════════════════════════════════════════════════════
+
 @app.route("/")
 @app.route('/index.html')
+@require_auth
 def dashboard():
     proxy_active = _service_statuses().get("vigilant_proxy") == "active"
     return render_template("dashboard.html", proxy_active=proxy_active, time=time)
 
 
 @app.route("/api/dashboard/summary")
+@require_auth
 def dashboard_summary():
     global _last_system_net_io, _last_system_net_time
     
@@ -1436,11 +1638,13 @@ def dashboard_summary():
 
 
 @app.route('/api/reset', methods=["POST"])
+@require_auth
 def api_reset_redirect():
     return api_config_reset()
 
 
 @app.route("/api/config/reset", methods=["POST"])
+@require_auth
 def api_config_reset():
     try:
         with _open_db() as connection:
@@ -1465,6 +1669,7 @@ def api_config_reset():
 
 
 @app.route('/api/sni/clear-loopback', methods=['POST'])
+@require_auth
 def clear_loopback_sni():
     """Clear SNI entries with loopback client IPs (127.0.0.1)"""
     try:
@@ -1482,6 +1687,7 @@ def clear_loopback_sni():
 
 
 @app.route('/api/logs/clear', methods=['POST'])
+@require_auth
 def clear_logs():
     try:
         if not DB_PATH.exists():
@@ -1502,6 +1708,7 @@ def clear_logs():
 
 
 @app.route('/api/logs/traffic', methods=["GET"])
+@require_auth
 def get_traffic_logs():
     """Fetch traffic logs with optional filtering and pagination support."""
     try:
@@ -1598,6 +1805,7 @@ def get_traffic_logs():
 
 
 @app.route('/api/logs/traffic/refresh', methods=["GET"])
+@require_auth
 def refresh_traffic_logs():
     """Lightweight endpoint for real-time log refresh using since_id or since_timestamp."""
     try:
@@ -1656,6 +1864,7 @@ def refresh_traffic_logs():
 
 
 @app.route('/api/logs/throttling', methods=["GET"])
+@require_auth
 def get_throttling_logs():
     """Fetch L4 passthrough tracking and behavioral throttling events."""
     try:
@@ -1752,6 +1961,7 @@ def get_throttling_logs():
 
 
 @app.route('/api/logs/export')
+@require_auth
 def export_logs():
     """Export L7 traffic logs or throttling/L4 tracking logs to CSV."""
     try:
@@ -1851,6 +2061,7 @@ def export_logs():
 
 
 @app.route('/api/sni/export', methods=["GET"])
+@require_auth
 def export_sni_requests():
     """Export SNI request logs to CSV. Supports same filters as get_sni_requests."""
     try:
@@ -1918,6 +2129,7 @@ def export_sni_requests():
 
 
 @app.route('/api/sni/requests', methods=["GET"])
+@require_auth
 def get_sni_requests():
     """Fetch SNI request logs with filtering and pagination support."""
     try:
@@ -1989,6 +2201,7 @@ def get_sni_requests():
 
 
 @app.route('/api/sni/scroll-rates', methods=["GET"])
+@require_auth
 def get_sni_scroll_rates():
     """Get aggregated scroll rate data for SNI requests."""
     try:
@@ -2053,6 +2266,7 @@ def get_sni_scroll_rates():
 
 
 @app.route('/api/sni/pinned-apps', methods=["GET"])
+@require_auth
 def get_sni_pinned_apps():
     """Get list of domains with SSL pinning detected."""
     try:
@@ -2084,6 +2298,7 @@ def get_sni_pinned_apps():
 
 
 @app.route('/api/config/setup/export')
+@require_auth
 def export_config():
     try:
         kw_rows = query_db("SELECT keyword FROM keyword_blacklist")
@@ -2112,6 +2327,7 @@ def export_config():
 
 
 @app.route('/api/config/setup/import', methods=['POST'])
+@require_auth
 def import_config():
     if 'config_file' not in request.files:
         return redirect(url_for('dashboard'))
@@ -2148,6 +2364,7 @@ def import_config():
 
 
 @app.route("/api/config/ui-theme", methods=["POST"])
+@require_auth
 def save_ui_theme():
     payload = request.get_json(silent=True) or {}
     theme = str(payload.get("theme", "")).strip().lower()
@@ -2158,6 +2375,7 @@ def save_ui_theme():
 
 
 @app.route("/api/config", methods=["GET"])
+@require_auth
 def api_config():
     config = load_config()
     network_config = _get_network_config()
@@ -2167,6 +2385,7 @@ def api_config():
 
 
 @app.route("/api/config/setup", methods=["GET", "POST"])
+@require_auth
 def api_config_setup():
     if request.method == "GET":
         config = load_config()
@@ -2180,6 +2399,7 @@ def api_config_setup():
 
 
 @app.route("/api/keywords", methods=["GET", "POST"])
+@require_auth
 def handle_keywords():
     if request.method == "GET":
         rows = query_db("SELECT id, keyword FROM keyword_blacklist ORDER BY keyword") or []
@@ -2201,6 +2421,7 @@ def handle_keywords():
 
 
 @app.route("/api/keywords/<int:keyword_id>", methods=["DELETE"])
+@require_auth
 def delete_keyword(keyword_id):
     try:
         with _open_db() as connection:
@@ -2217,6 +2438,7 @@ def delete_keyword(keyword_id):
 # ─── CATEGORY HINTS API ENDPOINTS ───────────────────────────────────
 
 @app.route("/api/categories/hints", methods=["GET", "POST"])
+@require_auth
 def manage_category_hints():
     if request.method == "GET":
         try:
@@ -2270,6 +2492,7 @@ def manage_category_hints():
 
 
 @app.route("/api/categories/hints/<int:hint_id>", methods=["DELETE"])
+@require_auth
 def delete_category_hint(hint_id):
     try:
         with _open_db() as conn:
@@ -2286,6 +2509,7 @@ def delete_category_hint(hint_id):
 
 
 @app.route("/api/config/behavioral", methods=["GET", "POST"])
+@require_auth
 def handle_behavioral_config():
     if request.method == "GET":
         with _open_db() as conn:
@@ -2357,6 +2581,7 @@ def handle_behavioral_config():
     return jsonify({"status": "success"})
 
 @app.route("/api/circuit-breaker/state", methods=["GET"])
+@require_auth
 def get_circuit_breaker_state():
     """Get current circuit breaker states for all active clients."""
     try:
@@ -2385,6 +2610,7 @@ def get_circuit_breaker_state():
         }), 500
 
 @app.route("/api/circuit-breaker/release", methods=["POST"])
+@require_auth
 def release_circuit_breaker():
     """Manually release a client from circuit breaker state."""
     try:
@@ -2414,11 +2640,13 @@ def release_circuit_breaker():
         }), 500
 
 @app.route("/api/devices", methods=["GET"])
+@require_auth
 def get_devices():
     return jsonify({"devices": _discover_network_devices()})
 
 
 @app.route("/api/devices/active", methods=["GET"])
+@require_auth
 def get_active_devices():
     """Get currently active devices from network_devices (last 60 seconds)"""
     try:
@@ -2459,6 +2687,7 @@ def get_active_devices():
 
 
 @app.route("/api/devices/throttled", methods=["GET"])
+@require_auth
 def get_throttled_devices():
     """Get list of currently throttled devices with their metrics."""
     try:
@@ -2485,6 +2714,7 @@ def get_throttled_devices():
 
 
 @app.route("/api/devices/release-throttle", methods=["POST"])
+@require_auth
 def release_throttle():
     """Manually release throttle for a specific device."""
     try:
@@ -2538,6 +2768,7 @@ def release_throttle():
 
 
 @app.route("/api/devices/doomscroll-exempt", methods=["POST"])
+@require_auth
 def toggle_doomscroll_exempt():
     """Toggle doomscrolling throttle exemption for a specific device."""
     try:
@@ -2591,6 +2822,7 @@ def toggle_doomscroll_exempt():
 
 
 @app.route("/api/restraints/registry", methods=["GET"])
+@require_auth
 def get_restraints_registry():
     """Get current restraints registry (alias for throttled devices)"""
     try:
@@ -2608,12 +2840,14 @@ def get_restraints_registry():
 
 
 @app.route("/api/restraints/release", methods=["POST"])
+@require_auth
 def release_restraint():
     """Release restraint for a specific device (alias for release-throttle)"""
     return release_throttle()
 
 
 @app.route("/api/devices/policy", methods=["POST"])
+@require_auth
 def set_device_policy():
     data = request.json or {}
     ip_address = data.get("ip_address")
@@ -2651,6 +2885,7 @@ def set_device_policy():
 
 
 @app.route("/api/system/control", methods=["POST"])
+@require_auth
 def system_control():
     """Execute system control commands (restart services, reload configs)"""
     try:
@@ -2728,6 +2963,7 @@ def system_control():
 
 
 @app.route("/api/interface/throughput", methods=["GET"])
+@require_auth
 def get_interface_throughput():
     """Get real-time throughput statistics for the gateway interface"""
     try:
@@ -2752,6 +2988,7 @@ def get_interface_throughput():
 
 
 @app.route("/api/nerve-center/metrics", methods=["GET"])
+@require_auth
 def get_nerve_center_metrics():
     """Get accurate metrics for VIGILANT Nerve Center display"""
     try:

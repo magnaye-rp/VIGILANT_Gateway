@@ -4,9 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>VIGILANT Gateway - Admin Dashboard</title>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <link href="{{ url_for('static', filename='vendor/fonts/inter.css') }}" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fontawesome/all.min.css') }}">
+  <script src="{{ url_for('static', filename='vendor/chartjs/chart.umd.min.js') }}"></script>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
 </head>
 <body>
@@ -59,7 +59,7 @@
         <button class="menu-toggle" onclick="toggleSidebar()">☰</button>
         <div class="header-title">VIGILANT Gateway</div>
       </div>
-      <div style="display: flex; align-items: center; gap: 1.5rem;">
+      <div style="display: flex; align-items: center; gap: 0.75rem;">
         <div class="header-status">
           <div class="status-dot"></div>
           <span>System Online</span>
@@ -70,6 +70,9 @@
               <line x1="12" y1="16" x2="12" y2="12"></line>
               <line x1="12" y1="8" x2="12.01" y2="8"></line>
           </svg>
+        </button>
+        <button onclick="handleLogout()" style="background: none; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #c7cacd; font-size: 12px; font-weight: 500; font-family: inherit; padding: 0.35rem 0.75rem; cursor: pointer; display: flex; align-items: center; gap: 0.3rem;" title="Sign out">
+          <i class="fa-solid fa-right-from-bracket"></i> Logout
         </button>
       </div>
     </header>

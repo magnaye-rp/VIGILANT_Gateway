@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VIGILANT Gateway - Login</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor</title>/fontawesome/all.min.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fonts/inter.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #1a1d23;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .login-card {
+      background: #24272e;
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 16px;
+      padding: 2.5rem 2rem;
+      width: 100%;
+      max-width: 380px;
+      text-align: center;
+    }
+    .shield {
+      width: 56px; height: 56px;
+      color: #43B3AE;
+      margin-bottom: 1rem;
+    }
+    h1 {
+      font-size: 20px; font-weight: 600;
+      color: #ffffff; margin-bottom: 0.25rem;
+    }
+    .subtitle {
+      font-size: 13px; color: #8b8f96;
+      margin-bottom: 2rem;
+    }
+    .form-group {
+      text-align: left; margin-bottom: 1.25rem;
+    }
+    .form-group label {
+      display: block;
+      font-size: 12px; font-weight: 600;
+      color: #b0b3b8; margin-bottom: 0.4rem;
+      text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .form-group input {
+      width: 100%;
+      padding: 0.65rem 0.85rem;
+      background: #1a1d23;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+      color: #ffffff;
+      font-size: 14px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .form-group input:focus {
+      border-color: #43B3AE;
+    }
+    .btn-primary {
+      width: 100%;
+      padding: 0.7rem;
+      background: #43B3AE;
+      border: none;
+      border-radius: 8px;
+      color: #ffffff;
+      font-size: 14px; font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn-primary:hover { background: #359f9a; }
+    .btn-primary:disabled {
+      opacity: 0.5; cursor: not-allowed;
+    }
+    .error-msg {
+      background: rgba(255, 80, 80, 0.12);
+      color: #ff6b6b;
+      font-size: 13px;
+      padding: 0.6rem 0.9rem;
+      border-radius: 8px;
+      margin-bottom: 1.25rem;
+      display: none;
+    }
+    .error-msg.visible { display: block; }
+    .footer {
+      margin-top: 2rem;
+      font-size: 11px; color: #5a5e66;
+    }
+    .spinner {
+      display: inline-block;
+      width: 16px; height: 16px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #ffffff;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      vertical-align: middle; margin-right: 0.4rem;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="login-card">
+    <svg class="shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <path d="M12 2l8 3v6c0 5-3.5 9-8 11-4.5-2-8-6-8-11V5l8-3z" stroke-linejoin="round"/>
+      <path d="M9 12l2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <h1>VIGILANT Gateway</h1>
+    <p class="subtitle</h1>">Enter your admin password to continue</p>
+
+    <div id="error-msg" class="error-msg"></div>
+
+    <form id="login-form" onsubmit="handleLogin(event)">
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" placeholder="Enter admin password" required autofocus>
+      </div>
+      <button type="submit" id="login-btn" class="btn-primary">Sign In</button>
+    </form>
+    <div class="footer">VIGILANT v1.0</div>
+  </div>
+
+  <script>
+    async function handleLogin(event) {
+      event.preventDefault();
+      const password = document.getElementById('password').value;
+      const btn = document.getElementById('login-btn');
+      const errorEl = document.getElementById('error-msg');
+
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span> Signing in...';
+      errorEl.classList.remove('visible');
+
+      try {
+        const resp = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password })
+        });
+        const data = await resp.json();
+
+        if (resp.ok) {
+          window.location.href = '{{ url_for("dashboard") }}';
+        } else {
+          if (data.setup_required) {
+            window.location.href = '{{ url_for("setup_first_run") }}';
+            return;
+          }
+          errorEl.textContent = data.error || 'Invalid password';
+          errorEl.classList.add('visible');
+        }
+      } catch (err) {
+        errorEl.textContent = 'Connection error. Is the dashboard running?';
+        errorEl.classList.add('visible');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Sign In';
+      }
+    }
+  </script>
+</body>
+</html>

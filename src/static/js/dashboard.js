@@ -1937,3 +1937,18 @@ async function releaseCircuitBreaker(clientIp) {
     showToast('Error releasing circuit breaker', 'danger');
   }
 }
+
+// ─── Logout Handler ───
+async function handleLogout() {
+  if (!confirm('Sign out of the VIGILANT dashboard?')) return;
+  
+  try {
+    const response = await fetch('/api/logout', { method: 'POST' });
+    if (response.ok) {
+      window.location.href = '/login';
+    }
+  } catch (error) {
+    // Even if the request fails, redirect to login
+    window.location.href = '/login';
+  }
+}
