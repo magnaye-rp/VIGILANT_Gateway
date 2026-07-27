@@ -152,7 +152,7 @@ STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_i
 TRAFFIC_CATEGORIES = ("Educational", "Productive", "Distracting", "Harmful")
 L4_TRAFFIC_CATEGORIES = ("DNS_TRACKED", "SNI_PASSTHROUGH")
 DEFAULT_THROTTLE_DURATION = 300
-ACTIVE_DEVICE_WINDOW_SECONDS = 300  # 5 minutes — a device is active if seen within this window
+ACTIVE_DEVICE_WINDOW_SECONDS = 120  # 2 minutes — a device seen within this window is considered recently active
 
 # Philippine Time (UTC+8) for dashboard timestamps
 PHT = datetime.timezone(datetime.timedelta(hours=8), name="PHT")
