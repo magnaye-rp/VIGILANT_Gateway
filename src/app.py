@@ -2689,6 +2689,45 @@ def get_circuit_breaker_state():
             "details": str(e)
         }), 500
 
+@app.route("/api/throttle/reset-all", methods=["POST"])
+@require_auth
+def reset_all_throttles():
+    """Nuclear reset: flush all tc rules, clear all scores and throttle state."""
+    try:
+        import subprocess
+        importlib = __import__('importlib')
+        vigilant = importlib.import_module("vigilant_addon")
+        
+        # 1. Nuke tc qdisc and recreate clean
+        iface = "enp1s0"
+        subprocess.run(["tc", "qdisc", "del", "dev", iface, "root"],
+                       capture_output=True, check=False)
+        subprocess.run(["tc", "qdisc", "add", "dev", iface, "root", "handle", "1:", "htb", "default", "1"],
+                       capture_output=True, check=False)
+        
+        # 2. Reset all engagement state
+        if hasattr(vigilant, "_engagement_lock"):
+            with vigilant._engagement_lock:
+                vigilant._engagement_start.clear()
+                vigilant._engagement_minutes.clear()
+                vigilant._engagement_last_request.clear()
+                vigilant._engagement_current_level.clear()
+            vigilant._previous_rate.clear()
+        
+        # 3. Clear throttled_clients set
+        if hasattr(vigilant, "throttled_clients"):
+            with vigilant.throttled_clients_lock:
+                vigilant.throttled_clients.clear()
+        
+        # 4. Clear DB throttle states
+        with _open_db() as conn:
+            conn.execute("UPDATE throttle_state SET is_throttled = 0")
+            conn.commit()
+        
+        return jsonify({"status": "success", "message": "All throttles reset"})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
 @app.route("/api/circuit-breaker/release", methods=["POST"])
 @require_auth
 def release_circuit_breaker():

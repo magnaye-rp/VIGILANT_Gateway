@@ -46,32 +46,24 @@ DEFAULT_PINNED_DOMAINS = "facebook.com,twitter.com,x.com,tiktok.com,instagram.co
 MIN_REQUESTS_BASELINE = 10
 MIN_SOCIAL_REQUESTS_BASELINE = 30  # Social requests needed before flagging (immune to app-load bursts)
 
-# --- Doomscroll Intensity Score System -------------------------------------
-# Continuous 0-100+ score that rises with rapid scrolling and decays during
-# inactivity. No state machines, no cooldowns, no pause timers. Just a fuel
-# gauge: scroll fast → score fills → throttle tightens. Stop → score drains.
+# --- Doomscroll Detection: Session-Time Model ---------------------------------
+# Real doomscrolling isn't rapid-fire requests — it's watching a reel for
+# 20-30s, swiping, watching another. Gaps are long, RPM is low. We track
+# cumulative engagement time instead of request velocity.
 
-# Score increments per flagged social request (scaled by RPM ratio)
-SCORE_PER_FLAG = 0.8          # base points per flagged request
-SCORE_RPM_BOOST = 0.2         # extra points per RPM above baseline
+# Thresholds: minutes of sustained social media engagement
+ENGAGEMENT_L1_MINUTES = 3    # 128kbit — mild nudge
+ENGAGEMENT_L2_MINUTES = 6    # 32kbit  — noticeable
+ENGAGEMENT_L3_MINUTES = 12   # 4kbit   — hard stop
 
-# Score decay when user is idle (no social requests)
-SCORE_DECAY_PER_CYCLE = 5.0    # points lost per decay cycle
-SCORE_DECAY_INTERVAL = 10.0   # seconds between decay checks
-SCORE_IDLE_THRESHOLD = 5.0    # seconds without social activity to start decaying
+# How often we check engagement (seconds)
+ENGAGEMENT_CHECK_INTERVAL = 30.0
 
-# Score → throttle level thresholds
-SCORE_L1_THRESHOLD = 10   # 128kbit — mild slowdown, barely noticeable
-SCORE_L2_THRESHOLD = 25   # 32kbit  — videos struggle, text still loads
-SCORE_L3_THRESHOLD = 50   # 4kbit   — everything crawls, user gives up
+# How long without ANY social request before engagement resets
+ENGAGEMENT_RESET_IDLE = 120  # 2 minutes of no activity = session over
 
-# Level → actual tc rate
-SCORE_LEVEL_RATE = {
-    0: None,          # no throttle
-    1: "128kbit",     # L1: Pause
-    2: "32kbit",      # L2: Friction
-    3: "4kbit",       # L3: Circuit Break
-}
+# Minimum social requests before engagement tracking starts
+ENGAGEMENT_MIN_REQUESTS = 10
 
 CB_LEVEL_NONE = 0
 CB_LEVEL_PAUSE = 1
@@ -80,12 +72,21 @@ CB_LEVEL_CIRCUIT_BREAK = 3
 
 CB_LEVEL_NAMES = {1: "Pause", 2: "Friction", 3: "Circuit Break"}
 
-# ── Score state (in-memory only, lost on restart — intentional) ──
-_intensity_score = defaultdict(float)        # client_ip → 0-100+ score
-_intensity_last_active = defaultdict(float)   # client_ip → last social request time
-_intensity_current_level = defaultdict(int)   # client_ip → active throttle level 0-3
-_intensity_lock = threading.Lock()
-_previous_rate = {}  # client_ip → last applied rate string (avoids redundant tc)
+# ── Engagement state ──
+_engagement_start = defaultdict(float)     # client_ip → when social session began
+_engagement_minutes = defaultdict(float)    # client_ip → accumulated minutes
+_engagement_last_request = defaultdict(float)  # client_ip → last social request time
+_engagement_current_level = defaultdict(int)   # client_ip → active level 0-3
+_engagement_lock = threading.Lock()
+_previous_rate = {}
+
+# Level → tc rate
+ENGAGEMENT_LEVEL_RATE = {
+    0: None,
+    1: "128kbit",
+    2: "32kbit",
+    3: "4kbit",
+}
 
 # Maximum payload body size before falling back to sampled scanning.
 MAX_PAYLOAD_SIZE = 5 * 1024 * 1024
@@ -824,116 +825,110 @@ def _mark_client_throttled(client_ip):
         return True
 
 
-def _intensity_decay_loop():
-    """Background thread: decay intensity scores when users are idle.
-    Runs every SCORE_DECAY_INTERVAL seconds. If a device hasn't made any
-    social requests in SCORE_IDLE_THRESHOLD seconds, its score drops.
-    When score crosses a threshold downward, the throttle is adjusted."""
+def _engagement_tracking_loop():
+    """Background thread: every 30s, check which devices are engaged in
+    social media and update their cumulative engagement minutes.
+    If engagement exceeds thresholds, apply/escalate throttle.
+    If idle too long, reset engagement."""
     while True:
-        time.sleep(SCORE_DECAY_INTERVAL)
+        time.sleep(ENGAGEMENT_CHECK_INTERVAL)
         try:
             now = time.time()
-            with _intensity_lock:
-                for ip in list(_intensity_score.keys()):
-                    score = _intensity_score[ip]
-                    if score <= 0:
+            with _engagement_lock:
+                for ip in list(_engagement_start.keys()):
+                    started = _engagement_start[ip]
+                    if started == 0:
                         continue
-                    idle = now - _intensity_last_active.get(ip, 0)
-                    if idle >= SCORE_IDLE_THRESHOLD:
-                        old_level = _intensity_current_level.get(ip, 0)
-                        _intensity_score[ip] = max(0, score - SCORE_DECAY_PER_CYCLE)
-                        new_level = _score_to_level(_intensity_score[ip])
-                        if new_level < old_level:
-                            _intensity_current_level[ip] = new_level
-                            if new_level == 0:
-                                print(f"[VIGILANT] DECAY: {ip} score {_intensity_score[ip]:.1f} → released")
-                                _previous_rate.pop(ip, None)
-                                remove_throttle_cycle(ip)
-                            else:
-                                rate = _score_to_rate(new_level)
+                    last_req = _engagement_last_request.get(ip, 0)
+                    idle = now - last_req
+                    
+                    # Reset if idle too long (2 min no activity = session over)
+                    if idle >= ENGAGEMENT_RESET_IDLE:
+                        old_level = _engagement_current_level.get(ip, 0)
+                        if old_level > 0:
+                            print(f"[VIGILANT] ENGAGEMENT RESET: {ip} idle {idle:.0f}s, releasing")
+                            _previous_rate.pop(ip, None)
+                            remove_throttle_cycle(ip)
+                        _engagement_start[ip] = 0
+                        _engagement_minutes[ip] = 0
+                        _engagement_current_level[ip] = 0
+                        continue
+                    
+                    # Active: accumulate engagement time
+                    elapsed = (now - started) / 60.0  # minutes
+                    if elapsed > _engagement_minutes.get(ip, 0):
+                        _engagement_minutes[ip] = elapsed
+                        new_level = _engagement_level_from_minutes(elapsed)
+                        old_level = _engagement_current_level.get(ip, 0)
+                        if new_level != old_level:
+                            _engagement_current_level[ip] = new_level
+                            if new_level > 0:
+                                rate = ENGAGEMENT_LEVEL_RATE.get(new_level)
                                 if rate and _previous_rate.get(ip) != rate:
                                     apply_throttle(ip, rate=rate)
                                     _previous_rate[ip] = rate
                                     save_throttle_state(ip, is_throttled=True, recovery_at=0)
-                                    print(f"[VIGILANT] DECAY: {ip} score {_intensity_score[ip]:.1f} → L{new_level} @ {rate}")
+                                    _mark_client_throttled(ip)
+                                    print(f"[VIGILANT] ENGAGEMENT {ip}: {elapsed:.1f}min → L{new_level} @ {rate}")
         except Exception as e:
-            print(f"[VIGILANT] Intensity decay error: {e}")
+            print(f"[VIGILANT] Engagement loop error: {e}")
             time.sleep(5)
 
 
 
-def _score_to_level(score: float) -> int:
-    """Map intensity score to circuit breaker level."""
-    if score >= SCORE_L3_THRESHOLD:
+def _engagement_level_from_minutes(minutes: float) -> int:
+    if minutes >= ENGAGEMENT_L3_MINUTES:
         return CB_LEVEL_CIRCUIT_BREAK
-    if score >= SCORE_L2_THRESHOLD:
+    if minutes >= ENGAGEMENT_L2_MINUTES:
         return CB_LEVEL_FRICTION
-    if score >= SCORE_L1_THRESHOLD:
+    if minutes >= ENGAGEMENT_L1_MINUTES:
         return CB_LEVEL_PAUSE
     return CB_LEVEL_NONE
 
 
-def _score_to_rate(level: int) -> str | None:
-    """Map circuit breaker level to tc rate string."""
-    return SCORE_LEVEL_RATE.get(level)
-
-
 def escalate_circuit_breaker(client_ip, domain, rpm_current=0, rpm_baseline=0):
-    """Update intensity score based on flagged social request.
-    Score rises with RPM ratio — faster scrolling = faster escalation."""
-    with _intensity_lock:
-        _intensity_last_active[client_ip] = time.time()
-        boost = SCORE_PER_FLAG
-        if rpm_baseline > 0:
-            ratio = rpm_current / rpm_baseline
-            boost += SCORE_RPM_BOOST * min(max(0, ratio - 1.0), 5.0)  # cap boost at 5x
-        _intensity_score[client_ip] += boost
-        new_level = _score_to_level(_intensity_score[client_ip])
-        old_level = _intensity_current_level.get(client_ip, 0)
-        if new_level != old_level:
-            _intensity_current_level[client_ip] = new_level
-            if new_level > old_level:
-                print(f"[VIGILANT] SCORE {client_ip}: {_intensity_score[client_ip]:.1f} → L{new_level} ({CB_LEVEL_NAMES[new_level]}) @ {domain}")
-        return new_level
+    """Mark social activity — engagement tracking is handled by background loop."""
+    with _engagement_lock:
+        _engagement_last_request[client_ip] = time.time()
+        if _engagement_start[client_ip] == 0:
+            _engagement_start[client_ip] = time.time()
+    return _engagement_current_level.get(client_ip, 0)
 
 
 def apply_circuit_breaker_action(client_ip, domain, level, rpm_current=0, rpm_baseline=0):
-    """Apply throttle if level changed and > 0. Skips if already at this rate."""
+    """Apply throttle if level changed. Engagement loop calls this, not request path."""
     if level == CB_LEVEL_NONE:
         return False
-    rate = _score_to_rate(level)
+    rate = ENGAGEMENT_LEVEL_RATE.get(level)
     if not rate:
         return False
     prev = _previous_rate.get(client_ip)
     if prev == rate:
-        return True  # already at this rate, skip redundant tc call
+        return True
     success = apply_throttle(client_ip, rate=rate)
     if success:
         _previous_rate[client_ip] = rate
         save_throttle_state(client_ip, is_throttled=True, recovery_at=0)
-        log_throttle(client_ip, domain, rpm_current, rpm_baseline,
-                     f"CB_{CB_LEVEL_NAMES[level].upper().replace(' ', '_')}",
-                     f"Score {_intensity_score.get(client_ip, 0):.0f} → L{level} @ {rate}")
-        print(f"[VIGILANT] THROTTLE {client_ip}: L{level} @ {rate} (score={_intensity_score.get(client_ip, 0):.1f})")
+        mins = _engagement_minutes.get(client_ip, 0)
+        print(f"[VIGILANT] ENGAGEMENT {client_ip}: {mins:.1f}min → L{level} @ {rate}")
     return success
 
 
 def release_circuit_breaker(client_ip):
-    """Manually release: reset score to 0, remove throttle."""
-    with _intensity_lock:
-        _intensity_score[client_ip] = 0
-        _intensity_current_level[client_ip] = 0
+    """Manual release: reset engagement, remove throttle."""
+    with _engagement_lock:
+        _engagement_start[client_ip] = 0
+        _engagement_minutes[client_ip] = 0
+        _engagement_current_level[client_ip] = 0
     _previous_rate.pop(client_ip, None)
     remove_throttle_cycle(client_ip)
-    print(f"[VIGILANT] Manual release: {client_ip} score reset to 0")
+    print(f"[VIGILANT] Manual release: {client_ip} engagement reset")
 
 
 def get_all_circuit_breaker_states():
-    """Return all devices with active throttles for the dashboard API."""
-    with _intensity_lock:
+    with _engagement_lock:
         result = []
-        now = time.time()
-        for ip, level in _intensity_current_level.items():
+        for ip, level in _engagement_current_level.items():
             if level == CB_LEVEL_NONE:
                 continue
             result.append({
@@ -941,8 +936,8 @@ def get_all_circuit_breaker_states():
                 "level": level,
                 "level_name": CB_LEVEL_NAMES.get(level, "Unknown"),
                 "domain": "",
-                "elapsed_seconds": round(now - _intensity_last_active.get(ip, now), 1),
-                "score": round(_intensity_score.get(ip, 0), 1),
+                "elapsed_seconds": 0,
+                "score": round(_engagement_minutes.get(ip, 0), 1),
                 "is_throttled": True
             })
         return result
@@ -1052,19 +1047,20 @@ def should_throttle(client_ip, host, path=""):
     if is_youtube and not ("/shorts/" in path or "shorts" in path):
         return False, rpm_now, rpm_base
 
-    # ── Detection: steady doomscroll only ──
-    # RPM spike catches app-load bursts (30+ connections in 1s when opening
-    # Instagram) which isn't real doomscrolling. The steady detector requires
-    # 90s of sustained 5+ social RPM — this is actual human scrolling.
+    # ── Detection: engagement-based ──
+    # Real doomscrolling = watching a reel 25s → swipe → watch 25s → swipe.
+    # RPM is low (2-4/min) but engagement is continuous. We flag when the
+    # user has been on social media for 3+ minutes with regular activity.
     with velocity_lock:
         sdq = social_request_history[client_ip]
-        social_rpm = len(sdq)  # social requests in last 60s
+        social_rpm = len(sdq)
         social_elapsed = time.time() - social_session_start[client_ip]
 
-    flagged = social_elapsed >= 90 and social_rpm >= 5
+    # Flag if: 3+ min on social media AND still making requests (1+ RPM)
+    flagged = social_elapsed >= 180 and social_rpm >= 1
 
     if flagged:
-        print(f"[VIGILANT] Steady doomscroll: {client_ip} @ {social_rpm} social RPM for {social_elapsed:.0f}s")
+        print(f"[VIGILANT] Engaged: {client_ip} @ {social_rpm} RPM for {social_elapsed:.0f}s")
 
     return flagged, rpm_now, rpm_base
 
@@ -1765,9 +1761,9 @@ class VIGILANTAddon:
         restore_thread.start()
         print("[VIGILANT] Throttle state restoration thread started")
 
-        intensity_thread = threading.Thread(target=_intensity_decay_loop, daemon=True)
-        intensity_thread.start()
-        print("[VIGILANT] Intensity score decay loop started (interval=%ss)" % SCORE_DECAY_INTERVAL)
+        engagement_thread = threading.Thread(target=_engagement_tracking_loop, daemon=True)
+        engagement_thread.start()
+        print("[VIGILANT] Engagement tracking loop started (interval=%ss)" % ENGAGEMENT_CHECK_INTERVAL)
 
     def _refresh_rule_cache(self):
         """Fetch blacklisted keywords and category hints from the database."""

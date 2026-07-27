@@ -2087,46 +2087,19 @@ async function clearSNILogs() {
 }
 
 async function resetAllThrottles() {
-  if (!confirm("Release ALL active circuit breakers and throttle states? This will restore full speed to all devices.")) return;
+  if (!confirm("Flush ALL tc rules and reset all throttle scores? Full speed restored.")) return;
 
   try {
-    // Get all active circuit breaker states
-    const cbResp = await fetch("/api/circuit-breaker/state");
-    const cbData = await cbResp.json();
-    
-    if (cbData.states && cbData.states.length > 0) {
-      for (const state of cbData.states) {
-        await fetch("/api/circuit-breaker/release", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ client_ip: state.client_ip })
-        });
-      }
+    const resp = await fetch("/api/throttle/reset-all", { method: "POST" });
+    const data = await resp.json();
+    if (resp.ok) {
+      showToast("All throttles reset — tc flushed, scores zeroed", "success");
+    } else {
+      showToast(data.error || "Reset failed", "danger");
     }
-    
-    // Also get throttled devices and release each one individually
-    const devResp = await fetch("/api/devices/throttled");
-    const devData = await devResp.json();
-    if (devData.throttled_devices) {
-      for (const dev of devData.throttled_devices) {
-        const ip = dev.client_ip || dev.ip_address;
-        if (ip) {
-          await fetch("/api/devices/release-throttle", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ip_address: ip })
-          });
-        }
-      }
-    }
-    
-    showToast("All throttles released, full speed restored", "success");
-    
-    // Reload dashboard
     if (typeof loadCircuitBreakerState === "function") loadCircuitBreakerState();
     currentSniPage = 1;
     loadSNIDashboard();
-    
   } catch (error) {
     showToast("Error resetting throttles", "danger");
   }
