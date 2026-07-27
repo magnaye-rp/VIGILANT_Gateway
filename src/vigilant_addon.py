@@ -2011,20 +2011,16 @@ class VIGILANTAddon:
             if not server_name:
                 return
 
-            # 2. Bypass check — run FIRST, before any IP extraction or logging.
-            # This ensures domains in the bypass list skip ALL processing.
-            if is_custom_bypass(server_name):
-                data.ignore_connection = True
-                return
-
-            # 3. Extract Client IP (robust fallback for transparent proxy REDIRECT)
+            # 2. Extract Client IP (robust fallback for transparent proxy REDIRECT)
             client_ip = self._extract_client_ip_from_tls(data)
             if not client_ip:
                 return
 
             update_device_activity(client_ip)
 
-            # 4. SNI Filtering & Behavioral Checks (do this BEFORE bypassing pinned apps)
+            # 3. SNI Filtering & Behavioral Checks — run for ALL domains including
+            # bypassed ones, so throttling still works on social apps while
+            # the actual SSL decryption is skipped below.
             config = load_proxy_config()
             # load_proxy_config returns sni_filtering_enabled as a bool already;
             # do NOT call .lower() on it (was causing an AttributeError that silently
@@ -2053,7 +2049,13 @@ class VIGILANTAddon:
                         print(f"[VIGILANT] TLS CB Level {level} ({CB_LEVEL_NAMES[level]}) {client_ip} @ {server_name} "
                               f"RPM={rpm_now:.1f} baseline={rpm_base:.1f} RPS={velocity_rps:.2f}")
 
-            # 5. Certificate Pinning Dynamic Bypass (AFTER logging)
+            # 4. Bypass list check — run AFTER throttling so tc rules still apply,
+            # but BEFORE TLS interception so content isn't decrypted.
+            if is_custom_bypass(server_name):
+                data.ignore_connection = True
+                return
+
+            # 5. Certificate Pinning Dynamic Bypass (AFTER logging and throttling)
             if server_name in self.pinned_hosts:
                 print(f"[VIGILANT DEBUG] SSL pinned, bypassing: {server_name}")
                 data.ignore_connection = True
