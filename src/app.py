@@ -882,6 +882,15 @@ def init_config_db() -> None:
                     "INSERT OR IGNORE INTO config_settings (key, value, updated_at) VALUES (?, ?, ?)",
                     (key, str(value), now_ts),
                 )
+            # Seed default bypass domains for SSL-pinned social apps
+            connection.execute(
+                "INSERT OR IGNORE INTO config_settings (key, value, updated_at) VALUES (?, ?, ?)",
+                ("custom_bypass_domains",
+                 "fbcdn.net,i.instagram.com,api.instagram.com,graph.instagram.com,b.i.instagram.com,"
+                 "graph.facebook.com,b-graph.facebook.com,rupload.facebook.com,"
+                 "tiktokcdn.com,tiktokv.com,api.tiktokv.com,api.tiktok.com,googlevideo.com,ytimg.com,x.com,twitter.com",
+                 now_ts),
+            )
             connection.commit()
     except sqlite3.Error as exc:
         app.logger.debug("init_config_db missing permissions or locked: %s", exc)

@@ -2295,27 +2295,24 @@ async function loadCircuitBreakerState() {
     
     panel.style.display = 'block';
     
-    // Update badge
+    // Update badge (3-level system: 1=Pause, 2=Friction, 3=Circuit Break)
     const highestLevel = Math.max(...cbData.map(s => s.level));
-    if (highestLevel >= 4) {
+    if (highestLevel >= 3) {
       badge.textContent = 'Circuit Break';
       badge.style.background = '#ff3860';
-    } else if (highestLevel >= 3) {
-      badge.textContent = 'Active';
-      badge.style.background = '#ffa500';
     } else if (highestLevel >= 2) {
-      badge.textContent = 'Paused';
+      badge.textContent = 'Friction';
       badge.style.background = '#ffa500';
     } else {
-      badge.textContent = 'Monitoring';
+      badge.textContent = 'Pause';
       badge.style.background = '#1A938A';
     }
     
     subtitle.textContent = `${cbData.length} device(s) under intervention`;
     
     // Build intervention list
-    const levelColors = {1: '#1A938A', 2: '#ffa500', 3: '#ffa500', 4: '#ff3860'};
-    const levelIcons = {1: 'fa-circle-info', 2: 'fa-pause-circle', 3: 'fa-gauge-high', 4: 'fa-bolt'};
+    const levelColors = {0: '#666', 1: '#1A938A', 2: '#ffa500', 3: '#ff3860'};
+    const levelIcons = {0: 'fa-circle', 1: 'fa-pause-circle', 2: 'fa-gauge-high', 3: 'fa-bolt'};
     
     interventions.innerHTML = cbData.map(s => `
       <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 1rem; background: var(--surface); border-radius: 8px; margin-bottom: 0.5rem; border-left: 4px solid ${levelColors[s.level] || '#1A938A'};">
@@ -2333,7 +2330,9 @@ async function loadCircuitBreakerState() {
       </div>
     `).join('');
     
-    empty.style.display = 'none';
+    // Hide the empty state if it exists
+    const empty = document.getElementById('cb-empty');
+    if (empty) empty.style.display = 'none';
   } catch (error) {
     console.error('Error loading circuit breaker state:', error);
   }
