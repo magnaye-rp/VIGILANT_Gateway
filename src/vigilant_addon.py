@@ -1,3 +1,4 @@
+import os
 import re
 import time
 import sqlite3
@@ -5,6 +6,7 @@ import threading
 import subprocess
 import urllib.parse
 from collections import defaultdict, deque
+from pathlib import Path
 try:
     from mitmproxy import ctx, http, tls
 except ImportError:
@@ -25,10 +27,6 @@ try:
     import numpy as np
 except ImportError:
     np = None
-
-# ─── Configuration ────────────────────────────────────────────────
-import os
-from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 PRODUCTION_DB_PATH = Path("/home/vigilant-admin/vigilant_gateway/logs/vigilant.db")
@@ -86,7 +84,7 @@ GLOBAL_WHITELIST = {
 
 def is_whitelisted(host: str) -> bool:
     """Check if a host (or its parent domain) is in the global whitelist."""
-    clean = host.lstrip("www.")
+    clean = host.removeprefix("www.")
     for w in GLOBAL_WHITELIST:
         if clean == w or clean.endswith('.' + w):
             return True
@@ -125,7 +123,7 @@ try:
     nlp = spacy.load("en_core_web_sm")
 except Exception as e:
     print(f"[VIGILANT] Failed to load spacy model 'en_core_web_sm': {e}")
-    print(f"[VIGILANT] NLP features will be disabled. Install with: python -m spacy download en_core_web_sm")
+    print("[VIGILANT] NLP features will be disabled. Install with: python -m spacy download en_core_web_sm")
 
 # ─── TF-IDF Classifier ─────────────────────────────────────────────
 class VigilantTFIDFClassifier:
@@ -650,6 +648,7 @@ def is_device_exempt(client_ip):
                 if row:
                     return (row[0] or 'none') == 'whitelist'
         except Exception:
+            # Migration fallback: column may not exist yet
             pass
         return False
 
@@ -832,11 +831,7 @@ def apply_circuit_breaker_action(client_ip, domain, level, rpm_current=0, rpm_ba
             save_throttle_state(client_ip, is_throttled=True, recovery_at=time.time() + 10)
             recovery_timer = threading.Timer(10, remove_throttle_cycle, args=[client_ip])
             with throttle_timers_lock:
-                if client_ip in throttle_timers:
-                    try:
-                        throttle_timers[client_ip].cancel()
-                    except Exception:
-                        pass
+                _cancel_timer(client_ip)
                 throttle_timers[client_ip] = recovery_timer
             recovery_timer.start()
             print(f"[VIGILANT] CB PAUSE: {client_ip} - 10s bandwidth pause applied")
@@ -850,11 +845,7 @@ def apply_circuit_breaker_action(client_ip, domain, level, rpm_current=0, rpm_ba
             save_throttle_state(client_ip, is_throttled=True, recovery_at=time.time() + 60)
             recovery_timer = threading.Timer(60, remove_throttle_cycle, args=[client_ip])
             with throttle_timers_lock:
-                if client_ip in throttle_timers:
-                    try:
-                        throttle_timers[client_ip].cancel()
-                    except Exception:
-                        pass
+                _cancel_timer(client_ip)
                 throttle_timers[client_ip] = recovery_timer
             recovery_timer.start()
             print(f"[VIGILANT] CB FRICTION: {client_ip} - 60s @ 256kbit applied")
@@ -869,11 +860,7 @@ def apply_circuit_breaker_action(client_ip, domain, level, rpm_current=0, rpm_ba
             save_throttle_state(client_ip, is_throttled=True, recovery_at=time.time() + recovery_duration)
             recovery_timer = threading.Timer(recovery_duration, remove_throttle_cycle, args=[client_ip])
             with throttle_timers_lock:
-                if client_ip in throttle_timers:
-                    try:
-                        throttle_timers[client_ip].cancel()
-                    except Exception:
-                        pass
+                _cancel_timer(client_ip)
                 throttle_timers[client_ip] = recovery_timer
             recovery_timer.start()
             # Set cooldown after recovery
@@ -888,8 +875,7 @@ def apply_circuit_breaker_action(client_ip, domain, level, rpm_current=0, rpm_ba
 def release_circuit_breaker(client_ip):
     """Manually release circuit breaker state for a client."""
     with cb_state_lock:
-        if client_ip in circuit_breaker_state:
-            del circuit_breaker_state[client_ip]
+        circuit_breaker_state.pop(client_ip, None)
     remove_throttle_cycle(client_ip)
     print(f"[VIGILANT] Circuit breaker released for {client_ip}")
 
@@ -973,7 +959,7 @@ def should_throttle(client_ip, host, path=""):
         "reddit.com", "redditmedia.com",
         "youtube.com", "googlevideo.com", "ytimg.com",
     }
-    clean_host = host.lstrip("www.")
+    clean_host = host.removeprefix("www.")
 
     # Match on the base domain (e.g. "facebook.com" from "graph.facebook.com")
     # AND on CDN suffixes ("fbcdn.net" matches directly)
@@ -1079,7 +1065,7 @@ def scan_text_for_keywords(text: str, keywords) -> str:
 
 def get_domain_hint(host):
     category_hints = load_category_hints()
-    clean = host.lstrip("www.")
+    clean = host.removeprefix("www.")
     for category, domains in category_hints.items():
         if any(clean == d or clean.endswith("." + d) for d in domains):
             return category, 3
@@ -1090,7 +1076,7 @@ def categorize_content(text, host=""):
     if not text:
         text = ""
 
-    hint_category, hint_score = get_domain_hint(host)
+    hint_category, _hint_score = get_domain_hint(host)
     protected_hint = hint_category in ("Educational", "Productive")
 
     config = load_proxy_config()
@@ -1133,12 +1119,10 @@ def categorize_content(text, host=""):
     # NER weighting for additional context
     if doc and doc.ents:
         for ent in doc.ents:
-            if ent.label_ in ["LAW", "WORK_OF_ART", "EVENT", "ORG", "PERSON", "GPE"]:
-                if category == "Uncategorized":
-                    category = "Educational"
-            elif ent.label_ in ["DATE", "TIME", "CARDINAL", "ORDINAL"]:
-                if category == "Uncategorized":
-                    category = "Productive"
+            if ent.label_ in {"LAW", "WORK_OF_ART", "EVENT", "ORG", "PERSON", "GPE"} and category == "Uncategorized":
+                category = "Educational"
+            elif ent.label_ in {"DATE", "TIME", "CARDINAL", "ORDINAL"} and category == "Uncategorized":
+                category = "Productive"
 
     # Utility context guard for Harmful classification
     if category == "Harmful":
@@ -1303,6 +1287,16 @@ throttle_timers_lock = threading.Lock()
 THROTTLE_CYCLE_DURATION = 600  # 10 minutes in seconds
 
 
+def _cancel_timer(client_ip):
+    """Safely cancel and remove an existing throttle timer for a client."""
+    timer = throttle_timers.pop(client_ip, None)
+    if timer is not None:
+        try:
+            timer.cancel()
+        except Exception:
+            pass
+
+
 def apply_throttle_cycle(client_ip):
     """
     Apply progressive 100% -> 10% -> 100% throttle cycle for doomscrolling detection.
@@ -1315,9 +1309,10 @@ def apply_throttle_cycle(client_ip):
     """
     # Cancel any existing timer for this client
     with throttle_timers_lock:
-        if client_ip in throttle_timers:
+        old_timer = throttle_timers.pop(client_ip, None)
+        if old_timer is not None:
             try:
-                throttle_timers[client_ip].cancel()
+                old_timer.cancel()
                 print(f"[VIGILANT] Cancelled existing throttle timer for {client_ip}")
             except Exception as e:
                 print(f"[VIGILANT] Error cancelling timer for {client_ip}: {e}")
@@ -1365,8 +1360,7 @@ def remove_throttle_cycle(client_ip):
 
     # Clean up timer
     with throttle_timers_lock:
-        if client_ip in throttle_timers:
-            del throttle_timers[client_ip]
+        throttle_timers.pop(client_ip, None)
 
     # Clean up from active throttled_clients set
     with throttled_clients_lock:
@@ -1522,8 +1516,7 @@ def tail_dnsmasq_log():
                     if "query[" in line and " from " in line:
                         parts = line.split()
                         for i, part in enumerate(parts):
-                            if part.startswith("query["):
-                                if i + 2 < len(parts):
+                            if part.startswith("query[") and i + 2 < len(parts):
                                     domain = parts[i + 1]
                                     client_ip = parts[i + 3]
                                     
@@ -1716,7 +1709,7 @@ class VIGILANTAddon:
                 cursor = conn.execute(
                     "SELECT ip_address FROM network_devices WHERE doomscroll_exempt = 1 OR policy = 'whitelist'"
                 )
-                exempt_ips = set(row[0] for row in cursor.fetchall())
+                exempt_ips = {row[0] for row in cursor.fetchall()}
             except sqlite3.OperationalError:
                 exempt_ips = set()
             conn.close()
@@ -1726,7 +1719,6 @@ class VIGILANTAddon:
                 self.cached_hints = hints
                 
                 # Sync throttled_clients set
-                global throttled_clients
                 current_set = set(currently_throttled_ips)
                 
                 # If an IP was released in DB but is still in our set, unthrottle it
@@ -1739,9 +1731,7 @@ class VIGILANTAddon:
                             
                             # Cleanup timer if it exists
                             with throttle_timers_lock:
-                                if ip in throttle_timers:
-                                    throttle_timers[ip].cancel()
-                                    del throttle_timers[ip]
+                                _cancel_timer(ip)
 
                 self._last_cache_refresh = time.time()
                 self.cached_exempt_devices = exempt_ips
@@ -1805,7 +1795,7 @@ class VIGILANTAddon:
                     print(f"[VIGILANT DEBUG] TLS client IP from peername/address: {ip}")
                     return ip
         else:
-            print(f"[VIGILANT DEBUG] TLS client_conn is None (transparent proxy may need DB fallback)")
+            print("[VIGILANT DEBUG] TLS client_conn is None (transparent proxy may need DB fallback)")
 
         # All candidates are loopback or client_conn was unavailable –
         # try resolving real client IP from active network_devices.
@@ -1823,7 +1813,7 @@ class VIGILANTAddon:
                     print(f"[VIGILANT DEBUG] TLS client IP from network_devices fallback: {row[0]}")
                     return row[0]
                 else:
-                    print(f"[VIGILANT DEBUG] network_devices fallback returned no rows")
+                    print("[VIGILANT DEBUG] network_devices fallback returned no rows")
         except Exception as exc:
             print(f"[VIGILANT DEBUG] network_devices fallback error: {exc}")
 
@@ -1831,8 +1821,8 @@ class VIGILANTAddon:
         if candidates:
             print(f"[VIGILANT] Warning: Only loopback IPs found for TLS client: {candidates} - skipping SNI logging")
         else:
-            print(f"[VIGILANT] Warning: No client IP found for TLS ClientHello - skipping SNI logging "
-                  f"(ensure devices are registered in network_devices)")
+            print("[VIGILANT] Warning: No client IP found for TLS ClientHello - skipping SNI logging "
+                  "(ensure devices are registered in network_devices)")
         return None
 
     def tls_clienthello(self, data: tls.ClientHelloData):
@@ -1897,14 +1887,14 @@ class VIGILANTAddon:
             # Uses suffix matching (not substring) to avoid a malicious site like
             # "evilapple.com" or "scam-apple.com" inadvertently bypassing MITM.
             _APPLE_DOMAINS = {"apple.com", "icloud.com", "mzstatic.com"}
-            clean_sni = server_name.lower().lstrip("www.")
+            clean_sni = server_name.lower().removeprefix("www.")
             if any(clean_sni == d or clean_sni.endswith("." + d) for d in _APPLE_DOMAINS):
                 data.ignore_connection = True
                 return
 
             # 6. Log social domain requests to traffic log (non-pinned only)
             social_domains = load_social_domains()
-            clean_sni = server_name.lstrip("www.")
+            clean_sni = server_name.removeprefix("www.")
             base = ".".join(clean_sni.split(".")[-2:])
             if any(base in d for d in social_domains):
                 log_request(client_ip, server_name, "(TLS_SNI)", "TLS", "Distracting", False, [], None)
@@ -1949,7 +1939,7 @@ class VIGILANTAddon:
                 config = load_proxy_config()
                 domain_threshold = float(config.get('tfidf_url_threshold', 0.05))
                 domain_text = sni.replace(".", " ").replace("-", " ")
-                tfidf_category, tfidf_scores = tfidf_classifier.classify(domain_text, threshold=domain_threshold)
+                tfidf_category, _tfidf_scores = tfidf_classifier.classify(domain_text, threshold=domain_threshold)
                 
                 if tfidf_category and tfidf_category.lower() in _LOGGABLE_CATEGORIES:
                     category = tfidf_category
@@ -2010,7 +2000,7 @@ class VIGILANTAddon:
         config = load_proxy_config()
         pinned_domains = config['pinned_domains']
 
-        clean_host = host.lstrip("www.")
+        clean_host = host.removeprefix("www.")
         base_domain = ".".join(clean_host.split(".")[-2:])
         is_pinned = any(base_domain in d or clean_host == d or clean_host.endswith("." + d) for d in pinned_domains)
 
@@ -2082,7 +2072,7 @@ class VIGILANTAddon:
         config = load_proxy_config()
         pinned_domains = config['pinned_domains']
 
-        clean_host = host.lstrip("www.")
+        clean_host = host.removeprefix("www.")
         base_domain = ".".join(clean_host.split(".")[-2:])
         is_pinned = any(base_domain in d or clean_host == d or clean_host.endswith("." + d) for d in pinned_domains)
 

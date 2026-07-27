@@ -1020,7 +1020,7 @@ def _format_timestamp_fields(timestamp_value) -> tuple[str, str]:
 
 
 def _decorate_traffic_log_row(row: sqlite3.Row | dict) -> dict:
-    log_dict = dict(row) if hasattr(row, "keys") else dict(row)
+    log_dict = dict(row)
     formatted_time, iso_timestamp = _format_timestamp_fields(log_dict.get("timestamp"))
     log_dict["flagged"] = bool(log_dict.get("flagged", 0))
     log_dict["formatted_time"] = formatted_time
@@ -1039,7 +1039,7 @@ def _decorate_traffic_log_row(row: sqlite3.Row | dict) -> dict:
 
 def _decorate_sni_request_row(row: sqlite3.Row | dict) -> dict:
     """Decorate SNI request row with formatted fields."""
-    log_dict = dict(row) if hasattr(row, "keys") else dict(row)
+    log_dict = dict(row)
     formatted_time, iso_timestamp = _format_timestamp_fields(log_dict.get("timestamp"))
     log_dict.update({
         "formatted_time": formatted_time,
@@ -1050,7 +1050,7 @@ def _decorate_sni_request_row(row: sqlite3.Row | dict) -> dict:
 
 
 def _decorate_throttle_event_row(row: sqlite3.Row | dict) -> dict:
-    event = dict(row) if hasattr(row, "keys") else dict(row)
+    event = dict(row)
     formatted_time, iso_timestamp = _format_timestamp_fields(event.get("timestamp"))
     action = str(event.get("action") or "THROTTLE_EVENT")
     reason = str(event.get("reason") or "").strip()
@@ -2123,9 +2123,6 @@ def export_sni_requests():
     except Exception as e:
         app.logger.error("Failed to export SNI logs: %s", e, exc_info=True)
         return jsonify({"error": "Failed to export SNI logs", "details": str(e)}), 500
-    except Exception as e:
-        app.logger.error("Failed to export logs: %s", e, exc_info=True)
-        return jsonify({"error": "Failed to export logs", "details": str(e)}), 500
 
 
 @app.route('/api/sni/requests', methods=["GET"])
