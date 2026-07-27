@@ -165,6 +165,7 @@ def is_custom_bypass(host: str) -> bool:
         clean = host.removeprefix("www.").lower()
         for domain in _cached_bypass_domains:
             if clean == domain or clean.endswith('.' + domain):
+                print(f"[VIGILANT] Custom bypass match: {host} via {domain}")
                 return True
     return False
 
@@ -2017,7 +2018,14 @@ class VIGILANTAddon:
 
             update_device_activity(client_ip)
 
-            # 3. SNI Filtering & Behavioral Checks (do this BEFORE bypassing pinned apps)
+            # 3. Bypass check for user-configured domains — skip all processing
+            # if this host is in the bypass list. Do this BEFORE any logging,
+            # velocity tracking, or throttling.
+            if is_custom_bypass(server_name):
+                data.ignore_connection = True
+                return
+
+            # 4. SNI Filtering & Behavioral Checks (do this BEFORE bypassing pinned apps)
             config = load_proxy_config()
             # load_proxy_config returns sni_filtering_enabled as a bool already;
             # do NOT call .lower() on it (was causing an AttributeError that silently
@@ -2046,14 +2054,14 @@ class VIGILANTAddon:
                         print(f"[VIGILANT] TLS CB Level {level} ({CB_LEVEL_NAMES[level]}) {client_ip} @ {server_name} "
                               f"RPM={rpm_now:.1f} baseline={rpm_base:.1f} RPS={velocity_rps:.2f}")
 
-            # 4. Certificate Pinning Dynamic Bypass (AFTER logging)
+            # 5. Certificate Pinning Dynamic Bypass (AFTER logging)
             if server_name in self.pinned_hosts:
                 print(f"[VIGILANT DEBUG] SSL pinned, bypassing: {server_name}")
                 data.ignore_connection = True
                 print(f"[VIGILANT] Dynamic L4 Passthrough activated for pinned SNI: {server_name}")
                 return
 
-            # 5. Bypass core internal Apple traffic to prevent OS-level freezes.
+            # 6. Bypass core internal Apple traffic to prevent OS-level freezes.
             # Uses suffix matching (not substring) to avoid a malicious site like
             # "evilapple.com" or "scam-apple.com" inadvertently bypassing MITM.
             _APPLE_DOMAINS = {"apple.com", "icloud.com", "mzstatic.com"}
@@ -2062,7 +2070,7 @@ class VIGILANTAddon:
                 data.ignore_connection = True
                 return
 
-            # 6. Log social domain requests to traffic log (non-pinned only)
+            # 7. Log social domain requests to traffic log (non-pinned only)
             social_domains = load_social_domains()
             clean_sni = server_name.removeprefix("www.")
             base = ".".join(clean_sni.split(".")[-2:])
