@@ -3143,7 +3143,10 @@ def _discover_network_devices() -> list:
             'ip_address': ip,
             'mac_address': lease['mac_address'],
             'hostname': lease['hostname'],
-            'last_seen': now,
+            # Use the lease timestamp (when the lease was granted/renewed), not "now".
+            # A dnsmasq lease only means an IP was assigned — the device may have
+            # disconnected hours ago while the lease (24h) is still valid.
+            'last_seen': lease['timestamp'],
             'bytes': 0
         }
     
@@ -3178,9 +3181,13 @@ def _discover_network_devices() -> list:
                     
             for ip, info in discovered_devices.items():
                 if info.get('active', True):
+                    discovered_last_seen = info.get('last_seen', now)
                     connection.execute(
-                        "INSERT INTO network_devices (ip_address, mac_address, hostname, custom_name, policy, first_seen, last_seen, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(ip_address) DO UPDATE SET last_seen = excluded.last_seen",
-                        (ip, info.get('mac_address'), info.get('hostname'), info.get('custom_name'), info.get('policy', 'none'), info.get('first_seen', now), now, now)
+                        "INSERT INTO network_devices (ip_address, mac_address, hostname, custom_name, policy, first_seen, last_seen, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT(ip_address) DO UPDATE SET "
+                        "  last_seen = MAX(excluded.last_seen, network_devices.last_seen),"
+                        "  updated_at = excluded.updated_at",
+                        (ip, info.get('mac_address'), info.get('hostname'), info.get('custom_name'), info.get('policy', 'none'), info.get('first_seen', now), discovered_last_seen, now)
                     )
             connection.commit()
     except sqlite3.Error as e:
