@@ -130,24 +130,42 @@ def is_whitelisted(host: str) -> bool:
     return False
 
 
-def is_custom_bypass(host: str) -> bool:
-    """Check if a host matches a user-configured bypass domain."""
+# In-memory cache for custom bypass domains, refreshed periodically
+_cached_bypass_domains = set()
+_cached_bypass_lock = threading.Lock()
+
+
+def _refresh_bypass_cache():
+    """Load the custom bypass domains into the module-level cache."""
     try:
         conn = _connect_db()
         cursor = conn.execute("SELECT value FROM config_settings WHERE key = 'custom_bypass_domains'")
         row = cursor.fetchone()
         conn.close()
-        if not row or not row[0]:
+        with _cached_bypass_lock:
+            _cached_bypass_domains.clear()
+            if row and row[0]:
+                for d in row[0].split(','):
+                    d = d.strip().lower()
+                    if d:
+                        _cached_bypass_domains.add(d)
+        return True
+    except Exception:
+        return False
+
+
+def is_custom_bypass(host: str) -> bool:
+    """Check if a host matches a user-configured bypass domain using the
+    in-memory cache (no database hit on every request)."""
+    if not host:
+        return False
+    with _cached_bypass_lock:
+        if not _cached_bypass_domains:
             return False
         clean = host.removeprefix("www.").lower()
-        for domain in row[0].split(','):
-            domain = domain.strip().lower()
-            if not domain:
-                continue
+        for domain in _cached_bypass_domains:
             if clean == domain or clean.endswith('.' + domain):
                 return True
-    except Exception:
-        pass
     return False
 
 
@@ -1819,6 +1837,7 @@ class VIGILANTAddon:
         _active_addon = self
         self.pinned_hosts = set()
         self._refresh_rule_cache()
+        _refresh_bypass_cache()
         print("[VIGILANT] Addon loaded. DB initialised. NLP model ready.")
 
         cache_thread = threading.Thread(target=self._cache_refresh_loop, daemon=True)
@@ -1907,6 +1926,7 @@ class VIGILANTAddon:
 
             if reload_requested or stale:
                 self._refresh_rule_cache()
+                _refresh_bypass_cache()
 
             # Periodically clean up stale velocity tracking state (every 60s)
             _cleanup_counter += 1
@@ -2106,8 +2126,9 @@ class VIGILANTAddon:
                         ("custom_bypass_domains", new_value, time.time())
                     )
                     conn.commit()
+                    conn.close()
+                    _refresh_bypass_cache()
                     print(f"[VIGILANT] Persisted {clean} to custom_bypass_domains (total: {len(existing)} domains)")
-                conn.close()
         except Exception as e:
             print(f"[VIGILANT] Failed to persist bypass domain {domain}: {e}")
 
