@@ -1714,15 +1714,12 @@ def tail_dnsmasq_log():
                                     
                                     update_device_activity(client_ip)
 
-                                    flagged, rpm_now, rpm_base = should_throttle(client_ip, domain)
-                                    if flagged and not is_device_exempt(client_ip):
-                                        level = escalate_circuit_breaker(client_ip, domain, rpm_now, rpm_base)
-                                        if level >= CB_LEVEL_PAUSE:
-                                            _mark_client_throttled(client_ip)
-                                        apply_circuit_breaker_action(client_ip, domain, level, rpm_now, rpm_base)
-                                        if level >= CB_LEVEL_PAUSE:
-                                            print(f"[VIGILANT] DNS CB Level {level} ({CB_LEVEL_NAMES[level]}) {client_ip} @ {domain} "
-                                                  f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
+                                    # DNS queries are used ONLY for velocity/RPM tracking
+                                    # and device-liveness. Throttle escalation comes from
+                                    # actual TLS/content traffic, not DNS lookups — background
+                                    # app refreshes generate DNS prefetches for social CDNs
+                                    # (graph.facebook.com etc.) even when the user is idle.
+                                    compute_velocity(client_ip)
 
                                     # DNS queries are NOT logged to traffic_log to avoid noise.
                                     # Velocity tracking (should_throttle above) and
@@ -2242,8 +2239,7 @@ class VIGILANTAddon:
             print(f"[VIGILANT] Error during keyword blacklist check: {e}")
 
         # TLS Passthrough: Check if host belongs to pinned SSL certificate domains.
-        # This now only skips CATEGORY/NLP filtering - the explicit blacklist scan
-        # above has already run regardless of pin status.
+        # Throttle check still runs for pinned domains — only content scanning is skipped.
         config = load_proxy_config()
         pinned_domains = config['pinned_domains']
 
@@ -2251,8 +2247,21 @@ class VIGILANTAddon:
         base_domain = ".".join(clean_host.split(".")[-2:])
         is_pinned = any(base_domain in d or clean_host == d or clean_host.endswith("." + d) for d in pinned_domains)
 
+        # ── Throttle check runs BEFORE pinned-domain skip ──
+        # Browser traffic for social sites must still go through doomscroll detection.
+        # Only content scanning (keyword/category) is skipped for pinned domains.
+        flagged, rpm_now, rpm_base = should_throttle(client_ip, host)
+        if flagged and not is_device_exempt(client_ip):
+            level = escalate_circuit_breaker(client_ip, host, rpm_now, rpm_base)
+            if level >= CB_LEVEL_PAUSE:
+                _mark_client_throttled(client_ip)
+            apply_circuit_breaker_action(client_ip, host, level, rpm_now, rpm_base)
+            if level >= CB_LEVEL_PAUSE:
+                print(f"[VIGILANT] HTTP CB Level {level} ({CB_LEVEL_NAMES[level]}) {client_ip} @ {host} "
+                      f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
+
         if is_pinned:
-            print(f"[VIGILANT] TLS PASSTHROUGH: {host} from {client_ip} (pinned domain, blacklist already checked)")
+            print(f"[VIGILANT] TLS PASSTHROUGH: {host} from {client_ip} (pinned domain, content scan skipped)")
             return
 
         # STEP 1: Exact Domain Evaluation - Check category hints for strict override
@@ -2289,16 +2298,6 @@ class VIGILANTAddon:
                         return
             except sqlite3.Error as e:
                 print(f"[VIGILANT] Request body keyword blacklist check failed: {e}")
-
-        flagged, rpm_now, rpm_base = should_throttle(client_ip, host)
-        if flagged and not is_device_exempt(client_ip):
-            level = escalate_circuit_breaker(client_ip, host, rpm_now, rpm_base)
-            if level >= CB_LEVEL_PAUSE:
-                _mark_client_throttled(client_ip)
-            apply_circuit_breaker_action(client_ip, host, level, rpm_now, rpm_base)
-            if level >= CB_LEVEL_PAUSE:
-                print(f"[VIGILANT] HTTP CB Level {level} ({CB_LEVEL_NAMES[level]}) {client_ip} @ {host} "
-                      f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
 
     def response(self, flow: http.HTTPFlow):
         try:
