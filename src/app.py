@@ -3,6 +3,7 @@ import secrets
 import sqlite3
 import subprocess
 import time
+import datetime
 import importlib
 import importlib.util
 import csv
@@ -151,7 +152,10 @@ STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_i
 TRAFFIC_CATEGORIES = ("Educational", "Productive", "Distracting", "Harmful")
 L4_TRAFFIC_CATEGORIES = ("DNS_TRACKED", "SNI_PASSTHROUGH")
 DEFAULT_THROTTLE_DURATION = 300
-ACTIVE_DEVICE_WINDOW_SECONDS = 60
+ACTIVE_DEVICE_WINDOW_SECONDS = 300  # 5 minutes — a device is active if seen within this window
+
+# Philippine Time (UTC+8) for dashboard timestamps
+PHT = datetime.timezone(datetime.timedelta(hours=8), name="PHT")
 DEFAULT_SYSTEM_METRICS = {
     "cpu_percent": 0.0,
     "memory_percent": 0.0,
@@ -838,9 +842,11 @@ def get_system_interfaces() -> list:
         except Exception as exc:
             app.logger.debug("Failed to get network interfaces via psutil: %s", exc)
 
-    # Filter interfaces
+    # Filter out virtual / non-physical interfaces
     if iface_names:
-        filtered = [iface for iface in iface_names if not iface.startswith(('lo', 'veth', 'docker'))]
+        EXCLUDED_PREFIXES = ('lo', 'veth', 'docker', 'br-', 'tun', 'tap', 'wg')
+        filtered = [iface for iface in iface_names
+                    if not iface.startswith(EXCLUDED_PREFIXES)]
         if filtered:
             return sorted(filtered)
 
@@ -998,7 +1004,8 @@ def save_config(updates: dict) -> None:
 def _format_recent_log_entry(log: dict) -> dict:
     timestamp_value = log.get("timestamp")
     if isinstance(timestamp_value, (int, float)):
-        formatted_time = time.strftime('%H:%M:%S', time.localtime(timestamp_value))
+        dt = datetime.datetime.fromtimestamp(timestamp_value, tz=PHT)
+        formatted_time = dt.strftime('%H:%M:%S')
     else:
         formatted_time = str(timestamp_value or "Just Now")
     return {
@@ -1012,9 +1019,10 @@ def _format_recent_log_entry(log: dict) -> dict:
 
 def _format_timestamp_fields(timestamp_value) -> tuple[str, str]:
     if isinstance(timestamp_value, (int, float)):
+        dt = datetime.datetime.fromtimestamp(timestamp_value, tz=PHT)
         return (
-            time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(timestamp_value)),
-            time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(timestamp_value)),
+            dt.strftime('%Y-%m-%d %H:%M:%S'),
+            dt.strftime('%Y-%m-%dT%H:%M:%S') + '+08:00',
         )
     fallback = str(timestamp_value or "N/A")
     return fallback, fallback
