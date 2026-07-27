@@ -48,9 +48,9 @@ MIN_SOCIAL_REQUESTS_BASELINE = 30  # Social requests needed before flagging (imm
 
 # --- Circuit Breaker Escalation System ----------------------------
 CB_LEVEL_NONE = 0
-CB_LEVEL_PAUSE = 1           # 30s: Brief bandwidth pause
-CB_LEVEL_FRICTION = 2        # 60s: Light throttle 256kbit
-CB_LEVEL_CIRCUIT_BREAK = 3   # 120s+: Hard throttle 32kbit
+CB_LEVEL_PAUSE = 1           # RPM spike or 10 min sustained: 128kbit throttle
+CB_LEVEL_FRICTION = 2        # 60s continuous at L1: 2kbit throttle
+CB_LEVEL_CIRCUIT_BREAK = 3   # 120s continuous: 1kbit hard throttle
 
 CB_LEVEL_NAMES = {
     1: "Pause", 2: "Friction", 3: "Circuit Break"
@@ -874,9 +874,20 @@ def escalate_circuit_breaker(client_ip, domain, rpm_current=0, rpm_baseline=0):
         
         state = circuit_breaker_state[client_ip]
         
-        # Check cooldown
+        # Check cooldown — if active, block all escalation
         if state.get("cooldown_until", 0) > now:
             return CB_LEVEL_NONE
+        
+        # Cooldown just expired — reset first_seen so elapsed starts fresh.
+        # Without this, the old first_seen would make elapsed huge, causing
+        # immediate re-escalation on the very next request.
+        cooldown_was_active = state.get("cooldown_until", 0) > 0
+        if cooldown_was_active and state.get("cooldown_until", 0) <= now:
+            state["cooldown_until"] = 0
+            state["first_seen"] = now
+            state["level"] = CB_LEVEL_NONE
+            state["escalation_times"] = {}
+            print(f"[VIGILANT] CB cooldown expired for {client_ip}, fresh start")
         
         # Auto-release if throttled for too long
         # Prevents the throttle from sticking forever when background traffic
@@ -970,18 +981,26 @@ def apply_circuit_breaker_action(client_ip, domain, level, rpm_current=0, rpm_ba
     return False
 
 def release_circuit_breaker(client_ip):
-    """Manually release circuit breaker state for a client."""
-    with cb_state_lock:
-        circuit_breaker_state.pop(client_ip, None)
+    """Manually release circuit breaker state for a client.
+    Sets a cooldown so the next social request doesn't immediately
+    re-trigger the throttle."""
     remove_throttle_cycle(client_ip)
-    print(f"[VIGILANT] Circuit breaker released for {client_ip}")
+    with cb_state_lock:
+        if client_ip in circuit_breaker_state:
+            circuit_breaker_state[client_ip]["cooldown_until"] = time.time() + CB_COOLDOWN_SECONDS
+            circuit_breaker_state[client_ip]["level"] = CB_LEVEL_NONE
+    print(f"[VIGILANT] Circuit breaker released for {client_ip} (cooldown {CB_COOLDOWN_SECONDS}s)")
 
 def get_all_circuit_breaker_states():
-    """Get all active circuit breaker states for API query."""
+    """Get all active circuit breaker states for API query.
+    Only returns states with level > 0 (actively throttled).
+    Cooldown/released states (level=0) are filtered out."""
     with cb_state_lock:
         result = []
         now = time.time()
         for ip, state in circuit_breaker_state.items():
+            if state["level"] == CB_LEVEL_NONE:
+                continue  # skip cooldown/released states
             elapsed = now - state["first_seen"]
             result.append({
                 "client_ip": ip,
@@ -1149,8 +1168,9 @@ def should_throttle(client_ip, host, path=""):
                 if max_gap > deescalation_gap:
                     with cb_state_lock:
                         if client_ip in circuit_breaker_state:
-                            del circuit_breaker_state[client_ip]
-                            print(f"[VIGILANT] CB RESET: {client_ip} paused {max_gap:.0f}s at L{current_level} (>{deescalation_gap}s) — releasing")
+                            circuit_breaker_state[client_ip]["cooldown_until"] = time.time() + CB_COOLDOWN_SECONDS
+                            circuit_breaker_state[client_ip]["level"] = CB_LEVEL_NONE
+                            print(f"[VIGILANT] CB RESET: {client_ip} paused {max_gap:.0f}s at L{current_level} (>{deescalation_gap}s) — releasing, {CB_COOLDOWN_SECONDS}s cooldown")
                     remove_throttle_cycle(client_ip)
                     flagged = False
 
@@ -1535,11 +1555,9 @@ def apply_throttle_cycle(client_ip):
 
 def remove_throttle_cycle(client_ip):
     """
-    Remove throttle and clean up timer for a client IP.
-    Also clears the circuit breaker state so the dashboard shows accurate info.
-    
-    Args:
-        client_ip: Client IP address to unthrottle
+    Remove tc throttle rules and clean up timer/throttled set.
+    Does NOT touch circuit_breaker_state — that's managed by
+    escalate_circuit_breaker / release_circuit_breaker so cooldowns work.
     """
     # Remove TC rules
     remove_throttle(client_ip)
@@ -1551,10 +1569,6 @@ def remove_throttle_cycle(client_ip):
     # Clean up from active throttled_clients set
     with throttled_clients_lock:
         throttled_clients.discard(client_ip)
-
-    # Clear circuit breaker state so dashboard shows accurate info
-    with cb_state_lock:
-        circuit_breaker_state.pop(client_ip, None)
 
     # Update throttle state in database
     save_throttle_state(client_ip, is_throttled=False, recovery_at=0)
@@ -1644,6 +1658,8 @@ def restore_throttle_states():
     """
     Restore active throttle states from database on proxy startup.
     Re-applies throttling for clients that were throttled before restart.
+    All current throttle levels are persistent (no timer), so we restore
+    every throttled client and let the de-escalation system handle release.
     """
     time.sleep(5)  # Wait for proxy to fully initialize
 
@@ -1651,36 +1667,22 @@ def restore_throttle_states():
         with db_lock:
             conn = _connect_db()
             now = time.time()
+            # All throttles are persistent — recovery_at=0 means no timer.
+            # Restore every device marked as throttled.
             cursor = conn.execute(
-                "SELECT client_ip, recovery_at FROM throttle_state WHERE is_throttled = 1 AND recovery_at > ?",
-                (now,)
+                "SELECT client_ip FROM throttle_state WHERE is_throttled = 1"
             )
             rows = cursor.fetchall()
             conn.close()
 
             for row in rows:
                 client_ip = row[0]
-                recovery_at = row[1]
-                time_remaining = recovery_at - now
-
-                if time_remaining > 0:
-                    print(f"[VIGILANT] Restoring throttle for {client_ip} ({time_remaining:.0f}s remaining)")
-                    apply_throttle(client_ip, rate="32kbit")
-
-                    recovery_timer = threading.Timer(
-                        time_remaining,
-                        remove_throttle_cycle,
-                        args=[client_ip]
-                    )
-
-                    with throttle_timers_lock:
-                        throttle_timers[client_ip] = recovery_timer
-
-                    recovery_timer.start()
-                    with throttled_clients_lock:
-                        throttled_clients.add(client_ip)
-                else:
-                    save_throttle_state(client_ip, False, 0)
+                print(f"[VIGILANT] Restoring throttle for {client_ip} (persistent)")
+                # Re-apply at a reasonable default rate. The circuit breaker
+                # escalation will adjust to the correct level on next request.
+                apply_throttle(client_ip, rate="128kbit")
+                with throttled_clients_lock:
+                    throttled_clients.add(client_ip)
 
             print(f"[VIGILANT] Restored {len(rows)} throttle states from database")
     except sqlite3.Error as e:

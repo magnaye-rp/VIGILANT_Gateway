@@ -1,7 +1,7 @@
       <!-- Behavioral Control Tab -->
       <div id="tab-behavioral-control" class="tab-content">
         <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">
-          Doomscroll Detection <span style="font-size: 0.9rem; color: var(--text-secondary); font-weight: 400;">— Controls how aggressively the system detects and responds to endless-scrolling behavior</span>
+          Doomscroll Detection <span style="font-size: 0.9rem; color: var(--text-secondary); font-weight: 400;">— Controls how the system detects and responds to endless-scrolling on social media</span>
         </h2>
 
         <div class="card glassmorphic-card" style="margin-bottom: 2rem;">
@@ -9,26 +9,26 @@
             <!-- Quick Mode Selector -->
             <div class="card-header" style="border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 1rem; margin-bottom: 1.5rem;">
               <div class="card-title"><i class="fa-solid fa-gauge-high" style="margin-right: 0.5rem;"></i> Detection Strictness</div>
-              <div class="card-subtitle">Choose a preset that matches your needs, or select Custom for fine-grained control</div>
+              <div class="card-subtitle">Choose a preset or select Custom to tune every parameter yourself</div>
             </div>
 
-            <div class="mode-selector" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 2rem;">
+            <div class="mode-selector" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
               <label class="mode-card" id="mode-card-relaxed" onclick="selectBehavioralMode('relaxed')" style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid transparent; border-radius: 10px; cursor: pointer; transition: all 0.15s;">
                 <i class="fa-solid fa-face-smile" style="font-size: 1.5rem; color: var(--success);"></i>
                 <div style="font-weight: 600;">Relaxed</div>
-                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">10 min steady scroll or RPM spike triggers throttle. 60s pause clears. Light 128kbit.</div>
+                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">10 min sustained or spike triggers. 60s pause clears. 128kbit.</div>
                 <input type="radio" name="mode" value="relaxed" style="display: none;">
               </label>
               <label class="mode-card" id="mode-card-balanced" onclick="selectBehavioralMode('balanced')" style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid var(--primary); border-radius: 10px; cursor: pointer; transition: all 0.15s;">
                 <i class="fa-solid fa-scale-balanced" style="font-size: 1.5rem; color: var(--primary);"></i>
                 <div style="font-weight: 600;">Balanced</div>
-                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">10 min scroll or RPM spike triggers. 60-120s pause to recover. 32kbit default.</div>
+                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">10 min sustained or spike triggers. 60-90s pause. 32kbit.</div>
                 <input type="radio" name="mode" value="balanced" checked style="display: none;">
               </label>
               <label class="mode-card" id="mode-card-strict" onclick="selectBehavioralMode('strict')" style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid transparent; border-radius: 10px; cursor: pointer; transition: all 0.15s;">
                 <i class="fa-solid fa-face-frown" style="font-size: 1.5rem; color: var(--danger);"></i>
                 <div style="font-weight: 600;">Strict</div>
-                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">Immediate on spike, 5 min sustained. 30-90s pause. 16kbit. Breaks habits.</div>
+                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">5 min sustained or spike. 30-90s pause. 16kbit. Breaks habits.</div>
                 <input type="radio" name="mode" value="strict" style="display: none;">
               </label>
               <label class="mode-card" id="mode-card-custom" onclick="selectBehavioralMode('custom')" style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid transparent; border-radius: 10px; cursor: pointer; transition: all 0.15s;">
@@ -39,10 +39,23 @@
               </label>
             </div>
 
+            <!-- How Detection Works — info card -->
+            <div style="margin-bottom: 1.5rem; padding: 1rem 1.25rem; background: rgba(26,147,138,0.08); border-radius: 8px; border: 1px solid rgba(26,147,138,0.15);">
+              <div style="display: flex; align-items: flex-start; gap: 0.75rem;">
+                <i class="fa-solid fa-circle-info" style="color: var(--primary); font-size: 1.1rem; margin-top: 0.15rem;"></i>
+                <div style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5;">
+                  <strong style="color: var(--text);">How detection works:</strong>
+                  The system tracks <strong style="color: var(--text);">social media requests only</strong> (Facebook, Instagram, TikTok, etc.) — DNS, iCloud, and other background traffic are ignored.
+                  It needs <strong style="color: var(--text);">30 social requests</strong> before making any decision, so opening an app normally won't trigger anything.
+                  Once warmed up, two things can flag you: an <strong style="color: var(--primary);">RPM spike</strong> (request rate jumps above your average) or <strong style="color: var(--primary);">sustained scrolling</strong> (on social media for X minutes straight).
+                </div>
+              </div>
+            </div>
+
             <!-- Live Preview of Current Settings -->
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 2rem; padding: 1rem; background: var(--bg); border-radius: 8px;">
               <div>
-                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.25rem;">Speed Multiplier</div>
+                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.25rem;">RPM Multiplier</div>
                 <div style="font-size: 1.1rem; font-weight: 600;" id="preview-multiplier">1.5×</div>
                 <div style="font-size: 0.75rem; color: var(--text-secondary);">RPM must exceed avg × this</div>
               </div>
@@ -52,9 +65,14 @@
                 <div style="font-size: 0.75rem; color: var(--text-secondary);">Requests per minute ceiling</div>
               </div>
               <div>
-                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.25rem;">Auto-Release</div>
-                <div style="font-size: 1.1rem; font-weight: 600;" id="preview-pause">60-120s</div>
-                <div style="font-size: 0.75rem; color: var(--text-secondary);">Pause duration by level</div>
+                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.25rem;">Sustained Timer</div>
+                <div style="font-size: 1.1rem; font-weight: 600;" id="preview-sustained">10 min</div>
+                <div style="font-size: 0.75rem; color: var(--text-secondary);">Continuous scroll to trigger</div>
+              </div>
+              <div>
+                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.25rem;">Release Pause</div>
+                <div style="font-size: 1.1rem; font-weight: 600;" id="preview-pause">60s–5 min</div>
+                <div style="font-size: 0.75rem; color: var(--text-secondary);">Stop scrolling to recover</div>
               </div>
               <div>
                 <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.25rem;">Throttle Rate</div>
@@ -70,56 +88,64 @@
               </h3>
 
               <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.25rem;">
+                <!-- Speed Multiplier -->
                 <div class="form-group">
                   <label class="form-label">
-                    Speed Multiplier
-                    <i class="fa-solid fa-question-circle tooltip-trigger" style="margin-left: 0.3rem;" data-tooltip="How much your request rate must exceed your personal average before the system flags you. Lower = more sensitive."></i>
+                    RPM Speed Multiplier
+                    <i class="fa-solid fa-question-circle tooltip-trigger" style="margin-left: 0.3rem;" data-tooltip="How many times your personal average request rate must jump before the system flags an RPM spike. Lower = more sensitive to sudden scrolling bursts."></i>
                   </label>
                   <div style="display: flex; align-items: center; gap: 0.75rem;">
                     <input type="range" id="adv-velocity-multiplier" min="100" max="300" value="150" oninput="updateBehavioralPreview()" style="flex: 1;">
                     <span id="adv-velocity-label" style="font-weight: 600; min-width: 3rem; text-align: right;">1.5×</span>
                   </div>
-                  <div class="form-hint">Current RPM must be > average × <span id="adv-verbose-velocity">1.5</span></div>
+                  <div class="form-hint">Current RPM must exceed avg × <span id="adv-verbose-velocity">1.5</span> to trigger spike</div>
                 </div>
 
+                <!-- RPM Hard Cap -->
                 <div class="form-group">
                   <label class="form-label">
                     RPM Hard Limit
-                    <i class="fa-solid fa-question-circle tooltip-trigger" style="margin-left: 0.3rem;" data-tooltip="Hard ceiling on requests per minute. If you exceed this, you get flagged regardless of your average."></i>
+                    <i class="fa-solid fa-question-circle tooltip-trigger" style="margin-left: 0.3rem;" data-tooltip="Absolute ceiling on requests per minute. Exceed this and you're flagged immediately regardless of your personal average."></i>
                   </label>
                   <div style="display: flex; align-items: center; gap: 0.75rem;">
                     <input type="range" id="adv-rpm-cap" min="60" max="600" step="10" value="180" oninput="updateBehavioralPreview()" style="flex: 1;">
                     <span id="adv-rpm-label" style="font-weight: 600; min-width: 3rem; text-align: right;">180</span>
                   </div>
-                  <div class="form-hint">About <span id="adv-verbose-rpm">3</span> requests per second</div>
+                  <div class="form-hint">~<span id="adv-verbose-rpm">3</span> requests per second</div>
                 </div>
 
+                <!-- Sustained Activity Timer (replaces old pause-threshold slider) -->
                 <div class="form-group">
                   <label class="form-label">
-                    Reading Pause Threshold
-                    <i class="fa-solid fa-question-circle tooltip-trigger" style="margin-left: 0.3rem;" data-tooltip="How long a gap between requests must be before we assume you stopped scrolling. Set higher for video content (reels/shorts) where 20-30s gaps are normal."></i>
+                    Sustained Scroll Timer
+                    <i class="fa-solid fa-question-circle tooltip-trigger" style="margin-left: 0.3rem;" data-tooltip="How many minutes of continuous social media activity before the slow-burn detector flags you — even if your request rate is normal. This catches long, steady doomscrolling sessions."></i>
                   </label>
                   <div style="display: flex; align-items: center; gap: 0.75rem;">
-                    <input type="range" id="adv-pause-threshold" min="30" max="300" step="10" value="180" oninput="updateBehavioralPreview()" style="flex: 1;">
-                    <span id="adv-pause-label" style="font-weight: 600; min-width: 3rem; text-align: right;">180s</span>
+                    <input type="range" id="adv-sustained-minutes" min="1" max="30" value="10" oninput="updateBehavioralPreview()" style="flex: 1;">
+                    <span id="adv-sustained-label" style="font-weight: 600; min-width: 3rem; text-align: right;">10 min</span>
                   </div>
-                  <div class="form-hint">Stop scrolling for this long to clear the throttle (~3 min default)</div>
+                  <div class="form-hint">Flags after <span id="adv-verbose-sustained">10</span> minutes of continuous social use</div>
                 </div>
 
+                <!-- Throttle Bandwidth -->
                 <div class="form-group">
-                  <label class="form-label">Throttle Bandwidth</label>
+                  <label class="form-label">Throttle Speed (L1)</label>
                   <select id="adv-throttle-rate" onchange="updateBehavioralPreview()">
-                    <option value="16">16 Kbps (Very strict)</option>
-                    <option value="32" selected>32 Kbps (Default)</option>
-                    <option value="64">64 Kbps (Mild)</option>
-                    <option value="128">128 Kbps (Light)</option>
-                    <option value="256">256 Kbps (Barely noticeable)</option>
+                    <option value="16">16 Kbps — Very strict</option>
+                    <option value="32" selected>32 Kbps — Default</option>
+                    <option value="64">64 Kbps — Mild</option>
+                    <option value="128">128 Kbps — Light</option>
+                    <option value="256">256 Kbps — Barely noticeable</option>
                   </select>
-                  <div class="form-hint">Maximum speed for throttled clients</div>
+                  <div class="form-hint">Bandwidth cap when first flagged (L2/L3 are progressively stricter)</div>
                 </div>
 
+                <!-- Max Throttle Duration (safety net) -->
                 <div class="form-group">
-                  <label class="form-label">Throttle Duration</label>
+                  <label class="form-label">
+                    Max Throttle Duration
+                    <i class="fa-solid fa-question-circle tooltip-trigger" style="margin-left: 0.3rem;" data-tooltip="Safety net: if background traffic prevents the pause from ever being detected, the throttle auto-releases after this long. Prevents throttles from sticking forever."></i>
+                  </label>
                   <select id="adv-throttle-duration" onchange="updateBehavioralPreview()">
                     <option value="120">2 minutes</option>
                     <option value="300">5 minutes</option>
@@ -127,60 +153,62 @@
                     <option value="1800">30 minutes</option>
                     <option value="3600">1 hour</option>
                   </select>
-                  <div class="form-hint">How long each throttle cycle lasts before auto-recovery</div>
+                  <div class="form-hint">Auto-release safety net — normally overridden by pause detection</div>
                 </div>
 
-                <div class="form-group">
+                <!-- Auto-Release Pause by Level -->
+                <div class="form-group" style="grid-column: 1 / -1;">
                   <label class="form-label">
-                    Auto-Release Pause by Level
-                    <i class="fa-solid fa-question-circle tooltip-trigger" style="margin-left: 0.3rem;" data-tooltip="How long the user must pause before the throttle releases at each level. Lighter throttles recover faster."></i>
+                    Release Pause by Level
+                    <i class="fa-solid fa-question-circle tooltip-trigger" style="margin-left: 0.3rem;" data-tooltip="How long the user must stop scrolling before the throttle releases at each escalation level. Level 3 requires a long pause to force putting the device down."></i>
                   </label>
                   <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
-                    <div style="flex: 1; min-width: 90px;">
-                      <label style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">L1 Pause (128kbit)</label>
+                    <div style="flex: 1; min-width: 100px;">
+                      <label style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">L1 — 128kbit</label>
                       <select id="adv-deescalation-l1" style="width: 100%;">
                         <option value="30">30s</option>
                         <option value="60" selected>60s</option>
                         <option value="90">90s</option>
                         <option value="120">120s</option>
-                        <option value="180">180s</option>
+                        <option value="180">3 min</option>
                       </select>
                     </div>
-                    <div style="flex: 1; min-width: 90px;">
-                      <label style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">L2 Pause (2kbit)</label>
+                    <div style="flex: 1; min-width: 100px;">
+                      <label style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">L2 — 2kbit</label>
                       <select id="adv-deescalation-l2" style="width: 100%;">
                         <option value="60">60s</option>
                         <option value="90" selected>90s</option>
                         <option value="120">120s</option>
-                        <option value="180">180s</option>
-                        <option value="300">300s</option>
+                        <option value="180">3 min</option>
+                        <option value="300">5 min</option>
                       </select>
                     </div>
-                    <div style="flex: 1; min-width: 90px;">
-                      <label style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">L3 Pause (1kbit)</label>
+                    <div style="flex: 1; min-width: 100px;">
+                      <label style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">L3 — 1kbit</label>
                       <select id="adv-deescalation-l3" style="width: 100%;">
                         <option value="60">60s</option>
                         <option value="90">90s</option>
-                        <option value="120">120s</option>
-                        <option value="180">180s</option>
-                        <option value="300" selected>300s (5 min)</option>
+                        <option value="120">2 min</option>
+                        <option value="180">3 min</option>
+                        <option value="300" selected>5 min</option>
                       </select>
                     </div>
                   </div>
-                  <div class="form-hint">Pause longer than this at each level = throttle releases</div>
+                  <div class="form-hint">Stop scrolling longer than this → throttle releases. L3 is intentionally long to force a real break.</div>
                 </div>
 
+                <!-- SNI Tracking -->
                 <div class="form-group">
-                  <label class="form-label">SNI Fallback Tracking</label>
+                  <label class="form-label">SNI Encrypted App Tracking</label>
                   <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer; margin-top: 0.5rem;">
                     <input type="checkbox" id="adv-sni-enabled" checked onchange="updateSNIStatusIndicator(this)">
                     <span id="adv-sni-status" style="font-weight: 600; color: var(--success);">Enabled</span>
                   </label>
-                  <div class="form-hint">Track encrypted apps (Instagram, TikTok) via TLS handshake frequency</div>
+                  <div class="form-hint">Track encrypted apps (Instagram, TikTok) via TLS handshake frequency even when content is unreadable</div>
                 </div>
               </div>
 
-              <!-- Circuit Breaker Configuration -->
+              <!-- Circuit Breaker Escalation Timeline -->
               <div style="margin-top: 1.5rem; padding: 1.25rem; background: var(--bg); border-radius: 8px;">
                 <h4 style="font-size: 0.95rem; font-weight: 600; margin-bottom: 0.75rem; color: var(--primary);">
                   <i class="fa-solid fa-bolt" style="margin-right: 0.4rem;"></i> Circuit Breaker Escalation Timeline
@@ -189,22 +217,24 @@
                   <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
                     <div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Level 1 • Pause</div>
                     <div style="font-weight: 600; font-size: 0.95rem;">RPM spike or 10 min</div>
-                    <div style="font-size: 0.75rem; color: var(--text-secondary);">128kbit • pause 60s to release</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">128kbit • 60s pause to release</div>
                   </div>
-                  <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
+                  <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px; position: relative;">
+                    <div style="position: absolute; left: -8px; top: 50%; transform: translateY(-50%); color: var(--primary); font-size: 0.8rem;">→</div>
                     <div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Level 2 • Friction</div>
                     <div style="font-weight: 600; font-size: 0.95rem;">60s at L1</div>
-                    <div style="font-size: 0.75rem; color: var(--text-secondary);">2kbit • pause 90s to release</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">2kbit • 90s pause to release</div>
                   </div>
-                  <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
+                  <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px; position: relative;">
+                    <div style="position: absolute; left: -8px; top: 50%; transform: translateY(-50%); color: var(--primary); font-size: 0.8rem;">→</div>
                     <div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Level 3 • Circuit Break</div>
                     <div style="font-weight: 600; font-size: 0.95rem;">120s at L2</div>
-                    <div style="font-size: 0.75rem; color: var(--text-secondary);">1kbit • pause 5 min to release</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">1kbit • 5 min pause to release</div>
                   </div>
-                  <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
-                    <div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Recovery</div>
-                    <div style="font-weight: 600; font-size: 0.95rem;">Pause clears all</div>
-                    <div style="font-size: 0.75rem; color: var(--text-secondary);">Return to normal after pause</div>
+                  <div style="text-align: center; padding: 0.75rem; background: rgba(26,147,138,0.1); border-radius: 6px; border: 1px dashed rgba(26,147,138,0.3);">
+                    <div style="font-size: 0.7rem; color: var(--primary); text-transform: uppercase;">Recovery</div>
+                    <div style="font-weight: 600; font-size: 0.95rem; color: var(--primary);">Stop scrolling</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">Pause clears the throttle at any level</div>
                   </div>
                 </div>
               </div>

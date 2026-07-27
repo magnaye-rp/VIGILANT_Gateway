@@ -144,11 +144,11 @@ ALLOWED_CONFIG_KEYS = set(CONFIG_DEFAULTS) | {
     "network_velocity_preset", "network_velocity_custom", "physical_scroll_preset", 
     "physical_scroll_custom", "sni_filtering_enabled", "request_threshold",
     "proxy_throttle_rate", "proxy_pinned_domains", "cb_no_pause_seconds", "custom_bypass_domains",
-    "deescalation_l1", "deescalation_l2", "deescalation_l3"
+    "deescalation_l1", "deescalation_l2", "deescalation_l3", "sustained_activity_minutes"
 }
 BOOLEAN_CONFIG_KEYS = {"block_harmful", "block_distracting", "nlp_enabled", "throttle_enabled", "enable_https", "sni_filtering_enabled"}
 FLOAT_CONFIG_KEYS = {"network_velocity_threshold", "tfidf_classification_threshold", "tfidf_url_threshold", "tfidf_body_threshold"}
-INTEGER_CONFIG_KEYS = {"physical_scroll_threshold", "throttle_rate", "throttle_duration", "log_retention", "network_velocity_custom", "physical_scroll_custom", "request_threshold", "deescalation_l1", "deescalation_l2", "deescalation_l3"}
+INTEGER_CONFIG_KEYS = {"physical_scroll_threshold", "throttle_rate", "throttle_duration", "log_retention", "network_velocity_custom", "physical_scroll_custom", "request_threshold", "deescalation_l1", "deescalation_l2", "deescalation_l3", "sustained_activity_minutes"}
 STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "upstream_dns", "nlp_accuracy", "ui_theme", "network_velocity_preset", "physical_scroll_preset", "proxy_throttle_rate", "proxy_pinned_domains", "custom_bypass_domains"}
 TRAFFIC_CATEGORIES = ("Educational", "Productive", "Distracting", "Harmful")
 L4_TRAFFIC_CATEGORIES = ("DNS_TRACKED", "SNI_PASSTHROUGH")
@@ -2615,10 +2615,14 @@ def handle_behavioral_config():
                 "network_velocity_custom": net_custom,
                 "physical_scroll_preset": config.get("physical_scroll_preset", "Medium"),
                 "physical_scroll_custom": scroll_custom,
+                "sustained_activity_minutes": int(config.get("sustained_activity_minutes", 10)),
                 "sni_filtering_enabled": _coerce_bool(config.get("sni_filtering_enabled", "true")),
                 "throttle_enabled": _coerce_bool(config.get("throttle_enabled", "true")),
                 "throttle_rate": int(config.get("throttle_rate", CONFIG_DEFAULTS["throttle_rate"])),
                 "throttle_duration": _current_throttle_duration(config, connection=conn),
+                "deescalation_l1": int(config.get("deescalation_l1", 60)),
+                "deescalation_l2": int(config.get("deescalation_l2", 90)),
+                "deescalation_l3": int(config.get("deescalation_l3", 300)),
             })
             
     # POST / PUT request handling

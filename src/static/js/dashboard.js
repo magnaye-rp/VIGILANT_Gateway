@@ -765,6 +765,10 @@ async function loadBehavioralSettings() {
       updateSNIStatusIndicator(sniCheck);
     }
 
+    // Load sustained minutes
+    const sustainedSlider = document.getElementById('adv-sustained-minutes');
+    if (sustainedSlider) sustainedSlider.value = String(data.sustained_activity_minutes || 10);
+
     // Load de-escalation pause values
     const deL1 = document.getElementById('adv-deescalation-l1');
     const deL2 = document.getElementById('adv-deescalation-l2');
@@ -787,6 +791,7 @@ const BEHAVIORAL_PRESETS = {
     physical_scroll_preset: 'Low',
     multiplier: 200,
     rpm_cap: 300,
+    sustained_minutes: 10,
     deescalation_l1: 60,
     deescalation_l2: 90,
     deescalation_l3: 300,
@@ -798,6 +803,7 @@ const BEHAVIORAL_PRESETS = {
     physical_scroll_preset: 'Medium',
     multiplier: 150,
     rpm_cap: 180,
+    sustained_minutes: 10,
     deescalation_l1: 60,
     deescalation_l2: 90,
     deescalation_l3: 300,
@@ -809,6 +815,7 @@ const BEHAVIORAL_PRESETS = {
     physical_scroll_preset: 'High',
     multiplier: 110,
     rpm_cap: 120,
+    sustained_minutes: 5,
     deescalation_l1: 30,
     deescalation_l2: 60,
     deescalation_l3: 90,
@@ -837,8 +844,10 @@ function selectBehavioralMode(mode) {
     const preset = BEHAVIORAL_PRESETS[mode] || BEHAVIORAL_PRESETS.balanced;
     const multSlider = document.getElementById('adv-velocity-multiplier');
     const rpmSlider = document.getElementById('adv-rpm-cap');
+    const sustainedSlider = document.getElementById('adv-sustained-minutes');
     if (multSlider) multSlider.value = preset.multiplier;
     if (rpmSlider) rpmSlider.value = preset.rpm_cap;
+    if (sustainedSlider) sustainedSlider.value = preset.sustained_minutes || 10;
   }
   updateBehavioralPreview();
 }
@@ -846,14 +855,14 @@ function selectBehavioralMode(mode) {
 function updateBehavioralPreview() {
   const multSlider = document.getElementById('adv-velocity-multiplier');
   const rpmSlider = document.getElementById('adv-rpm-cap');
-  const pauseSlider = document.getElementById('adv-pause-threshold');
+  const sustainedSlider = document.getElementById('adv-sustained-minutes');
   const rateSelect = document.getElementById('adv-throttle-rate');
 
-  if (!multSlider || !rpmSlider || !pauseSlider || !rateSelect) return;
+  if (!multSlider || !rpmSlider || !rateSelect) return;
 
   const multiplier = parseInt(multSlider.value, 10);
   const rpmCap = parseInt(rpmSlider.value, 10);
-  const pause = parseInt(pauseSlider.value, 10);
+  const sustainedMin = sustainedSlider ? parseInt(sustainedSlider.value, 10) : 10;
   const rate = parseInt(rateSelect.value, 10);
 
   const setText = (id, text) => {
@@ -867,9 +876,20 @@ function updateBehavioralPreview() {
   setText('preview-rpm-cap', rpmCap);
   setText('adv-rpm-label', rpmCap);
   setText('adv-verbose-rpm', Math.round(rpmCap / 60));
-  setText('preview-pause', pause + 's');
-  setText('adv-pause-label', pause + 's');
+  setText('preview-sustained', sustainedMin + ' min');
+  setText('adv-sustained-label', sustainedMin + ' min');
+  setText('adv-verbose-sustained', sustainedMin);
   setText('preview-rate', rate + ' Kbps');
+  
+  // Update auto-release preview based on de-escalation dropdowns
+  const l1 = document.getElementById('adv-deescalation-l1');
+  const l3 = document.getElementById('adv-deescalation-l3');
+  if (l1 && l3) {
+    const l1Val = l1.value;
+    const l3Val = l3.value;
+    const l3Label = l3Val >= 300 ? '5 min' : l3Val + 's';
+    setText('preview-pause', l1Val + 's–' + l3Label);
+  }
 }
 
 async function saveBehavioralSettings(event) {
@@ -888,7 +908,7 @@ async function saveBehavioralSettings(event) {
   if (mode === 'custom') {
     const multiplier = parseInt(document.getElementById('adv-velocity-multiplier').value, 10);
     const rpmCap = parseInt(document.getElementById('adv-rpm-cap').value, 10);
-    const pauseThreshold = parseInt(document.getElementById('adv-pause-threshold').value, 10);
+    const sustainedMinutes = parseInt(document.getElementById('adv-sustained-minutes')?.value || '10', 10);
     const throttleRate = document.getElementById('adv-throttle-rate').value;
     const throttleDuration = parseInt(document.getElementById('adv-throttle-duration').value, 10);
     const sniEnabled = document.getElementById('adv-sni-enabled').checked;
@@ -899,13 +919,11 @@ async function saveBehavioralSettings(event) {
       network_velocity_preset: 'Custom',
       physical_scroll_preset: 'Custom',
       sni_filtering_enabled: sniEnabled,
-      // Use proxy_ prefix keys that the addon's load_proxy_config() actually reads
       proxy_throttle_rate: throttleRate + 'kbit',
       proxy_pinned_domains: 'facebook.com,twitter.com,x.com,tiktok.com,instagram.com,reddit.com,youtube.com',
       throttle_rate: String(throttleRate),
       throttle_duration: String(throttleDuration),
-      cb_no_pause_seconds: pauseThreshold,
-      // Per-level de-escalation pauses
+      sustained_activity_minutes: String(sustainedMinutes),
       deescalation_l1: document.getElementById('adv-deescalation-l1')?.value || '60',
       deescalation_l2: document.getElementById('adv-deescalation-l2')?.value || '90',
       deescalation_l3: document.getElementById('adv-deescalation-l3')?.value || '300'
