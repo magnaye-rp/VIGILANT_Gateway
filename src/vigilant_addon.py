@@ -896,15 +896,14 @@ def escalate_circuit_breaker(client_ip, domain, rpm_current=0, rpm_baseline=0):
         
         elapsed = now - state["first_seen"]
         
-        # Determine level based on elapsed time
+        # Determine level based on elapsed time — Level 0 (None) now removed.
+        # Once flagged, minimum level is PAUSE with immediate 4kbit throttle.
         if elapsed >= CB_BREAK_SECONDS:
             new_level = CB_LEVEL_CIRCUIT_BREAK
         elif elapsed >= CB_FRICTION_SECONDS:
             new_level = CB_LEVEL_FRICTION
-        elif elapsed >= CB_PAUSE_SECONDS:
-            new_level = CB_LEVEL_PAUSE
         else:
-            new_level = CB_LEVEL_NONE
+            new_level = CB_LEVEL_PAUSE
         
         # Record escalation time if new level is higher
         if new_level > state["level"]:
