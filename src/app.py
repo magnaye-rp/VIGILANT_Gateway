@@ -963,6 +963,7 @@ def init_category_hints_db() -> None:
                 ("Distracting", "instagram.com"), ("Distracting", "facebook.com"),
                 ("Distracting", "youtube.com"), ("Distracting", "twitch.tv"),
                 ("Distracting", "9gag.com"), ("Distracting", "buzzfeed.com"),
+                ("Distracting", "fbcdn.net"), 
             ]
             for category, domain in default_hints:
                 connection.execute("INSERT OR IGNORE INTO category_hints (category, domain, action) VALUES (?, ?, 'throttle')", (category, domain))
