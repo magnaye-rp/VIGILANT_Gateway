@@ -2737,6 +2737,14 @@ def reset_all_throttles():
                     if hasattr(vigilant, "_engagement_low_activity_since"):
                         vigilant._engagement_low_activity_since.clear()
                 vigilant._previous_rate.clear()
+            if hasattr(vigilant, "velocity_lock"):
+                with vigilant.velocity_lock:
+                    if hasattr(vigilant, "social_request_history"):
+                        vigilant.social_request_history.clear()
+                    if hasattr(vigilant, "social_session_totals"):
+                        vigilant.social_session_totals.clear()
+                    if hasattr(vigilant, "social_session_start"):
+                        vigilant.social_session_start.clear()
             if hasattr(vigilant, "throttled_clients"):
                 with vigilant.throttled_clients_lock:
                     vigilant.throttled_clients.clear()

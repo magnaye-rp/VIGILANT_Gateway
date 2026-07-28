@@ -993,10 +993,18 @@ def _engagement_level_from_minutes(minutes: float) -> int:
 
 def escalate_circuit_breaker(client_ip, domain, rpm_current=0, rpm_baseline=0):
     """Mark social activity — engagement tracking is handled by background loop."""
+    session_started = time.time()
+    with velocity_lock:
+        social_started = social_session_start.get(client_ip, 0)
+        if social_started:
+            session_started = social_started
     with _engagement_lock:
         _engagement_last_request[client_ip] = time.time()
         if _engagement_start[client_ip] == 0:
-            _engagement_start[client_ip] = time.time()
+            # Use the existing social session start so L1/L2/L3 thresholds are
+            # measured from the actual scrolling session, not from the moment
+            # the first "engaged" event is emitted.
+            _engagement_start[client_ip] = session_started
     return _engagement_current_level.get(client_ip, 0)
 
 
@@ -2031,6 +2039,10 @@ class VIGILANTAddon:
                             _previous_rate.clear()
                             with throttled_clients_lock:
                                 throttled_clients.clear()
+                            with velocity_lock:
+                                social_request_history.clear()
+                                social_session_totals.clear()
+                                social_session_start.clear()
                             print("[VIGILANT] RESET_ALL complete")
                         else:
                             print(f"[VIGILANT] Processing release queue: {ip}")
