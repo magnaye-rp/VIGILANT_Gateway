@@ -1027,16 +1027,24 @@ def release_circuit_breaker(client_ip):
 def get_all_circuit_breaker_states():
     with _engagement_lock:
         result = []
+        now = time.time()
         for ip, level in _engagement_current_level.items():
             if level == CB_LEVEL_NONE:
                 continue
+            elapsed = now - _engagement_start.get(ip, 0)
+            last_req = _engagement_last_request.get(ip, 0)
+            idle = now - last_req if last_req > 0 else 0
+            mins = _engagement_minutes.get(ip, 0)
+            rate = _previous_rate.get(ip, '')
             result.append({
                 "client_ip": ip,
                 "level": level,
                 "level_name": CB_LEVEL_NAMES.get(level, "Unknown"),
                 "domain": "",
-                "elapsed_seconds": 0,
-                "score": round(_engagement_minutes.get(ip, 0), 1),
+                "elapsed_seconds": round(elapsed, 1),
+                "idle_seconds": round(idle, 1),
+                "engagement_minutes": round(mins, 1),
+                "throttle_rate": rate,
                 "is_throttled": True
             })
         return result

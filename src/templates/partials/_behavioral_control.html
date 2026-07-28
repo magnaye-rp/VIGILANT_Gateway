@@ -33,7 +33,7 @@
               <label class="mode-card" id="mode-card-custom" onclick="selectBehavioralMode('custom')" style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid transparent; border-radius: 10px; cursor: pointer;">
                 <i class="fa-solid fa-sliders" style="font-size: 1.5rem; color: var(--warning);"></i>
                 <div style="font-weight: 600;">Custom</div>
-                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">Set your own time thresholds below</div>
+                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">Set custom time thresholds, rates, and tuning below</div>
                 <input type="radio" name="mode" value="custom" style="display: none;">
               </label>
             </div>
@@ -44,8 +44,8 @@
                 <i class="fa-solid fa-circle-info" style="color: var(--primary); font-size: 1.1rem; margin-top: 0.15rem;"></i>
                 <div style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5;">
                   <strong style="color: var(--text);">How it works:</strong>
-                  The system tracks <strong style="color: var(--text);">how long you stay on social media</strong>, not how fast you scroll. Watch reels for 25 seconds each — the timer still counts. 
-                  After the threshold, bandwidth drops. Close the app for <strong style="color: var(--text);">2 minutes</strong> and the timer resets. No RPM math, no burst detection — just cumulative engagement time.
+                  The system tracks <strong style="color: var(--text);">how long you actively scroll social media</strong>. After each threshold, bandwidth drops progressively.
+                  <strong style="color: var(--text);">Two ways to release:</strong> (1) Close the app or stop scrolling for the idle reset period — if activity drops below ~3 reqs/min, the throttle auto-releases. (2) Make zero social requests for the idle reset period.
                 </div>
               </div>
             </div>
@@ -98,7 +98,7 @@
                     <option value="180">3 minutes</option>
                     <option value="300">5 minutes</option>
                   </select>
-                  <div class="form-hint">Close the app this long → timer resets, throttle releases</div>
+                  <div class="form-hint">Stop scrolling this long → timer resets, throttle auto-releases</div>
                 </div>
               </div>
 
@@ -195,7 +195,7 @@
                   <div style="text-align: center; padding: 0.75rem; background: rgba(26,147,138,0.1); border-radius: 6px; border: 1px dashed rgba(26,147,138,0.3);">
                     <div style="font-size: 0.7rem; color: var(--primary);">Recovery</div>
                     <div style="font-weight: 600; color: var(--primary);" id="tl-reset">2 min idle</div>
-                    <div style="font-size: 0.75rem; color: var(--text-secondary);">Close app → reset</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">Stop scrolling → auto reset</div>
                   </div>
                 </div>
               </div>
