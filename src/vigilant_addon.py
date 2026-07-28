@@ -1562,7 +1562,7 @@ def remove_throttle_cycle(client_ip):
     escalate_circuit_breaker / release_circuit_breaker so cooldowns work.
     """
     # Remove TC rules
-    remove_throttle(client_ip)
+    success = remove_throttle(client_ip)
 
     # Clean up timer
     with throttle_timers_lock:
@@ -1572,13 +1572,15 @@ def remove_throttle_cycle(client_ip):
     with throttled_clients_lock:
         throttled_clients.discard(client_ip)
 
-    # Update throttle state in database
-    save_throttle_state(client_ip, is_throttled=False, recovery_at=0)
-
-    # Log recovery
-    log_throttle(client_ip, "throttle_cycle", 0, 0, "THROTTLE_CYCLE_REMOVED", "Throttle cycle completed - bandwidth restored")
-
-    print(f"[VIGILANT] Throttle cycle completed for {client_ip} - bandwidth restored")
+    # Only update DB state if tc removal actually succeeded.
+    # This prevents the state mismatch where DB says "not throttled"
+    # but tc rules are still active on the interface.
+    if success:
+        save_throttle_state(client_ip, is_throttled=False, recovery_at=0)
+        log_throttle(client_ip, "throttle_cycle", 0, 0, "THROTTLE_CYCLE_REMOVED", "Throttle cycle completed - bandwidth restored")
+        print(f"[VIGILANT] Throttle cycle completed for {client_ip} - bandwidth restored")
+    else:
+        print(f"[VIGILANT] WARNING: Throttle removal failed for {client_ip} - DB not updated")
 
 
 def save_throttle_state(client_ip, is_throttled, recovery_at):

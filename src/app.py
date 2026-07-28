@@ -2837,43 +2837,19 @@ def release_throttle():
         if not ip_address:
             return jsonify({"error": "IP address is required"}), 400
 
-        # Update throttle_state in database so mitmproxy knows it's unthrottled
-        if DB_PATH.exists():
-            with _open_db() as conn:
-                if _table_exists(conn, "throttle_state"):
-                    conn.execute(
-                        "UPDATE throttle_state SET is_throttled = 0 WHERE client_ip = ?",
-                        (ip_address,)
-                    )
-                    conn.commit()
-        
-        # Signal the proxy to refresh its cache and sync the throttle state
+        # Canonical release: reset engagement state, remove tc rules, update DB.
+        # release_circuit_breaker handles tc cleanup + DB update in one call.
+        import importlib
+        vigilant_cb = importlib.import_module("vigilant_addon")
+        if hasattr(vigilant_cb, "release_circuit_breaker"):
+            vigilant_cb.release_circuit_breaker(ip_address)
+        else:
+            return jsonify({"error": "Circuit breaker module not available"}), 500
+
+        # Signal the proxy to refresh its cache
         _signal_rule_cache_reload()
 
-        # Try to remove TC rules using the addon if it's imported locally, else directly
-        try:
-            from vigilant_addon import remove_throttle
-            remove_throttle(ip_address)
-            app.logger.info(f"Manually released throttle for {ip_address}")
-            return jsonify({"status": "success", "message": f"Throttle released for {ip_address}"})
-        except ImportError:
-            # If addon is not available, try to remove TC for this IP only
-            import subprocess
-            try:
-                ip_hash = abs(hash(str(ip_address))) % 0xfff0 + 0x10
-                class_id = f"1:{ip_hash:x}"
-                prio = ip_hash
-                config = load_config()
-                interface = config.get("distribution_interface", "eth1")
-                subprocess.run(['tc', 'filter', 'del', 'dev', interface, 'protocol', 'ip', 'parent', '1:0',
-                              'prio', str(prio), 'u32', 'match', 'ip', 'dst', str(ip_address), 'flowid', class_id], check=False)
-                subprocess.run(['tc', 'filter', 'del', 'dev', interface, 'protocol', 'ip', 'parent', '1:0',
-                              'prio', str(prio), 'u32', 'match', 'ip', 'src', str(ip_address), 'flowid', class_id], check=False)
-                subprocess.run(['tc', 'class', 'del', 'dev', interface, 'parent', '1:', 'classid', class_id], check=False)
-            except Exception:
-                pass
-            app.logger.warning(f"Addon not available, attempted TC cleanup for {ip_address}")
-            return jsonify({"status": "success", "message": f"Throttle released for {ip_address} (TC cleanup)"})
+        return jsonify({"status": "success", "message": f"Throttle released for {ip_address}"})
 
     except Exception as e:
         app.logger.error("Error releasing throttle: %s", e, exc_info=True)
