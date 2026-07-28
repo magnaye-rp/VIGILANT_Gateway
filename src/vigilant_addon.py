@@ -1035,13 +1035,17 @@ def release_circuit_breaker(client_ip):
         _engagement_current_level[client_ip] = 0
         _engagement_low_activity_since.pop(client_ip, None)
     _previous_rate.pop(client_ip, None)
-    remove_throttle_cycle(client_ip)
+    success = remove_throttle_cycle(client_ip)
     # Reset social session counters so next session starts fresh
     with velocity_lock:
         social_session_totals.pop(client_ip, None)
         social_session_start.pop(client_ip, None)
-    log_throttle(client_ip, "manual_release", 0, 0, "ENGAGEMENT_RESET_MANUAL", "Manual release from dashboard")
-    print(f"[VIGILANT] Manual release: {client_ip} engagement reset")
+    if success:
+        log_throttle(client_ip, "manual_release", 0, 0, "ENGAGEMENT_RESET_MANUAL", "Manual release from dashboard")
+        print(f"[VIGILANT] Manual release: {client_ip} engagement reset")
+    else:
+        print(f"[VIGILANT] Manual release failed tc cleanup for {client_ip}")
+    return success
 
 
 def get_all_circuit_breaker_states():
@@ -1525,7 +1529,15 @@ def remove_throttle(client_ip, client_ip_only=False):
                 check=False, capture_output=True, text=True
             )
             if r.returncode != 0:
-                errors.append(f"class delete: {r.stderr.strip()}")
+                # Some tc builds reject the parent-qualified form for deletes.
+                retry = subprocess.run(
+                    ["tc", "class", "del", "dev", interface, "classid", class_id],
+                    check=False, capture_output=True, text=True
+                )
+                if retry.returncode != 0:
+                    errors.append(
+                        f"class delete: {r.stderr.strip() or retry.stderr.strip()}"
+                    )
         
         if errors:
             print(f"[VIGILANT] Throttle removal for {client_ip} on {interface} had errors: {'; '.join(errors)}")
@@ -1621,9 +1633,10 @@ def remove_throttle_cycle(client_ip):
     # Remove TC rules
     success = remove_throttle(client_ip)
 
-    # Clean up timer
+    # Cancel any pending recovery timer for this client so a stale timer
+    # cannot race with a manual release.
     with throttle_timers_lock:
-        throttle_timers.pop(client_ip, None)
+        _cancel_timer(client_ip)
 
     # Clean up from active throttled_clients set
     with throttled_clients_lock:
@@ -1638,6 +1651,7 @@ def remove_throttle_cycle(client_ip):
         print(f"[VIGILANT] Throttle cycle completed for {client_ip} - bandwidth restored")
     else:
         print(f"[VIGILANT] WARNING: Throttle removal failed for {client_ip} - DB not updated")
+    return success
 
 
 def save_throttle_state(client_ip, is_throttled, recovery_at):
@@ -2020,7 +2034,8 @@ class VIGILANTAddon:
                             print("[VIGILANT] RESET_ALL complete")
                         else:
                             print(f"[VIGILANT] Processing release queue: {ip}")
-                            release_circuit_breaker(ip)
+                            if not release_circuit_breaker(ip):
+                                print(f"[VIGILANT] Release queue failed to remove tc state for {ip}")
             except OSError:
                 pass
 

@@ -274,21 +274,11 @@ def _signal_throttle_release(client_ip: str) -> None:
     that mitmproxy's _cache_refresh_loop picks up within ~1 second and
     processes with full CAP_NET_ADMIN privileges.
 
-    We also immediately mark is_throttled=0 in the DB so the dashboard
-    clears the device without waiting for the proxy round-trip.
+    The addon updates throttle_state only after tc cleanup succeeds. This
+    avoids the false "released" state where the dashboard clears the device
+    even though the HTB class is still attached to the interface.
     """
-    # 1. Update the DB immediately so the dashboard reflects the change.
-    try:
-        with _open_db() as conn:
-            conn.execute(
-                "UPDATE throttle_state SET is_throttled = 0 WHERE client_ip = ?",
-                (client_ip,)
-            )
-            conn.commit()
-    except Exception as exc:
-        app.logger.warning("Failed to update throttle_state for %s: %s", client_ip, exc)
-
-    # 2. Write to the release queue so mitmproxy removes the tc rules.
+    # Write to the release queue so mitmproxy removes the tc rules.
     try:
         queue_file = Path(DB_PATH).parent / ".throttle_release_queue"
         _ensure_directory(queue_file)
@@ -2886,8 +2876,8 @@ def release_throttle():
     """Manually release throttle for a specific device.
 
     Flask lacks CAP_NET_ADMIN, so tc cleanup is delegated to mitmproxy via
-    the .throttle_release_queue file. The DB is updated immediately so the
-    dashboard reflects the change without waiting for the proxy round-trip.
+    the .throttle_release_queue file. The addon updates the DB only after the
+    underlying tc cleanup succeeds so UI state cannot drift from kernel state.
     """
     try:
         data = request.json or {}
@@ -2917,7 +2907,7 @@ def release_throttle():
         # Signal the proxy to refresh its rule cache as well.
         _signal_rule_cache_reload()
 
-        return jsonify({"status": "success", "message": f"Throttle released for {ip_address}"})
+        return jsonify({"status": "success", "message": f"Throttle release queued for {ip_address}"})
 
     except Exception as e:
         app.logger.error("Error releasing throttle: %s", e, exc_info=True)
