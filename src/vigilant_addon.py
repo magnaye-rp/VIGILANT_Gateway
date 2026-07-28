@@ -79,6 +79,7 @@ _engagement_last_request = defaultdict(float)  # client_ip → last social reque
 _engagement_current_level = defaultdict(int)   # client_ip → active level 0-3
 _engagement_lock = threading.Lock()
 _previous_rate = {}
+_engagement_low_activity_since = defaultdict(float)  # client_ip → when RPM first dropped below baseline
 
 # Level → tc rate
 ENGAGEMENT_LEVEL_RATE = {
@@ -893,17 +894,46 @@ def _engagement_tracking_loop():
                         continue
                     last_req = _engagement_last_request.get(ip, 0)
                     idle = now - last_req
-                    
+
+                    # ── Check 1: Zero requests for reset_idle ──
                     if idle >= reset_idle:
                         old_level = _engagement_current_level.get(ip, 0)
                         if old_level > 0:
-                            print(f"[VIGILANT] ENGAGEMENT RESET: {ip} idle {idle:.0f}s, releasing")
+                            print(f"[VIGILANT] ENGAGEMENT RESET (idle): {ip} idle {idle:.0f}s, releasing")
                             _previous_rate.pop(ip, None)
                             remove_throttle_cycle(ip)
                         _engagement_start[ip] = 0
                         _engagement_minutes[ip] = 0
                         _engagement_current_level[ip] = 0
+                        _engagement_low_activity_since.pop(ip, None)
                         continue
+
+                    # ── Check 2: Low activity for reset_idle ──
+                    # Background pings (1 RPM) keep _engagement_last_request fresh,
+                    # so the idle check above never fires. We also check the social
+                    # request deque (60s window): if the user has fewer than 3
+                    # requests/min for the entire reset_idle period, they've stopped
+                    # doomscrolling and we should release the throttle.
+                    sdq = social_request_history.get(ip)
+                    recent_req_count = len(sdq) if sdq else 0
+                    if recent_req_count < 3:
+                        low_start = _engagement_low_activity_since.get(ip, 0)
+                        if low_start == 0:
+                            _engagement_low_activity_since[ip] = now
+                        elif now - low_start >= reset_idle:
+                            old_level = _engagement_current_level.get(ip, 0)
+                            if old_level > 0:
+                                print(f"[VIGILANT] ENGAGEMENT RESET (low activity): {ip} {recent_req_count} reqs/min for {(now - low_start):.0f}s, releasing")
+                                _previous_rate.pop(ip, None)
+                                remove_throttle_cycle(ip)
+                            _engagement_start[ip] = 0
+                            _engagement_minutes[ip] = 0
+                            _engagement_current_level[ip] = 0
+                            _engagement_low_activity_since.pop(ip, None)
+                            continue
+                    else:
+                        # Activity picked up → clear low-activity tracker
+                        _engagement_low_activity_since.pop(ip, None)
                     
                     elapsed = (now - started) / 60.0
                     if elapsed > _engagement_minutes.get(ip, 0):
@@ -988,6 +1018,7 @@ def release_circuit_breaker(client_ip):
         _engagement_start[client_ip] = 0
         _engagement_minutes[client_ip] = 0
         _engagement_current_level[client_ip] = 0
+        _engagement_low_activity_since.pop(client_ip, None)
     _previous_rate.pop(client_ip, None)
     remove_throttle_cycle(client_ip)
     print(f"[VIGILANT] Manual release: {client_ip} engagement reset")
@@ -1124,8 +1155,10 @@ def should_throttle(client_ip, host, path=""):
         social_rpm = len(sdq)
         social_elapsed = time.time() - social_session_start[client_ip]
 
-    # Flag if: 3+ min on social media AND still making requests (1+ RPM)
-    flagged = social_elapsed >= 180 and social_rpm >= 1
+    # Flag if: 3+ min on social media AND actively making requests (2+ RPM).
+    # At 1 RPM the user has stopped scrolling — those are just background pings
+    # from the app staying open. We require 2+ RPM to consider them "engaged."
+    flagged = social_elapsed >= 180 and social_rpm >= 2
 
     if flagged:
         print(f"[VIGILANT] Engaged: {client_ip} @ {social_rpm} RPM for {social_elapsed:.0f}s")

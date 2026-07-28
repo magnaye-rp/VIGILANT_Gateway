@@ -2661,6 +2661,8 @@ def reset_all_throttles():
                 vigilant._engagement_minutes.clear()
                 vigilant._engagement_last_request.clear()
                 vigilant._engagement_current_level.clear()
+                if hasattr(vigilant, "_engagement_low_activity_since"):
+                    vigilant._engagement_low_activity_since.clear()
             vigilant._previous_rate.clear()
         
         # 3. Clear throttled_clients set
