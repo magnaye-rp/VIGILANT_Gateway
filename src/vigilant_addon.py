@@ -493,6 +493,29 @@ def load_proxy_config():
                 if not domain.startswith('www.'):
                     pinned_domains.add(f'www.{domain}')
 
+        # Engagement time thresholds (dashboard-tunable)
+        def _read_int(key, default):
+            cursor.execute("SELECT value FROM config_settings WHERE key = ?", (key,))
+            r = cursor.fetchone()
+            return int(r[0]) if r else default
+        eng_l1 = _read_int('engagement_l1_minutes', ENGAGEMENT_L1_MINUTES)
+        eng_l2 = _read_int('engagement_l2_minutes', ENGAGEMENT_L2_MINUTES)
+        eng_l3 = _read_int('engagement_l3_minutes', ENGAGEMENT_L3_MINUTES)
+        eng_reset = _read_int('engagement_reset_idle', ENGAGEMENT_RESET_IDLE)
+
+        # Engagement throttle rates (dashboard-tunable)
+        def _read_str(key, default):
+            cursor.execute("SELECT value FROM config_settings WHERE key = ?", (key,))
+            r = cursor.fetchone()
+            return str(r[0]) if r else default
+        eng_l1_rate = _read_str('engagement_l1_rate', ENGAGEMENT_LEVEL_RATE.get(1, '128kbit'))
+        eng_l2_rate = _read_str('engagement_l2_rate', ENGAGEMENT_LEVEL_RATE.get(2, '32kbit'))
+        eng_l3_rate = _read_str('engagement_l3_rate', ENGAGEMENT_LEVEL_RATE.get(3, '4kbit'))
+
+        # Engagement check interval and min requests (dashboard-tunable)
+        eng_check_interval = _read_int('engagement_check_interval', 30)
+        eng_min_requests = _read_int('engagement_min_requests', ENGAGEMENT_MIN_REQUESTS)
+
         conn.close()
 
         return {
@@ -501,7 +524,16 @@ def load_proxy_config():
             'nlp_enabled': nlp_enabled,
             'sni_filtering_enabled': sni_filtering_enabled,
             'throttle_rate': throttle_rate,
-            'pinned_domains': pinned_domains
+            'pinned_domains': pinned_domains,
+            'engagement_l1_minutes': eng_l1,
+            'engagement_l2_minutes': eng_l2,
+            'engagement_l3_minutes': eng_l3,
+            'engagement_reset_idle': eng_reset,
+            'engagement_l1_rate': eng_l1_rate,
+            'engagement_l2_rate': eng_l2_rate,
+            'engagement_l3_rate': eng_l3_rate,
+            'engagement_check_interval': eng_check_interval,
+            'engagement_min_requests': eng_min_requests,
         }
     except Exception as e:
         print(f"[VIGILANT] Error loading proxy config from database: {e}, using defaults")
@@ -511,7 +543,16 @@ def load_proxy_config():
             'nlp_enabled': True,
             'sni_filtering_enabled': True,
             'throttle_rate': DEFAULT_THROTTLE_RATE,
-            'pinned_domains': set(DEFAULT_PINNED_DOMAINS.split(','))
+            'pinned_domains': set(DEFAULT_PINNED_DOMAINS.split(',')),
+            'engagement_l1_minutes': ENGAGEMENT_L1_MINUTES,
+            'engagement_l2_minutes': ENGAGEMENT_L2_MINUTES,
+            'engagement_l3_minutes': ENGAGEMENT_L3_MINUTES,
+            'engagement_reset_idle': ENGAGEMENT_RESET_IDLE,
+            'engagement_l1_rate': ENGAGEMENT_LEVEL_RATE.get(1, '128kbit'),
+            'engagement_l2_rate': ENGAGEMENT_LEVEL_RATE.get(2, '32kbit'),
+            'engagement_l3_rate': ENGAGEMENT_LEVEL_RATE.get(3, '4kbit'),
+            'engagement_check_interval': 30,
+            'engagement_min_requests': ENGAGEMENT_MIN_REQUESTS,
         }
 
 
@@ -829,10 +870,21 @@ def _engagement_tracking_loop():
     """Background thread: every 30s, check which devices are engaged in
     social media and update their cumulative engagement minutes.
     If engagement exceeds thresholds, apply/escalate throttle.
-    If idle too long, reset engagement."""
+    If idle too long, reset engagement.
+    Thresholds are read from DB config so the dashboard can tune them."""
     while True:
-        time.sleep(ENGAGEMENT_CHECK_INTERVAL)
         try:
+            # Read all behavioral params from DB (allows dashboard tuning)
+            config = load_proxy_config()
+            l1_min = int(config.get('engagement_l1_minutes', ENGAGEMENT_L1_MINUTES))
+            l2_min = int(config.get('engagement_l2_minutes', ENGAGEMENT_L2_MINUTES))
+            l3_min = int(config.get('engagement_l3_minutes', ENGAGEMENT_L3_MINUTES))
+            reset_idle = int(config.get('engagement_reset_idle', ENGAGEMENT_RESET_IDLE))
+            l1_rate = config.get('engagement_l1_rate', ENGAGEMENT_LEVEL_RATE.get(1, '128kbit'))
+            l2_rate = config.get('engagement_l2_rate', ENGAGEMENT_LEVEL_RATE.get(2, '32kbit'))
+            l3_rate = config.get('engagement_l3_rate', ENGAGEMENT_LEVEL_RATE.get(3, '4kbit'))
+            check_interval = int(config.get('engagement_check_interval', 30))
+            
             now = time.time()
             with _engagement_lock:
                 for ip in list(_engagement_start.keys()):
@@ -842,8 +894,7 @@ def _engagement_tracking_loop():
                     last_req = _engagement_last_request.get(ip, 0)
                     idle = now - last_req
                     
-                    # Reset if idle too long (2 min no activity = session over)
-                    if idle >= ENGAGEMENT_RESET_IDLE:
+                    if idle >= reset_idle:
                         old_level = _engagement_current_level.get(ip, 0)
                         if old_level > 0:
                             print(f"[VIGILANT] ENGAGEMENT RESET: {ip} idle {idle:.0f}s, releasing")
@@ -854,16 +905,24 @@ def _engagement_tracking_loop():
                         _engagement_current_level[ip] = 0
                         continue
                     
-                    # Active: accumulate engagement time
-                    elapsed = (now - started) / 60.0  # minutes
+                    elapsed = (now - started) / 60.0
                     if elapsed > _engagement_minutes.get(ip, 0):
                         _engagement_minutes[ip] = elapsed
-                        new_level = _engagement_level_from_minutes(elapsed)
+                        if elapsed >= l3_min:
+                            new_level = CB_LEVEL_CIRCUIT_BREAK
+                        elif elapsed >= l2_min:
+                            new_level = CB_LEVEL_FRICTION
+                        elif elapsed >= l1_min:
+                            new_level = CB_LEVEL_PAUSE
+                        else:
+                            new_level = CB_LEVEL_NONE
                         old_level = _engagement_current_level.get(ip, 0)
                         if new_level != old_level:
                             _engagement_current_level[ip] = new_level
                             if new_level > 0:
-                                rate = ENGAGEMENT_LEVEL_RATE.get(new_level)
+                                # Build dynamic rate lookup from config
+                                _engagement_rates = {0: None, 1: l1_rate, 2: l2_rate, 3: l3_rate}
+                                rate = _engagement_rates.get(new_level)
                                 if rate and _previous_rate.get(ip) != rate:
                                     apply_throttle(ip, rate=rate)
                                     _previous_rate[ip] = rate
@@ -872,7 +931,9 @@ def _engagement_tracking_loop():
                                     print(f"[VIGILANT] ENGAGEMENT {ip}: {elapsed:.1f}min → L{new_level} @ {rate}")
         except Exception as e:
             print(f"[VIGILANT] Engagement loop error: {e}")
-            time.sleep(5)
+            check_interval = 5  # Fast retry on error
+
+        time.sleep(check_interval)
 
 
 
@@ -899,7 +960,14 @@ def apply_circuit_breaker_action(client_ip, domain, level, rpm_current=0, rpm_ba
     """Apply throttle if level changed. Engagement loop calls this, not request path."""
     if level == CB_LEVEL_NONE:
         return False
-    rate = ENGAGEMENT_LEVEL_RATE.get(level)
+    config = load_proxy_config()
+    _engagement_rates = {
+        0: None,
+        1: config.get('engagement_l1_rate', ENGAGEMENT_LEVEL_RATE.get(1, '128kbit')),
+        2: config.get('engagement_l2_rate', ENGAGEMENT_LEVEL_RATE.get(2, '32kbit')),
+        3: config.get('engagement_l3_rate', ENGAGEMENT_LEVEL_RATE.get(3, '4kbit')),
+    }
+    rate = _engagement_rates.get(level)
     if not rate:
         return False
     prev = _previous_rate.get(client_ip)
@@ -1039,7 +1107,7 @@ def should_throttle(client_ip, host, path=""):
         social_session_totals[client_ip] += 1
         social_count = social_session_totals[client_ip]
 
-    if social_count < MIN_SOCIAL_REQUESTS_BASELINE:
+    if social_count < int(config.get('engagement_min_requests', MIN_SOCIAL_REQUESTS_BASELINE)):
         return False, rpm_now, rpm_base
 
     # Optional: YouTube / IG short-form detection

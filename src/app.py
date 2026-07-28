@@ -140,16 +140,16 @@ DEFAULT_CONFIG = {
 CONFIG_DEFAULTS = DEFAULT_CONFIG
 
 ALLOWED_CONFIG_KEYS = set(CONFIG_DEFAULTS) | {
-    "block_harmful", "block_distracting", "enable_https", "log_retention", 
-    "network_velocity_preset", "network_velocity_custom", "physical_scroll_preset", 
-    "physical_scroll_custom", "sni_filtering_enabled", "request_threshold",
-    "proxy_throttle_rate", "proxy_pinned_domains", "cb_no_pause_seconds", "custom_bypass_domains",
-    "deescalation_l1", "deescalation_l2", "deescalation_l3", "sustained_activity_minutes"
+    "block_harmful", "block_distracting", "enable_https", "log_retention",
+    "custom_bypass_domains",
+    "engagement_l1_minutes", "engagement_l2_minutes", "engagement_l3_minutes", "engagement_reset_idle",
+    "engagement_l1_rate", "engagement_l2_rate", "engagement_l3_rate",
+    "engagement_check_interval", "engagement_min_requests"
 }
 BOOLEAN_CONFIG_KEYS = {"block_harmful", "block_distracting", "nlp_enabled", "throttle_enabled", "enable_https", "sni_filtering_enabled"}
 FLOAT_CONFIG_KEYS = {"network_velocity_threshold", "tfidf_classification_threshold", "tfidf_url_threshold", "tfidf_body_threshold"}
-INTEGER_CONFIG_KEYS = {"physical_scroll_threshold", "throttle_rate", "throttle_duration", "log_retention", "network_velocity_custom", "physical_scroll_custom", "request_threshold", "deescalation_l1", "deescalation_l2", "deescalation_l3", "sustained_activity_minutes"}
-STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "upstream_dns", "nlp_accuracy", "ui_theme", "network_velocity_preset", "physical_scroll_preset", "proxy_throttle_rate", "proxy_pinned_domains", "custom_bypass_domains"}
+INTEGER_CONFIG_KEYS = {"physical_scroll_threshold", "throttle_rate", "throttle_duration", "log_retention", "network_velocity_custom", "physical_scroll_custom", "request_threshold", "deescalation_l1", "deescalation_l2", "deescalation_l3", "sustained_activity_minutes", "engagement_l1_minutes", "engagement_l2_minutes", "engagement_l3_minutes", "engagement_reset_idle", "engagement_check_interval", "engagement_min_requests"}
+STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "upstream_dns", "nlp_accuracy", "ui_theme", "network_velocity_preset", "physical_scroll_preset", "proxy_throttle_rate", "proxy_pinned_domains", "custom_bypass_domains", "engagement_l1_rate", "engagement_l2_rate", "engagement_l3_rate"}
 TRAFFIC_CATEGORIES = ("Educational", "Productive", "Distracting", "Harmful")
 L4_TRAFFIC_CATEGORIES = ("DNS_TRACKED", "SNI_PASSTHROUGH")
 DEFAULT_THROTTLE_DURATION = 600
@@ -2590,74 +2590,23 @@ def handle_behavioral_config():
     if request.method == "GET":
         with _open_db() as conn:
             config = load_config(connection=conn)
-            
-            try:
-                custom_net = config.get("network_velocity_custom")
-                if custom_net is not None:
-                    net_custom = int(float(custom_net))
-                else:
-                    threshold_val = float(config.get("network_velocity_threshold", 1.5))
-                    net_custom = int(threshold_val * 100)
-            except (TypeError, ValueError):
-                net_custom = 150
-
-            try:
-                custom_scroll = config.get("physical_scroll_custom")
-                if custom_scroll is not None:
-                    scroll_custom = int(float(custom_scroll))
-                else:
-                    scroll_custom = int(float(config.get("physical_scroll_threshold", 75)))
-            except (TypeError, ValueError):
-                scroll_custom = 75
-
             return jsonify({
-                "network_velocity_preset": config.get("network_velocity_preset", "Medium"),
-                "network_velocity_custom": net_custom,
-                "physical_scroll_preset": config.get("physical_scroll_preset", "Medium"),
-                "physical_scroll_custom": scroll_custom,
-                "sustained_activity_minutes": int(config.get("sustained_activity_minutes", 10)),
-                "sni_filtering_enabled": _coerce_bool(config.get("sni_filtering_enabled", "true")),
-                "throttle_enabled": _coerce_bool(config.get("throttle_enabled", "true")),
-                "throttle_rate": int(config.get("throttle_rate", CONFIG_DEFAULTS["throttle_rate"])),
-                "throttle_duration": _current_throttle_duration(config, connection=conn),
-                "deescalation_l1": int(config.get("deescalation_l1", 60)),
-                "deescalation_l2": int(config.get("deescalation_l2", 90)),
-                "deescalation_l3": int(config.get("deescalation_l3", 300)),
+                "engagement_l1_minutes": int(config.get("engagement_l1_minutes", 3)),
+                "engagement_l2_minutes": int(config.get("engagement_l2_minutes", 6)),
+                "engagement_l3_minutes": int(config.get("engagement_l3_minutes", 12)),
+                "engagement_reset_idle": int(config.get("engagement_reset_idle", 120)),
+                "engagement_l1_rate": str(config.get("engagement_l1_rate", "128kbit")),
+                "engagement_l2_rate": str(config.get("engagement_l2_rate", "32kbit")),
+                "engagement_l3_rate": str(config.get("engagement_l3_rate", "4kbit")),
+                "engagement_check_interval": int(float(config.get("engagement_check_interval", 30))),
+                "engagement_min_requests": int(config.get("engagement_min_requests", 10)),
             })
-            
-    # POST / PUT request handling
+
     payload = request.get_json(silent=True) or {}
-    
-    # When preset changes, update the corresponding threshold value
-    if "network_velocity_preset" in payload:
-        preset = payload["network_velocity_preset"]
-        if preset == "High":
-            payload["network_velocity_threshold"] = "1.1"
-        elif preset == "Medium":
-            payload["network_velocity_threshold"] = "1.5"
-        elif preset == "Low":
-            payload["network_velocity_threshold"] = "2.0"
-    
-    if "physical_scroll_preset" in payload:
-        preset = payload["physical_scroll_preset"]
-        if preset == "High":
-            payload["physical_scroll_threshold"] = "120"
-        elif preset == "Medium":
-            payload["physical_scroll_threshold"] = "180"
-        elif preset == "Low":
-            payload["physical_scroll_threshold"] = "300"
-    
-    # When custom value changes, update the threshold
-    if "network_velocity_custom" in payload:
-        try:
-            payload["network_velocity_threshold"] = str(float(payload["network_velocity_custom"]) / 100.0)
-        except (TypeError, ValueError):
-            payload["network_velocity_threshold"] = "1.5"
-    
-    if "physical_scroll_custom" in payload:
-        payload["physical_scroll_threshold"] = str(payload["physical_scroll_custom"])
-    
     save_config(payload)
+
+    # Signal the vigilant_addon module to reload config (picks up new rates/intervals)
+    _signal_rule_cache_reload()
     return jsonify({"status": "success"})
 
 @app.route("/api/circuit-breaker/state", methods=["GET"])

@@ -730,54 +730,49 @@ async function loadBehavioralSettings() {
     if (!response.ok) return;
     const data = await parseJsonResponse(response) || {};
 
-    // Determine mode from preset values
-    const netPreset = data.network_velocity_preset || 'Medium';
-    const scrollPreset = data.physical_scroll_preset || 'Medium';
+    const l1 = data.engagement_l1_minutes || 3;
+    const l2 = data.engagement_l2_minutes || 6;
+    const l3 = data.engagement_l3_minutes || 12;
+    const reset = data.engagement_reset_idle || 120;
+    const l1Rate = data.engagement_l1_rate || '128kbit';
+    const l2Rate = data.engagement_l2_rate || '32kbit';
+    const l3Rate = data.engagement_l3_rate || '4kbit';
+    const checkInterval = data.engagement_check_interval || 30;
+    const minRequests = data.engagement_min_requests || 10;
 
+    // Determine mode
     let mode = 'custom';
     for (const [key, preset] of Object.entries(BEHAVIORAL_PRESETS)) {
-      if (preset.network_velocity_preset === netPreset && preset.physical_scroll_preset === scrollPreset) {
+      if (preset.l1_minutes == l1 && preset.l2_minutes == l2 &&
+          preset.l3_minutes == l3 && preset.l1_rate == l1Rate &&
+          preset.l2_rate == l2Rate && preset.l3_rate == l3Rate) {
         mode = key;
         break;
       }
     }
     selectBehavioralMode(mode);
 
-    // Populate advanced sliders with current values
-    const multiplier = data.network_velocity_custom || 150;
-    const rpmCap = data.physical_scroll_custom || 180;
-    const throttleRate = data.throttle_rate || 32;
-    const throttleDuration = data.throttle_duration || 600;
-    const sniEnabled = data.sni_filtering_enabled !== false;
+    const elL1 = document.getElementById('adv-engagement-l1');
+    const elL2 = document.getElementById('adv-engagement-l2');
+    const elL3 = document.getElementById('adv-engagement-l3');
+    const elReset = document.getElementById('adv-engagement-reset');
+    const elL1Rate = document.getElementById('adv-engagement-l1-rate');
+    const elL2Rate = document.getElementById('adv-engagement-l2-rate');
+    const elL3Rate = document.getElementById('adv-engagement-l3-rate');
+    const elCheckInterval = document.getElementById('adv-engagement-check-interval');
+    const elMinRequests = document.getElementById('adv-engagement-min-requests');
+    if (elL1) elL1.value = String(l1);
+    if (elL2) elL2.value = String(l2);
+    if (elL3) elL3.value = String(l3);
+    if (elReset) elReset.value = String(reset);
+    if (elL1Rate) elL1Rate.value = String(l1Rate);
+    if (elL2Rate) elL2Rate.value = String(l2Rate);
+    if (elL3Rate) elL3Rate.value = String(l3Rate);
+    if (elCheckInterval) elCheckInterval.value = String(checkInterval);
+    if (elMinRequests) elMinRequests.value = String(minRequests);
 
-    const multSlider = document.getElementById('adv-velocity-multiplier');
-    const rpmSlider = document.getElementById('adv-rpm-cap');
-    const rateSelect = document.getElementById('adv-throttle-rate');
-    const durationSelect = document.getElementById('adv-throttle-duration');
-    const sniCheck = document.getElementById('adv-sni-enabled');
-
-    if (multSlider) multSlider.value = multiplier;
-    if (rpmSlider) rpmSlider.value = rpmCap;
-    if (rateSelect) rateSelect.value = String(throttleRate);
-    if (durationSelect) durationSelect.value = String(throttleDuration);
-    if (sniCheck) {
-      sniCheck.checked = sniEnabled;
-      updateSNIStatusIndicator(sniCheck);
-    }
-
-    // Load sustained minutes
-    const sustainedSlider = document.getElementById('adv-sustained-minutes');
-    if (sustainedSlider) sustainedSlider.value = String(data.sustained_activity_minutes || 10);
-
-    // Load de-escalation pause values
-    const deL1 = document.getElementById('adv-deescalation-l1');
-    const deL2 = document.getElementById('adv-deescalation-l2');
-    const deL3 = document.getElementById('adv-deescalation-l3');
-    if (deL1) deL1.value = String(data.deescalation_l1 || 60);
-    if (deL2) deL2.value = String(data.deescalation_l2 || 90);
-    if (deL3) deL3.value = String(data.deescalation_l3 || 300);
-
-    updateBehavioralPreview();
+    // Update timeline if in custom mode
+    if (mode === 'custom') updateBehavioralTimeline();
   } catch (e) {
     console.error('loadBehavioralSettings:', e);
   }
@@ -787,186 +782,117 @@ async function loadBehavioralSettings() {
 
 const BEHAVIORAL_PRESETS = {
   relaxed: {
-    network_velocity_preset: 'Low',
-    physical_scroll_preset: 'Low',
-    multiplier: 200,
-    rpm_cap: 300,
-    sustained_minutes: 10,
-    deescalation_l1: 60,
-    deescalation_l2: 90,
-    deescalation_l3: 300,
-    throttle_rate: '64',
-    description: '10 min sustained or RPM spike triggers. Easy recovery (60s pause). Light 128kbit throttle.'
+    l1_minutes: 5, l2_minutes: 10, l3_minutes: 20, idle_reset: 120,
+    l1_rate: '256kbit', l2_rate: '64kbit', l3_rate: '8kbit',
+    description: 'L1 at 5min (256kbit), L2 at 10min (64kbit), L3 at 20min (8kbit). 2min idle reset.'
   },
   balanced: {
-    network_velocity_preset: 'Medium',
-    physical_scroll_preset: 'Medium',
-    multiplier: 150,
-    rpm_cap: 180,
-    sustained_minutes: 10,
-    deescalation_l1: 60,
-    deescalation_l2: 90,
-    deescalation_l3: 300,
-    throttle_rate: '32',
-    description: 'Default. 10 min sustained or RPM spike triggers. Moderate recovery (60-120s).'
+    l1_minutes: 3, l2_minutes: 6, l3_minutes: 12, idle_reset: 120,
+    l1_rate: '128kbit', l2_rate: '32kbit', l3_rate: '4kbit',
+    description: 'L1 at 3min (128kbit), L2 at 6min (32kbit), L3 at 12min (4kbit). 2min idle reset.'
   },
   strict: {
-    network_velocity_preset: 'High',
-    physical_scroll_preset: 'High',
-    multiplier: 110,
-    rpm_cap: 120,
-    sustained_minutes: 5,
-    deescalation_l1: 30,
-    deescalation_l2: 60,
-    deescalation_l3: 90,
-    throttle_rate: '16',
-    description: 'Very sensitive. Quick to throttle (5 min sustained), harder to recover (30-90s). 16kbit.'
+    l1_minutes: 2, l2_minutes: 4, l3_minutes: 8, idle_reset: 120,
+    l1_rate: '64kbit', l2_rate: '16kbit', l3_rate: '2kbit',
+    description: 'L1 at 2min (64kbit), L2 at 4min (16kbit), L3 at 8min (2kbit). 2min idle reset.'
   }
 };
 
 function selectBehavioralMode(mode) {
-  // Update card styles
-  document.querySelectorAll('.mode-card').forEach(el => {
-    el.style.borderColor = 'transparent';
-  });
+  document.querySelectorAll('.mode-card').forEach(el => el.style.borderColor = 'transparent');
   const card = document.getElementById('mode-card-' + mode);
   if (card) {
     card.style.borderColor = 'var(--primary)';
     card.querySelector('input[type="radio"]').checked = true;
   }
-
   const advSection = document.getElementById('behavioral-advanced');
   if (mode === 'custom') {
     advSection.classList.remove('d-none');
+    updateBehavioralTimeline();
   } else {
     advSection.classList.add('d-none');
-    // Apply preset values to sliders for preview
     const preset = BEHAVIORAL_PRESETS[mode] || BEHAVIORAL_PRESETS.balanced;
-    const multSlider = document.getElementById('adv-velocity-multiplier');
-    const rpmSlider = document.getElementById('adv-rpm-cap');
-    const sustainedSlider = document.getElementById('adv-sustained-minutes');
-    if (multSlider) multSlider.value = preset.multiplier;
-    if (rpmSlider) rpmSlider.value = preset.rpm_cap;
-    if (sustainedSlider) sustainedSlider.value = preset.sustained_minutes || 10;
+    const elL1 = document.getElementById('adv-engagement-l1');
+    const elL2 = document.getElementById('adv-engagement-l2');
+    const elL3 = document.getElementById('adv-engagement-l3');
+    const elL1Rate = document.getElementById('adv-engagement-l1-rate');
+    const elL2Rate = document.getElementById('adv-engagement-l2-rate');
+    const elL3Rate = document.getElementById('adv-engagement-l3-rate');
+    if (elL1) elL1.value = String(preset.l1_minutes);
+    if (elL2) elL2.value = String(preset.l2_minutes);
+    if (elL3) elL3.value = String(preset.l3_minutes);
+    if (elL1Rate) elL1Rate.value = String(preset.l1_rate);
+    if (elL2Rate) elL2Rate.value = String(preset.l2_rate);
+    if (elL3Rate) elL3Rate.value = String(preset.l3_rate);
   }
-  updateBehavioralPreview();
 }
 
-function updateBehavioralPreview() {
-  const multSlider = document.getElementById('adv-velocity-multiplier');
-  const rpmSlider = document.getElementById('adv-rpm-cap');
-  const sustainedSlider = document.getElementById('adv-sustained-minutes');
-  const rateSelect = document.getElementById('adv-throttle-rate');
+function updateBehavioralTimeline() {
+  // Read current custom values and update the timeline display
+  const l1 = document.getElementById('adv-engagement-l1')?.value || '3';
+  const l2 = document.getElementById('adv-engagement-l2')?.value || '6';
+  const l3 = document.getElementById('adv-engagement-l3')?.value || '12';
+  const l1Rate = document.getElementById('adv-engagement-l1-rate')?.value || '128kbit';
+  const l2Rate = document.getElementById('adv-engagement-l2-rate')?.value || '32kbit';
+  const l3Rate = document.getElementById('adv-engagement-l3-rate')?.value || '4kbit';
+  const reset = document.getElementById('adv-engagement-reset')?.value || '120';
 
-  if (!multSlider || !rpmSlider || !rateSelect) return;
+  const setText = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+  setText('tl-l1-time', l1 + ' min');
+  setText('tl-l2-time', l2 + ' min');
+  setText('tl-l3-time', l3 + ' min');
+  setText('tl-l1-rate', l1Rate);
+  setText('tl-l2-rate', l2Rate);
+  setText('tl-l3-rate', l3Rate);
 
-  const multiplier = parseInt(multSlider.value, 10);
-  const rpmCap = parseInt(rpmSlider.value, 10);
-  const sustainedMin = sustainedSlider ? parseInt(sustainedSlider.value, 10) : 10;
-  const rate = parseInt(rateSelect.value, 10);
-
-  const setText = (id, text) => {
-    const el = document.getElementById(id);
-    if (el) el.textContent = text;
-  };
-
-  setText('preview-multiplier', (multiplier / 100).toFixed(1) + '×');
-  setText('adv-velocity-label', (multiplier / 100).toFixed(1) + '×');
-  setText('adv-verbose-velocity', (multiplier / 100).toFixed(1));
-  setText('preview-rpm-cap', rpmCap);
-  setText('adv-rpm-label', rpmCap);
-  setText('adv-verbose-rpm', Math.round(rpmCap / 60));
-  setText('preview-sustained', sustainedMin + ' min');
-  setText('adv-sustained-label', sustainedMin + ' min');
-  setText('adv-verbose-sustained', sustainedMin);
-  setText('preview-rate', rate + ' Kbps');
-  
-  // Update auto-release preview based on de-escalation dropdowns
-  const l1 = document.getElementById('adv-deescalation-l1');
-  const l3 = document.getElementById('adv-deescalation-l3');
-  if (l1 && l3) {
-    const l1Val = l1.value;
-    const l3Val = l3.value;
-    const l3Label = l3Val >= 300 ? '5 min' : l3Val + 's';
-    setText('preview-pause', l1Val + 's–' + l3Label);
-  }
+  // Format reset: convert seconds to minutes
+  const resetMin = Math.floor(parseInt(reset) / 60);
+  setText('tl-reset', (resetMin === 1 ? '1 min idle' : resetMin + ' min idle'));
 }
 
 async function saveBehavioralSettings(event) {
   event.preventDefault();
-
-  // Determine which mode is selected
   let mode = 'balanced';
   document.querySelectorAll('.mode-card input[type="radio"]').forEach(el => {
-    if (el.checked) {
-      mode = el.value;
-    }
+    if (el.checked) mode = el.value;
   });
 
   let payload = {};
-
   if (mode === 'custom') {
-    const multiplier = parseInt(document.getElementById('adv-velocity-multiplier').value, 10);
-    const rpmCap = parseInt(document.getElementById('adv-rpm-cap').value, 10);
-    const sustainedMinutes = parseInt(document.getElementById('adv-sustained-minutes')?.value || '10', 10);
-    const throttleRate = document.getElementById('adv-throttle-rate').value;
-    const throttleDuration = parseInt(document.getElementById('adv-throttle-duration').value, 10);
-    const sniEnabled = document.getElementById('adv-sni-enabled').checked;
-
     payload = {
-      network_velocity_custom: multiplier,
-      physical_scroll_custom: rpmCap,
-      network_velocity_preset: 'Custom',
-      physical_scroll_preset: 'Custom',
-      sni_filtering_enabled: sniEnabled,
-      proxy_throttle_rate: throttleRate + 'kbit',
-      proxy_pinned_domains: 'facebook.com,twitter.com,x.com,tiktok.com,instagram.com,reddit.com,youtube.com',
-      throttle_rate: String(throttleRate),
-      throttle_duration: String(throttleDuration),
-      sustained_activity_minutes: String(sustainedMinutes),
-      deescalation_l1: document.getElementById('adv-deescalation-l1')?.value || '60',
-      deescalation_l2: document.getElementById('adv-deescalation-l2')?.value || '90',
-      deescalation_l3: document.getElementById('adv-deescalation-l3')?.value || '300'
+      engagement_l1_minutes: document.getElementById('adv-engagement-l1')?.value || '3',
+      engagement_l2_minutes: document.getElementById('adv-engagement-l2')?.value || '6',
+      engagement_l3_minutes: document.getElementById('adv-engagement-l3')?.value || '12',
+      engagement_reset_idle: document.getElementById('adv-engagement-reset')?.value || '120',
+      engagement_l1_rate: document.getElementById('adv-engagement-l1-rate')?.value || '128kbit',
+      engagement_l2_rate: document.getElementById('adv-engagement-l2-rate')?.value || '32kbit',
+      engagement_l3_rate: document.getElementById('adv-engagement-l3-rate')?.value || '4kbit',
+      engagement_check_interval: document.getElementById('adv-engagement-check-interval')?.value || '30',
+      engagement_min_requests: document.getElementById('adv-engagement-min-requests')?.value || '10'
     };
   } else {
     const preset = BEHAVIORAL_PRESETS[mode] || BEHAVIORAL_PRESETS.balanced;
     payload = {
-      network_velocity_preset: preset.network_velocity_preset,
-      physical_scroll_preset: preset.physical_scroll_preset,
-      network_velocity_custom: preset.multiplier,
-      physical_scroll_custom: preset.rpm_cap,
-      sni_filtering_enabled: document.getElementById('adv-sni-enabled')?.checked ?? true,
-      proxy_throttle_rate: (preset.throttle_rate || '32') + 'kbit',
-      throttle_rate: preset.throttle_rate || '32',
-      deescalation_l1: String(preset.deescalation_l1 || 60),
-      deescalation_l2: String(preset.deescalation_l2 || 90),
-      deescalation_l3: String(preset.deescalation_l3 || 300)
+      engagement_l1_minutes: String(preset.l1_minutes),
+      engagement_l2_minutes: String(preset.l2_minutes),
+      engagement_l3_minutes: String(preset.l3_minutes),
+      engagement_reset_idle: String(preset.idle_reset),
+      engagement_l1_rate: String(preset.l1_rate),
+      engagement_l2_rate: String(preset.l2_rate),
+      engagement_l3_rate: String(preset.l3_rate)
     };
   }
 
-  const saveBtn = document.getElementById('behavioral-save-btn');
-  const originalText = saveBtn.innerHTML;
-  saveBtn.disabled = true;
-  saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
-
   try {
-    const response = await fetch('/api/config/behavioral', {
+    const resp = await fetch('/api/config/behavioral', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-
-    if (response.ok) {
-      showToast('Behavioral settings saved successfully', 'success');
-    } else {
-      const data = await parseJsonResponse(response);
-      showToast(getResponseErrorMessage(data, 'Failed to save settings'), 'danger');
-    }
-  } catch (error) {
-    showToast('Error saving behavioral settings', 'danger');
-  } finally {
-    saveBtn.disabled = false;
-    saveBtn.innerHTML = originalText;
+    if (resp.ok) showToast('Settings saved', 'success');
+    else showToast('Failed to save', 'danger');
+  } catch (e) {
+    showToast('Error saving', 'danger');
   }
 }
 
@@ -1719,6 +1645,15 @@ document.addEventListener('DOMContentLoaded', () => {
   if (sniClientFilter) {
     sniClientFilter.addEventListener('change', loadSNIDashboard);
   }
+
+  // Behavioral control timeline live update listeners
+  const bSelectors = ['adv-engagement-l1', 'adv-engagement-l2', 'adv-engagement-l3',
+                       'adv-engagement-l1-rate', 'adv-engagement-l2-rate', 'adv-engagement-l3-rate',
+                       'adv-engagement-reset'];
+  bSelectors.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', updateBehavioralTimeline);
+  });
 
   // Initial circuit breaker load
   loadCircuitBreakerState();
