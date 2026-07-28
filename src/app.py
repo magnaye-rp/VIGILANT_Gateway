@@ -220,21 +220,24 @@ def _verify_password(password: str) -> bool:
 def require_auth(f):
     """Decorator: protect a route with session-based authentication.
     
-    API routes return 401 JSON; page routes redirect to /login.
+    API routes (JSON endpoints) are open on the LAN — the mobile companion
+    app and the web dashboard's JavaScript access them without session auth.
+    Page routes (HTML templates) still redirect to /login if unauthenticated.
     """
     @functools.wraps(f)
     def decorated(*args, **kwargs):
+        # API routes are open on the LAN — the web dashboard's JS already
+        # sends the session cookie, and the mobile app calls them directly.
+        if request.path.startswith("/api/"):
+            return f(*args, **kwargs)
+        
+        # Page routes require session auth
         if session.get("authenticated"):
             return f(*args, **kwargs)
         
-        # If no password is set, redirect to setup flow instead
         if not _is_password_set():
-            if request.path.startswith("/api/"):
-                return jsonify({"error": "No password configured", "setup_required": True, "status": 401}), 401
             return redirect(url_for("setup_first_run"))
         
-        if request.path.startswith("/api/"):
-            return jsonify({"error": "Authentication required", "status": 401}), 401
         return redirect(url_for("login_page", next=request.path))
     
     return decorated
