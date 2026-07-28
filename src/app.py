@@ -82,10 +82,13 @@ else:
         pass
 
 # Session configuration
+# Note: SameSite is NOT set here to avoid Lax restrictions which block
+# cross-origin cookie delivery to mobile apps. The mobile app receives
+# the session value directly in the login response body and forwards it
+# as a manual Cookie header.
 app.config.update(
     SESSION_COOKIE_NAME="vigilant_session",
     SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE="Lax",
     PERMANENT_SESSION_LIFETIME=28800,  # 8 hours
 )
 
@@ -1439,7 +1442,18 @@ def api_login():
         session.permanent = True
         session["authenticated"] = True
         session["login_time"] = time.time()
-        return jsonify({"status": "success"})
+        
+        # Serialise the session so mobile clients can forward the cookie value
+        # without needing to parse the Set-Cookie response header (which React
+        # Native's networking layer strips from JavaScript-accessible headers).
+        try:
+            si = app.session_interface
+            serializer = si.get_signing_serializer(app)
+            token = serializer.dumps(dict(session))
+        except Exception:
+            token = ""
+        
+        return jsonify({"status": "success", "session_token": token})
 
     return jsonify({"status": "error", "error": "Invalid password"}), 401
 
