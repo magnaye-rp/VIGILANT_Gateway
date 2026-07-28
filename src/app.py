@@ -1210,7 +1210,33 @@ def _get_current_throttled_devices(connection: sqlite3.Connection, config: dict 
     devices = _collect_dynamic_throttle_devices(connection, active_since, managed_prefix)
     devices.update({k: v for k, v in _collect_policy_blacklist_devices(connection, managed_prefix).items() if k not in devices})
 
-    # Exclude devices that have been unthrottled in throttle_state
+    # Augment with devices from throttle_state that are currently throttled
+    # (catches engagement-based throttles that may not have recent throttle_events)
+    if _table_exists(connection, "throttle_state"):
+        try:
+            rows = connection.execute(
+                "SELECT client_ip, is_throttled, applied_at FROM throttle_state WHERE is_throttled = 1 AND client_ip LIKE ?",
+                (managed_prefix,)
+            ).fetchall()
+            for row in rows:
+                ip = row[0]
+                if ip and ip not in devices:
+                    devices[ip] = {
+                        "client_ip": ip,
+                        "ip_address": ip,
+                        "current_rpm": 0,
+                        "baseline_rpm": 0,
+                        "is_throttled": True,
+                        "last_active_domain": "Engagement throttle",
+                        "timestamp": row[2] or time.time(),
+                        "throttle_action": "ENGAGEMENT_THROTTLE",
+                        "reason": "Engagement-based doomscroll throttle active",
+                        "source": "throttle_state",
+                    }
+        except sqlite3.Error:
+            pass
+
+    # Exclude devices that have been explicitly unthrottled in throttle_state
     if _table_exists(connection, "throttle_state"):
         try:
             rows = connection.execute(

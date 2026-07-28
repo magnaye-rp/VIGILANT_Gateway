@@ -900,6 +900,7 @@ def _engagement_tracking_loop():
                         old_level = _engagement_current_level.get(ip, 0)
                         if old_level > 0:
                             print(f"[VIGILANT] ENGAGEMENT RESET (idle): {ip} idle {idle:.0f}s, releasing")
+                            log_throttle(ip, "engagement", 0, 0, "ENGAGEMENT_RESET_IDLE", f"idle {idle:.0f}s, releasing")
                             _previous_rate.pop(ip, None)
                             remove_throttle_cycle(ip)
                         _engagement_start[ip] = 0
@@ -924,6 +925,7 @@ def _engagement_tracking_loop():
                             old_level = _engagement_current_level.get(ip, 0)
                             if old_level > 0:
                                 print(f"[VIGILANT] ENGAGEMENT RESET (low activity): {ip} {recent_req_count} reqs/min for {(now - low_start):.0f}s, releasing")
+                                log_throttle(ip, "engagement", 0, 0, "ENGAGEMENT_RESET_LOW", f"{recent_req_count} reqs/min for {(now - low_start):.0f}s")
                                 _previous_rate.pop(ip, None)
                                 remove_throttle_cycle(ip)
                             _engagement_start[ip] = 0
@@ -958,6 +960,7 @@ def _engagement_tracking_loop():
                                     _previous_rate[ip] = rate
                                     save_throttle_state(ip, is_throttled=True, recovery_at=0)
                                     _mark_client_throttled(ip)
+                                    log_throttle(ip, "engagement", elapsed, 0, f"ENGAGEMENT_L{new_level}", f"{elapsed:.1f}min → L{new_level} @ {rate}")
                                     print(f"[VIGILANT] ENGAGEMENT {ip}: {elapsed:.1f}min → L{new_level} @ {rate}")
         except Exception as e:
             print(f"[VIGILANT] Engagement loop error: {e}")
@@ -1008,6 +1011,7 @@ def apply_circuit_breaker_action(client_ip, domain, level, rpm_current=0, rpm_ba
         _previous_rate[client_ip] = rate
         save_throttle_state(client_ip, is_throttled=True, recovery_at=0)
         mins = _engagement_minutes.get(client_ip, 0)
+        log_throttle(client_ip, domain, rpm_current, rpm_baseline, f"CB_L{level}", f"{mins:.1f}min → L{level} @ {rate}")
         print(f"[VIGILANT] ENGAGEMENT {client_ip}: {mins:.1f}min → L{level} @ {rate}")
     return success
 
@@ -1021,6 +1025,7 @@ def release_circuit_breaker(client_ip):
         _engagement_low_activity_since.pop(client_ip, None)
     _previous_rate.pop(client_ip, None)
     remove_throttle_cycle(client_ip)
+    log_throttle(client_ip, "manual_release", 0, 0, "ENGAGEMENT_RESET_MANUAL", "Manual release from dashboard")
     print(f"[VIGILANT] Manual release: {client_ip} engagement reset")
 
 
