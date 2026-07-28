@@ -2128,26 +2128,8 @@ class VIGILANTAddon:
             if not server_name:
                 return
 
-            # 2. Bypass list check — skip TLS interception immediately to avoid
-            # latency on video/CDN connections. Throttling is still applied via
-            # tc on the interface, which runs at the kernel level regardless of
-            # mitmproxy's involvement.
-            if is_custom_bypass(server_name):
-                # Still check if this device should be throttled — the circuit
-                # breaker state persists across connections even when bypassed.
-                # Extract client IP quickly for the throttle check.
-                client_ip = self._extract_client_ip_from_tls(data)
-                if client_ip:
-                    flagged, rpm_now, rpm_base = should_throttle(client_ip, server_name)
-                    if flagged and not is_device_exempt(client_ip):
-                        level = escalate_circuit_breaker(client_ip, server_name, rpm_now, rpm_base)
-                        if level >= CB_LEVEL_PAUSE:
-                            _mark_client_throttled(client_ip)
-                        apply_circuit_breaker_action(client_ip, server_name, level, rpm_now, rpm_base)
-                data.ignore_connection = True
-                return
-
-            # 3. Extract Client IP
+            # Resolve the real client IP before any bypass decision so
+            # transparent passthrough traffic can still be logged to the DB.
             client_ip = self._extract_client_ip_from_tls(data)
             if not client_ip:
                 return
@@ -2157,11 +2139,25 @@ class VIGILANTAddon:
             print(f"[VIGILANT DEBUG] About to log SNI request: {client_ip} @ {server_name}")
             self.log_to_dashboard(client_ip, server_name)
 
-            # Calculate SNI velocity (RPS)
+            # Calculate and persist SNI velocity for the dashboard's SNI tab.
             velocity_rps = compute_sni_velocity(client_ip, server_name)
-
-            # Log SNI request with velocity
             log_sni_request(client_ip, server_name, velocity_rps)
+
+            # 2. Bypass list check — skip TLS interception immediately to avoid
+            # latency on video/CDN connections. Throttling is still applied via
+            # tc on the interface, which runs at the kernel level regardless of
+            # mitmproxy's involvement.
+            if is_custom_bypass(server_name):
+                # Still check if this device should be throttled — the circuit
+                # breaker state persists across connections even when bypassed.
+                flagged, rpm_now, rpm_base = should_throttle(client_ip, server_name)
+                if flagged and not is_device_exempt(client_ip):
+                    level = escalate_circuit_breaker(client_ip, server_name, rpm_now, rpm_base)
+                    if level >= CB_LEVEL_PAUSE:
+                        _mark_client_throttled(client_ip)
+                    apply_circuit_breaker_action(client_ip, server_name, level, rpm_now, rpm_base)
+                data.ignore_connection = True
+                return
 
             flagged, rpm_now, rpm_base = should_throttle(client_ip, server_name)
             if flagged and not is_device_exempt(client_ip):
