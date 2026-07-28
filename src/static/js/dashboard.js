@@ -1697,7 +1697,6 @@ function toggleThemeMode(isDark) {
 }
 
 // ─── SNI Dashboard Functions ───
-let sniScrollChart = null;
 let sniDomainChart = null;
 
 // ─── SNI Monitoring ───
@@ -1813,15 +1812,9 @@ function renderSNIChartFallback(canvasId, items, labelFormatter) {
 function updateSNICharts(scrollRates) {
   const safeRates = Array.isArray(scrollRates) ? scrollRates : [];
   const domains = safeRates.map(r => r.domain);
-  const avgVelocities = safeRates.map(r => r.avg_velocity_rps);
   const requestCounts = safeRates.map(r => r.total_requests);
 
   if (!window.Chart) {
-    renderSNIChartFallback(
-      'sni-scroll-chart',
-      safeRates,
-      rate => `${rate.domain}: ${Number(rate.avg_velocity_rps || 0).toFixed(2)} RPS average`
-    );
     renderSNIChartFallback(
       'sni-domain-chart',
       safeRates,
@@ -1829,61 +1822,15 @@ function updateSNICharts(scrollRates) {
     );
     return;
   }
-  
-  // Scroll Rate Chart
-  const scrollCanvas = document.getElementById('sni-scroll-chart');
+
   const domainCanvas = document.getElementById('sni-domain-chart');
-  if (!scrollCanvas || !domainCanvas) {
-    return;
-  }
-  
-  // Set proper canvas dimensions before chart creation
-  const parentWidth = scrollCanvas.parentElement.clientWidth || 400;
-  scrollCanvas.width = parentWidth;
-  scrollCanvas.height = 280;
+  if (!domainCanvas) return;
+
+  const parentWidth = domainCanvas.parentElement.clientWidth || 400;
   domainCanvas.width = parentWidth;
   domainCanvas.height = 280;
-  
-  const scrollCtx = scrollCanvas.getContext('2d');
-  if (sniScrollChart) {
-    sniScrollChart.destroy();
-    sniScrollChart = null;
-  }
-  sniScrollChart = new Chart(scrollCtx, {
-    type: 'line',
-    data: {
-      labels: domains.length ? domains : ['No Data'],
-      datasets: [{
-        label: 'Avg Velocity (RPS)',
-        data: avgVelocities.length ? avgVelocities : [0],
-        borderColor: '#43B3AE',
-        backgroundColor: 'rgba(67, 179, 174, 0.1)',
-        fill: true,
-        tension: 0.4
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      scales: {
-        y: {
-          beginAtZero: true,
-          title: {
-            display: true,
-            text: 'Requests per Second'
-          }
-        },
-        x: {
-          ticks: {
-            maxRotation: 45,
-            minRotation: 45
-          }
-        }
-      }
-    }
-  });
-  
-  // Domain Chart
+
+  // Domain Request Count Chart
   const domainCtx = domainCanvas.getContext('2d');
   if (sniDomainChart) {
     sniDomainChart.destroy();
@@ -1929,12 +1876,11 @@ function updateSNILogTable(logs) {
   const safeLogs = Array.isArray(logs) ? logs : [];
   
   if (safeLogs.length === 0) {
-    tableBody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-secondary);">No SNI requests found for the selected filters.</td></tr>';
+    tableBody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-secondary);">No SNI requests found for the selected filters.</td></tr>';
     if (emptyState) emptyState.classList.remove('hidden');
     return;
   }
   
-  // Hide empty state when data is present
   if (emptyState) emptyState.classList.add('hidden');
   
   tableBody.innerHTML = safeLogs.map(log => `
@@ -1942,7 +1888,6 @@ function updateSNILogTable(logs) {
       <td>${log.formatted_time || 'N/A'}</td>
       <td style="font-family: monospace;">${log.client_ip || '—'}</td>
       <td>${log.domain || 'Unknown domain'}</td>
-      <td><span class="category-badge productive">${Number(log.velocity_rps || 0).toFixed(2)} RPS</span></td>
     </tr>
   `).join('');
 }

@@ -1174,7 +1174,9 @@ def should_throttle(client_ip, host, path=""):
     flagged = social_elapsed >= 180 and social_rpm >= 2
 
     if flagged:
-        print(f"[VIGILANT] Engaged: {client_ip} @ {social_rpm} RPM for {social_elapsed:.0f}s")
+        # Show the domain so you can see which app is triggering engagement
+        short_host = host.removeprefix("www.")
+        print(f"[VIGILANT] Engaged: {client_ip} @ {social_rpm} RPM on {short_host} for {social_elapsed:.0f}s")
 
     return flagged, rpm_now, rpm_base
 
@@ -1349,6 +1351,31 @@ def get_distribution_interface():
     
     return "enp1s0"
 
+def _ip_to_class_id(client_ip: str) -> tuple:
+    """Derive a deterministic tc class ID and priority from an IP address.
+    Uses the last two octets of the IP (e.g. 192.168.10.25 → octets 10.25)
+    to compute a unique ID in range 1:10 through 1:fffe.
+    
+    This is deterministic across all processes, unlike Python's hash()
+    which is randomized per-interpreter and would break cross-process
+    tc rule removal (e.g., Flask dashboard vs mitmproxy addon).
+    """
+    try:
+        parts = client_ip.split('.')
+        if len(parts) == 4:
+            # Use last two octets: ensures uniqueness within a /16 subnet
+            ip_hash = (int(parts[2]) << 8 | int(parts[3])) + 0x10
+        else:
+            # Fallback for non-IPv4 addresses
+            import hashlib
+            ip_hash = int(hashlib.md5(client_ip.encode()).hexdigest()[:8], 16) % 0xfff0 + 0x10
+    except (ValueError, IndexError):
+        import hashlib
+        ip_hash = int(hashlib.md5(client_ip.encode()).hexdigest()[:8], 16) % 0xfff0 + 0x10
+    class_id = f"1:{ip_hash:x}"
+    return class_id, ip_hash
+
+
 def apply_throttle(client_ip, rate=None):
     """
     Apply Linux traffic control (tc) rules to throttle bandwidth for a given client IP.
@@ -1372,10 +1399,8 @@ def apply_throttle(client_ip, rate=None):
         throttle_rate = config['throttle_rate']
     interface = get_distribution_interface()
     
-    # Derive a unique classId from the client IP (1:10 through 1:fffe)
-    ip_hash = abs(hash(client_ip)) % 0xfff0 + 0x0010  # range 1:10 to 1:fffe
-    class_id = f"1:{ip_hash:x}"
-    prio = ip_hash
+    # Derive a unique, deterministic classId from the client IP
+    class_id, prio = _ip_to_class_id(client_ip)
 
     try:
         # Ensure root qdisc exists (quietly; it may already be set up)
@@ -1449,12 +1474,10 @@ def remove_throttle(client_ip, client_ip_only=False):
     """
     interface = get_distribution_interface()
     
-    # Get the classId assigned to this client
-    ip_hash = abs(hash(client_ip)) % 0xfff0 + 0x10
-    class_id = f"1:{ip_hash:x}"
-    prio = ip_hash
+    # Get the deterministic classId for this client
+    class_id, prio = _ip_to_class_id(client_ip)
     
-    # Also try stored mapping if available
+    # Also try stored mapping if available (in-process cache)
     stored_class = _throttle_map.get(client_ip)
     if stored_class:
         class_id = stored_class
@@ -2043,33 +2066,27 @@ class VIGILANTAddon:
             client_ip = self._extract_client_ip_from_tls(data)
             if not client_ip:
                 return
-            config = load_proxy_config()
-            # load_proxy_config returns sni_filtering_enabled as a bool already;
-            # do NOT call .lower() on it (was causing an AttributeError that silently
-            # skipped all SNI logging).
-            sni_filtering_enabled = bool(config.get('sni_filtering_enabled', True))
 
-            print(f"[VIGILANT DEBUG] SNI filtering enabled: {sni_filtering_enabled}")
+            # Always log SNI requests and check throttling on TLS connections.
+            # sni_filtering_enabled only affects dashboard display filtering.
+            print(f"[VIGILANT DEBUG] About to log SNI request: {client_ip} @ {server_name}")
+            self.log_to_dashboard(client_ip, server_name)
 
-            if sni_filtering_enabled:
-                print(f"[VIGILANT DEBUG] About to log SNI request: {client_ip} @ {server_name}")
-                self.log_to_dashboard(client_ip, server_name)
+            # Calculate SNI velocity (RPS)
+            velocity_rps = compute_sni_velocity(client_ip, server_name)
 
-                # Calculate SNI velocity (RPS)
-                velocity_rps = compute_sni_velocity(client_ip, server_name)
+            # Log SNI request with velocity
+            log_sni_request(client_ip, server_name, velocity_rps)
 
-                # Log SNI request with velocity
-                log_sni_request(client_ip, server_name, velocity_rps)
-
-                flagged, rpm_now, rpm_base = should_throttle(client_ip, server_name)
-                if flagged and not is_device_exempt(client_ip):
-                    level = escalate_circuit_breaker(client_ip, server_name, rpm_now, rpm_base)
-                    if level >= CB_LEVEL_PAUSE:
-                        _mark_client_throttled(client_ip)
-                    apply_circuit_breaker_action(client_ip, server_name, level, rpm_now, rpm_base)
-                    if level >= CB_LEVEL_PAUSE:
-                        print(f"[VIGILANT] TLS CB Level {level} ({CB_LEVEL_NAMES[level]}) {client_ip} @ {server_name} "
-                              f"RPM={rpm_now:.1f} baseline={rpm_base:.1f} RPS={velocity_rps:.2f}")
+            flagged, rpm_now, rpm_base = should_throttle(client_ip, server_name)
+            if flagged and not is_device_exempt(client_ip):
+                level = escalate_circuit_breaker(client_ip, server_name, rpm_now, rpm_base)
+                if level >= CB_LEVEL_PAUSE:
+                    _mark_client_throttled(client_ip)
+                apply_circuit_breaker_action(client_ip, server_name, level, rpm_now, rpm_base)
+                if level >= CB_LEVEL_PAUSE:
+                    print(f"[VIGILANT] TLS CB Level {level} ({CB_LEVEL_NAMES[level]}) {client_ip} @ {server_name} "
+                          f"RPM={rpm_now:.1f} baseline={rpm_base:.1f} RPS={velocity_rps:.2f}")
 
             # 4. Certificate Pinning Dynamic Bypass (AFTER logging and throttling)
             if server_name in self.pinned_hosts:

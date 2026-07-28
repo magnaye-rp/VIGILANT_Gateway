@@ -40,13 +40,7 @@
           </div>
 
           <!-- Charts Row -->
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem;">
-            <div>
-              <h6 style="font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--text);">Avg Scroll Rate by Domain (RPS)</h6>
-              <div style="background: var(--surface); border-radius: 8px; padding: 0.75rem; min-height: 260px; position: relative; overflow: hidden;">
-                <canvas id="sni-scroll-chart"></canvas>
-              </div>
-            </div>
+          <div style="display: grid; grid-template-columns: 1fr; gap: 1.5rem; margin-bottom: 1.5rem;">
             <div>
               <h6 style="font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--text);">Top Domains by Request Count</h6>
               <div style="background: var(--surface); border-radius: 8px; padding: 0.75rem; min-height: 260px; position: relative; overflow: hidden;">
@@ -74,12 +68,11 @@
                   <th>Time (PHT)</th>
                   <th>Client IP</th>
                   <th>Domain</th>
-                  <th>Velocity (RPS)</th>
                 </tr>
               </thead>
               <tbody id="sni-log-table">
                 <tr>
-                  <td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">
+                  <td colspan="3" style="text-align: center; color: var(--text-secondary); padding: 2rem;">
                     <span class="spinner"></span> Loading SNI requests...
                   </td>
                 </tr>
