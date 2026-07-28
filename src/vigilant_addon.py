@@ -332,6 +332,7 @@ tfidf_classifier = VigilantTFIDFClassifier(CATEGORY_KEYWORDS)
 DB_TIMEOUT = 30.0
 CACHE_REFRESH_INTERVAL = 60.0
 RULE_CACHE_RELOAD_FILE = Path(DB_PATH).parent / ".rule_cache_reload"
+THROTTLE_RELEASE_QUEUE = Path(DB_PATH).parent / ".throttle_release_queue"
 
 _active_addon = None
 
@@ -907,6 +908,11 @@ def _engagement_tracking_loop():
                         _engagement_minutes[ip] = 0
                         _engagement_current_level[ip] = 0
                         _engagement_low_activity_since.pop(ip, None)
+                        # Reset social session counters so engagement_min_requests
+                        # threshold applies to each new scrolling session
+                        with velocity_lock:
+                            social_session_totals.pop(ip, None)
+                            social_session_start.pop(ip, None)
                         continue
 
                     # ── Check 2: Low activity for reset_idle ──
@@ -932,6 +938,11 @@ def _engagement_tracking_loop():
                             _engagement_minutes[ip] = 0
                             _engagement_current_level[ip] = 0
                             _engagement_low_activity_since.pop(ip, None)
+                            # Reset social session counters so engagement_min_requests
+                            # threshold applies to each new scrolling session
+                            with velocity_lock:
+                                social_session_totals.pop(ip, None)
+                                social_session_start.pop(ip, None)
                             continue
                     else:
                         # Activity picked up → clear low-activity tracker
@@ -1025,6 +1036,10 @@ def release_circuit_breaker(client_ip):
         _engagement_low_activity_since.pop(client_ip, None)
     _previous_rate.pop(client_ip, None)
     remove_throttle_cycle(client_ip)
+    # Reset social session counters so next session starts fresh
+    with velocity_lock:
+        social_session_totals.pop(client_ip, None)
+        social_session_start.pop(client_ip, None)
     log_throttle(client_ip, "manual_release", 0, 0, "ENGAGEMENT_RESET_MANUAL", "Manual release from dashboard")
     print(f"[VIGILANT] Manual release: {client_ip} engagement reset")
 
@@ -1174,9 +1189,9 @@ def should_throttle(client_ip, host, path=""):
     flagged = social_elapsed >= 180 and social_rpm >= 2
 
     if flagged:
-        # Show the domain so you can see which app is triggering engagement
+        # Show domain + total requests so you can see the baseline and which app
         short_host = host.removeprefix("www.")
-        print(f"[VIGILANT] Engaged: {client_ip} @ {social_rpm} RPM on {short_host} for {social_elapsed:.0f}s")
+        print(f"[VIGILANT] Engaged: {client_ip} on {short_host} — {social_rpm} RPM ({social_count} total) for {social_elapsed:.0f}s")
 
     return flagged, rpm_now, rpm_base
 
@@ -1483,28 +1498,47 @@ def remove_throttle(client_ip, client_ip_only=False):
         class_id = stored_class
         del _throttle_map[client_ip]
     
+    errors = []
     try:
         # Remove dst filter for this specific client
-        subprocess.run(
+        r = subprocess.run(
             ["tc", "filter", "del", "dev", interface, "protocol", "ip", "parent", "1:0",
              "prio", str(prio), "u32", "match", "ip", "dst", client_ip, "flowid", class_id],
-            check=False, capture_output=True
+            check=False, capture_output=True, text=True
         )
+        if r.returncode != 0:
+            errors.append(f"dst filter: {r.stderr.strip()}")
+        
         # Remove src filter for this specific client
-        subprocess.run(
+        r = subprocess.run(
             ["tc", "filter", "del", "dev", interface, "protocol", "ip", "parent", "1:0",
              "prio", str(prio), "u32", "match", "ip", "src", client_ip, "flowid", class_id],
-            check=False, capture_output=True
+            check=False, capture_output=True, text=True
         )
+        if r.returncode != 0:
+            errors.append(f"src filter: {r.stderr.strip()}")
         
         if not client_ip_only:
             # Remove the dedicated class for this client ONLY
-            subprocess.run(
+            r = subprocess.run(
                 ["tc", "class", "del", "dev", interface, "parent", "1:", "classid", class_id],
-                check=False, capture_output=True
+                check=False, capture_output=True, text=True
             )
+            if r.returncode != 0:
+                errors.append(f"class delete: {r.stderr.strip()}")
         
-        print(f"[VIGILANT] Throttle cleanup completed for {client_ip} on {interface}")
+        if errors:
+            print(f"[VIGILANT] Throttle removal for {client_ip} on {interface} had errors: {'; '.join(errors)}")
+            # Even with filter errors, the class may have been deleted. Check if it still exists.
+            r = subprocess.run(
+                ["tc", "class", "show", "dev", interface],
+                check=False, capture_output=True, text=True
+            )
+            if class_id in r.stdout:
+                print(f"[VIGILANT] WARNING: Class {class_id} still exists on {interface} after removal attempt!")
+                return False
+        
+        print(f"[VIGILANT] Throttle cleanup completed for {client_ip} on {interface} (class={class_id})")
         return True
     except Exception as e:
         print(f"[VIGILANT] Throttle cleanup failed for {client_ip}: {e}")
@@ -1942,7 +1976,8 @@ class VIGILANTAddon:
 
     def _cache_refresh_loop(self):
         """Periodically refresh cached rules or reload immediately on API trigger.
-        Also runs periodic cleanup of stale velocity tracking state."""
+        Also processes throttle release requests from the Flask dashboard, and
+        runs periodic cleanup of stale velocity tracking state."""
         _cleanup_counter = 0
         while True:
             time.sleep(1.0)
@@ -1951,6 +1986,41 @@ class VIGILANTAddon:
                 if RULE_CACHE_RELOAD_FILE.exists():
                     RULE_CACHE_RELOAD_FILE.unlink(missing_ok=True)
                     reload_requested = True
+            except OSError:
+                pass
+
+            # Process throttle release queue (Flask -> mitmproxy IPC).
+            # Flask writes release requests here because it lacks CAP_NET_ADMIN
+            # for tc commands; mitmproxy has the capability.
+            try:
+                if THROTTLE_RELEASE_QUEUE.exists():
+                    lines = THROTTLE_RELEASE_QUEUE.read_text().strip().split('\n')
+                    THROTTLE_RELEASE_QUEUE.unlink(missing_ok=True)
+                    for line in lines:
+                        ip = line.strip()
+                        if not ip:
+                            continue
+                        if ip == '__RESET_ALL__':
+                            print("[VIGILANT] Processing RESET_ALL from release queue")
+                            iface = get_distribution_interface()
+                            subprocess.run(["tc", "qdisc", "del", "dev", iface, "root"],
+                                           capture_output=True, check=False)
+                            subprocess.run(["tc", "qdisc", "add", "dev", iface, "root",
+                                            "handle", "1:", "htb", "default", "1"],
+                                           capture_output=True, check=False)
+                            with _engagement_lock:
+                                _engagement_start.clear()
+                                _engagement_minutes.clear()
+                                _engagement_last_request.clear()
+                                _engagement_current_level.clear()
+                                _engagement_low_activity_since.clear()
+                            _previous_rate.clear()
+                            with throttled_clients_lock:
+                                throttled_clients.clear()
+                            print("[VIGILANT] RESET_ALL complete")
+                        else:
+                            print(f"[VIGILANT] Processing release queue: {ip}")
+                            release_circuit_breaker(ip)
             except OSError:
                 pass
 

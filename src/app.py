@@ -266,6 +266,39 @@ def _signal_rule_cache_reload() -> None:
         app.logger.warning("Failed to signal proxy rule cache reload: %s", exc)
 
 
+def _signal_throttle_release(client_ip: str) -> None:
+    """Queue a throttle release for the mitmproxy addon to process.
+
+    Flask runs as vigilant-admin WITHOUT CAP_NET_ADMIN, so it cannot run
+    tc commands directly. Instead, we write the client IP to a queue file
+    that mitmproxy's _cache_refresh_loop picks up within ~1 second and
+    processes with full CAP_NET_ADMIN privileges.
+
+    We also immediately mark is_throttled=0 in the DB so the dashboard
+    clears the device without waiting for the proxy round-trip.
+    """
+    # 1. Update the DB immediately so the dashboard reflects the change.
+    try:
+        with _open_db() as conn:
+            conn.execute(
+                "UPDATE throttle_state SET is_throttled = 0 WHERE client_ip = ?",
+                (client_ip,)
+            )
+            conn.commit()
+    except Exception as exc:
+        app.logger.warning("Failed to update throttle_state for %s: %s", client_ip, exc)
+
+    # 2. Write to the release queue so mitmproxy removes the tc rules.
+    try:
+        queue_file = Path(DB_PATH).parent / ".throttle_release_queue"
+        _ensure_directory(queue_file)
+        # Append so concurrent releases from different requests aren't lost.
+        with queue_file.open("a") as fh:
+            fh.write(client_ip + "\n")
+    except OSError as exc:
+        app.logger.warning("Failed to write throttle release queue for %s: %s", client_ip, exc)
+
+
 def _open_db() -> sqlite3.Connection:
     _ensure_directory(DB_PATH)
     connection = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
@@ -2684,40 +2717,46 @@ def get_circuit_breaker_state():
 @app.route("/api/throttle/reset-all", methods=["POST"])
 @require_auth
 def reset_all_throttles():
-    """Nuclear reset: flush all tc rules, clear all scores and throttle state."""
+    """Nuclear reset: flush all tc rules, clear all scores and throttle state.
+
+    Flask lacks CAP_NET_ADMIN, so the tc qdisc flush is delegated to mitmproxy
+    via the .throttle_release_queue file using the __RESET_ALL__ sentinel.
+    In-process state cleanup and DB update happen immediately here.
+    """
     try:
-        import subprocess
-        importlib = __import__('importlib')
-        vigilant = importlib.import_module("vigilant_addon")
-        
-        # 1. Nuke tc qdisc and recreate clean
-        iface = "enp1s0"
-        subprocess.run(["tc", "qdisc", "del", "dev", iface, "root"],
-                       capture_output=True, check=False)
-        subprocess.run(["tc", "qdisc", "add", "dev", iface, "root", "handle", "1:", "htb", "default", "1"],
-                       capture_output=True, check=False)
-        
-        # 2. Reset all engagement state
-        if hasattr(vigilant, "_engagement_lock"):
-            with vigilant._engagement_lock:
-                vigilant._engagement_start.clear()
-                vigilant._engagement_minutes.clear()
-                vigilant._engagement_last_request.clear()
-                vigilant._engagement_current_level.clear()
-                if hasattr(vigilant, "_engagement_low_activity_since"):
-                    vigilant._engagement_low_activity_since.clear()
-            vigilant._previous_rate.clear()
-        
-        # 3. Clear throttled_clients set
-        if hasattr(vigilant, "throttled_clients"):
-            with vigilant.throttled_clients_lock:
-                vigilant.throttled_clients.clear()
-        
-        # 4. Clear DB throttle states
+        # 1. Delegate tc qdisc flush to mitmproxy (which has CAP_NET_ADMIN).
+        try:
+            queue_file = Path(DB_PATH).parent / ".throttle_release_queue"
+            _ensure_directory(queue_file)
+            with queue_file.open("a") as fh:
+                fh.write("__RESET_ALL__\n")
+        except OSError as exc:
+            app.logger.warning("Failed to write RESET_ALL to throttle release queue: %s", exc)
+
+        # 2. Reset in-process engagement state if the addon is co-loaded in this process.
+        try:
+            importlib = __import__('importlib')
+            vigilant = importlib.import_module("vigilant_addon")
+            if hasattr(vigilant, "_engagement_lock"):
+                with vigilant._engagement_lock:
+                    vigilant._engagement_start.clear()
+                    vigilant._engagement_minutes.clear()
+                    vigilant._engagement_last_request.clear()
+                    vigilant._engagement_current_level.clear()
+                    if hasattr(vigilant, "_engagement_low_activity_since"):
+                        vigilant._engagement_low_activity_since.clear()
+                vigilant._previous_rate.clear()
+            if hasattr(vigilant, "throttled_clients"):
+                with vigilant.throttled_clients_lock:
+                    vigilant.throttled_clients.clear()
+        except Exception:
+            pass  # Not loaded in this process — mitmproxy handles it via the queue
+
+        # 3. Clear DB throttle states immediately so dashboard reflects the change.
         with _open_db() as conn:
             conn.execute("UPDATE throttle_state SET is_throttled = 0")
             conn.commit()
-        
+
         return jsonify({"status": "success", "message": "All throttles reset"})
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)}), 500
@@ -2725,25 +2764,40 @@ def reset_all_throttles():
 @app.route("/api/circuit-breaker/release", methods=["POST"])
 @require_auth
 def release_circuit_breaker():
-    """Manually release a client from circuit breaker state."""
+    """Manually release a client from circuit breaker / engagement throttle state.
+
+    Flask lacks CAP_NET_ADMIN, so tc cleanup is delegated to mitmproxy via
+    the .throttle_release_queue file. The DB is updated immediately so the
+    dashboard reflects the change without waiting for the proxy round-trip.
+    """
     try:
         data = request.json or {}
         client_ip = data.get("client_ip")
         if not client_ip:
             return jsonify({"error": "client_ip is required"}), 400
-        
-        import importlib
-        vigilant = importlib.import_module("vigilant_addon")
-        if hasattr(vigilant, "release_circuit_breaker"):
-            vigilant.release_circuit_breaker(client_ip)
-            return jsonify({
-                "status": "success",
-                "message": f"Circuit breaker released for {client_ip}"
-            })
+
+        # Reset in-process engagement state if the addon is loaded in this process
+        # (this is a no-op in normal operation where Flask and mitmproxy are separate).
+        try:
+            import importlib
+            vigilant = importlib.import_module("vigilant_addon")
+            if hasattr(vigilant, "_engagement_lock"):
+                with vigilant._engagement_lock:
+                    vigilant._engagement_start[client_ip] = 0
+                    vigilant._engagement_minutes[client_ip] = 0
+                    vigilant._engagement_current_level[client_ip] = 0
+                    vigilant._engagement_low_activity_since.pop(client_ip, None)
+                vigilant._previous_rate.pop(client_ip, None)
+        except Exception:
+            pass  # Not loaded in this process — mitmproxy handles it via the queue
+
+        # Delegate tc cleanup to mitmproxy (which has CAP_NET_ADMIN) via file IPC.
+        _signal_throttle_release(client_ip)
+
         return jsonify({
-            "status": "error",
-            "message": "Circuit breaker module not available"
-        }), 500
+            "status": "success",
+            "message": f"Circuit breaker released for {client_ip}"
+        })
     except Exception as e:
         app.logger.error("Error releasing circuit breaker: %s", e, exc_info=True)
         return jsonify({
@@ -2829,7 +2883,12 @@ def get_throttled_devices():
 @app.route("/api/devices/release-throttle", methods=["POST"])
 @require_auth
 def release_throttle():
-    """Manually release throttle for a specific device."""
+    """Manually release throttle for a specific device.
+
+    Flask lacks CAP_NET_ADMIN, so tc cleanup is delegated to mitmproxy via
+    the .throttle_release_queue file. The DB is updated immediately so the
+    dashboard reflects the change without waiting for the proxy round-trip.
+    """
     try:
         data = request.json or {}
         ip_address = data.get("ip_address")
@@ -2837,16 +2896,25 @@ def release_throttle():
         if not ip_address:
             return jsonify({"error": "IP address is required"}), 400
 
-        # Canonical release: reset engagement state, remove tc rules, update DB.
-        # release_circuit_breaker handles tc cleanup + DB update in one call.
-        import importlib
-        vigilant_cb = importlib.import_module("vigilant_addon")
-        if hasattr(vigilant_cb, "release_circuit_breaker"):
-            vigilant_cb.release_circuit_breaker(ip_address)
-        else:
-            return jsonify({"error": "Circuit breaker module not available"}), 500
+        # Reset in-process engagement state if the addon is loaded in this process
+        # (no-op in normal operation where Flask and mitmproxy are separate processes).
+        try:
+            import importlib
+            vigilant_cb = importlib.import_module("vigilant_addon")
+            if hasattr(vigilant_cb, "_engagement_lock"):
+                with vigilant_cb._engagement_lock:
+                    vigilant_cb._engagement_start[ip_address] = 0
+                    vigilant_cb._engagement_minutes[ip_address] = 0
+                    vigilant_cb._engagement_current_level[ip_address] = 0
+                    vigilant_cb._engagement_low_activity_since.pop(ip_address, None)
+                vigilant_cb._previous_rate.pop(ip_address, None)
+        except Exception:
+            pass  # Not loaded in this process — mitmproxy handles it via the queue
 
-        # Signal the proxy to refresh its cache
+        # Delegate tc cleanup to mitmproxy (which has CAP_NET_ADMIN) via file IPC.
+        _signal_throttle_release(ip_address)
+
+        # Signal the proxy to refresh its rule cache as well.
         _signal_rule_cache_reload()
 
         return jsonify({"status": "success", "message": f"Throttle released for {ip_address}"})
