@@ -2066,63 +2066,39 @@ class VIGILANTAddon:
             
     @staticmethod
     def _extract_client_ip_from_tls(self, data=None) -> str:
-        """
-        Extract client IP safely in multi-user environments.
-        Guarantees exact socket IP attribution to prevent cross-talk between devices.
-        """
+        """Extract client IP safely across all mitmproxy object shapes."""
+        if data is None:
+            return os.getenv("LAN_IP", "172.20.10.1")
+
         client_ip = None
-
-        # 1. Primary: Direct TCP socket IP (unique per connected client)
         conn = None
-        if hasattr(data, "context") and hasattr(data.context, "client_conn"):
-            conn = data.context.client_conn
-        elif hasattr(data, "client_conn"):
-            conn = data.client_conn
-        elif hasattr(data, "conn"):
-            conn = data.conn
 
+        # 1. Resolve connection object across mitmproxy layer versions
+        if hasattr(data, "context"):
+            ctx = data.context
+            conn = getattr(ctx, "client", None) or getattr(ctx, "client_conn", None)
+        
+        if not conn:
+            conn = getattr(data, "client_conn", None) or getattr(data, "conn", None) or data
+
+        # 2. Extract peername IP string
         if conn:
-            # Check peername tuple (IP, port)
+            # Check peername attribute (e.g. ('172.20.10.127', 64429))
             peer = getattr(conn, "peername", None)
             if peer and isinstance(peer, (tuple, list)) and len(peer) > 0 and peer[0]:
                 client_ip = str(peer[0])
             
-            # Fallback to address attribute
+            # Check address attribute fallback
             if not client_ip:
                 addr = getattr(conn, "address", None)
                 if addr and isinstance(addr, (tuple, list)) and len(addr) > 0 and addr[0]:
                     client_ip = str(addr[0])
 
-        # Filter out loopback / local system proxy self-references
-        if client_ip and client_ip not in ("127.0.0.1", "::1", "localhost"):
+        # 3. Guard against loopback or self-referential IPs
+        if client_ip and client_ip not in ("127.0.0.1", "::1", "localhost", "172.20.10.1"):
             return client_ip
 
-        # 2. Multi-User Safe Fallback:
-        # Use dynamic DB path if defined, fallback to standard path
-        db_path = getattr(self, "db_path", "/home/vigilant-admin/vigilant_gateway/logs/vigilant.db")
-        if os.path.exists(db_path):
-            try:
-                if conn:
-                    peer = getattr(conn, "peername", None)
-                    peer_port = peer[1] if peer and isinstance(peer, (tuple, list)) and len(peer) > 1 else None
-                    
-                    if peer_port:
-                        with sqlite3.connect(db_path) as db:
-                            c = db.cursor()
-                            c.execute(
-                                "SELECT ip_address FROM network_devices "
-                                "WHERE last_seen >= (strftime('%s', 'now') - 30) "
-                                "AND ip_address LIKE '172.20.10.%' "
-                                "ORDER BY last_seen DESC"
-                            )
-                            rows = c.fetchall()
-                            # If exactly one device is active on the subnet, it is safe to assign
-                            if len(rows) == 1:
-                                return rows[0][0]
-            except Exception as exc:
-                print(f"[VIGILANT DEBUG] Multi-user DB resolution error: {exc}")
-
-        # Default fallback marker for untracked socket traffic
+        # If socket lookup failed, fallback to default LAN IP
         return os.getenv("LAN_IP", "172.20.10.1")
 
     def tls_clienthello(self, data: tls.ClientHelloData):
