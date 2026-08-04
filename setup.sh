@@ -215,6 +215,7 @@ stage_5_network_config() {
 
     rm -f /etc/netplan/*.bak 2>/dev/null || true
     rm -rf /etc/netplan/backup 2>/dev/null || true
+    rm -f /etc/netplan/*.bak /etc/netplan/*.yaml.bak 2>/dev/null || true
     
     log_info "Backing up netplan config..."
     cp /etc/netplan/00-installer-config.yaml \
@@ -239,6 +240,10 @@ EOF
     netplan generate > /dev/null 2>&1
     netplan apply > /dev/null 2>&1
     systemctl restart systemd-networkd > /dev/null 2>&1 || true
+    echo "[*] Applying Netplan network configuration..."
+    netplan apply
+    ip addr flush dev enp1s0 2>/dev/null || true
+    systemctl restart systemd-networkd 2>/dev/null || true
     
     log_success "Network configured: WAN ($WAN_INTERFACE), LAN ($LAN_INTERFACE - $LAN_IP)"
 }
