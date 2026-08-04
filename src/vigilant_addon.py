@@ -2065,7 +2065,7 @@ class VIGILANTAddon:
                 _cleanup_stale_velocity_state()  
             
     @staticmethod
-    def _extract_client_ip_from_tls(self, data) -> str:
+    def _extract_client_ip_from_tls(self, data=None) -> str:
         """
         Extract client IP safely in multi-user environments.
         Guarantees exact socket IP attribution to prevent cross-talk between devices.
