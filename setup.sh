@@ -198,7 +198,7 @@ stage_4_copy_files() {
             cp -a "$CURRENT_DIR/$f" "$VIGILANT_HOME/" 2>/dev/null || true
         fi
     done
-
+    
     chmod +x "$VIGILANT_HOME/src/scripts/setup-iptables.sh" 2>/dev/null || true
     chmod +x "$VIGILANT_HOME/setup.sh" 2>/dev/null || true
     
@@ -366,7 +366,7 @@ stage_9_systemd_services() {
     log_info "STAGE 9: SYSTEMD SERVICES"
     log_info "═══════════════════════════════════════════"
 
-    cat << EOF > /etc/systemd/system/vigilant-firewall.service
+cat << EOF > /etc/systemd/system/vigilant-firewall.service
 [Unit]
 Description=VIGILANT Firewall Rules
 After=network.target
@@ -375,7 +375,7 @@ After=network.target
 Type=oneshot
 RemainAfterExit=yes
 EnvironmentFile=$VIGILANT_HOME/.env
-ExecStart=/usr/bin/sysctl -w net.ipv4.ip_forward=1
+ExecStart=/bin/bash $VIGILANT_HOME/src/scripts/setup-iptables.sh
 
 [Install]
 WantedBy=multi-user.target
