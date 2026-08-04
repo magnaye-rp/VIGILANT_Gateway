@@ -2073,9 +2073,15 @@ class VIGILANTAddon:
         client_ip = None
 
         # 1. Primary: Direct TCP socket IP (unique per connected client)
+        conn = None
         if hasattr(data, "context") and hasattr(data.context, "client_conn"):
             conn = data.context.client_conn
-            
+        elif hasattr(data, "client_conn"):
+            conn = data.client_conn
+        elif hasattr(data, "conn"):
+            conn = data.conn
+
+        if conn:
             # Check peername tuple (IP, port)
             peer = getattr(conn, "peername", None)
             if peer and isinstance(peer, (tuple, list)) and len(peer) > 0 and peer[0]:
@@ -2092,16 +2098,13 @@ class VIGILANTAddon:
             return client_ip
 
         # 2. Multi-User Safe Fallback:
-        # If socket extraction fails, NEVER pick an arbitrary device from DB/leases,
-        # as that misattributes User B's traffic to User A.
-        # Check active ARP/neighbor table for active IP mappings or assign unknown segment.
-        db_path = "/home/vigilant-admin/vigilant_gateway/logs/vigilant.db"
+        # Use dynamic DB path if defined, fallback to standard path
+        db_path = getattr(self, "db_path", "/home/vigilant-admin/vigilant_gateway/logs/vigilant.db")
         if os.path.exists(db_path):
             try:
-                # If socket port exists, attempt to match active socket mapping in DB
-                if hasattr(data, "context") and hasattr(data.context, "client_conn"):
-                    conn = data.context.client_conn
-                    peer_port = conn.peername[1] if getattr(conn, "peername", None) else None
+                if conn:
+                    peer = getattr(conn, "peername", None)
+                    peer_port = peer[1] if peer and isinstance(peer, (tuple, list)) and len(peer) > 1 else None
                     
                     if peer_port:
                         with sqlite3.connect(db_path) as db:
@@ -2119,7 +2122,7 @@ class VIGILANTAddon:
             except Exception as exc:
                 print(f"[VIGILANT DEBUG] Multi-user DB resolution error: {exc}")
 
-        # Default fallback marker for untracked socket traffic to prevent cross-user misattribution
+        # Default fallback marker for untracked socket traffic
         return os.getenv("LAN_IP", "172.20.10.1")
 
     def tls_clienthello(self, data: tls.ClientHelloData):
@@ -2228,7 +2231,6 @@ class VIGILANTAddon:
 
             # Persist to database so it survives proxy restarts
             self._persist_bypass_domain(server_name)
-
 
     def _persist_bypass_domain(self, domain):
         """Add a domain to the custom_bypass_domains config in the database."""
