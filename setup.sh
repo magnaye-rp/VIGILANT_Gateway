@@ -212,6 +212,9 @@ stage_5_network_config() {
     log_info "═══════════════════════════════════════════"
     log_info "STAGE 5: NETWORK CONFIGURATION"
     log_info "═══════════════════════════════════════════"
+
+    rm -f /etc/netplan/*.bak 2>/dev/null || true
+    rm -rf /etc/netplan/backup 2>/dev/null || true
     
     log_info "Backing up netplan config..."
     cp /etc/netplan/00-installer-config.yaml \

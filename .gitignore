@@ -9,3 +9,8 @@ __pycache__/
 *.pyo
 *.pyd
 *.csv
+# Add to your .gitignore
+*.bak
+*.backup
+/etc/netplan/backup/
+/etc/netplan/*.bak
