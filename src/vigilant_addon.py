@@ -2207,13 +2207,20 @@ class VIGILANTAddon:
             # Persist to database so it survives proxy restarts
             self._persist_bypass_domain(server_name)
 
-    def _persist_bypass_domain(self, domain):
-        """Add a domain to the custom_bypass_domains config in the database."""
+    def _persist_bypass_domain(self, domain: str):
+        """Add exact domain to custom_bypass_domains in DB without broad base-domain wildcards."""
+        # Prevent broad Google/Apple core domains from auto-persisting globally
+        PROTECTED_ROOTS = {"google.com", "googleapis.com", "googleusercontent.com", "gstatic.com"}
+        
+        clean = domain.removeprefix("www.").lower()
+        if clean in PROTECTED_ROOTS:
+            print(f"[VIGILANT] Skipping broad auto-bypass persistence for protected domain: {clean}")
+            return
+
         try:
             with db_lock:
                 conn = _connect_db()
                 try:
-                    clean = domain.removeprefix("www.").lower()
                     cursor = conn.execute("SELECT value FROM config_settings WHERE key = 'custom_bypass_domains'")
                     row = cursor.fetchone()
                     existing = set()
@@ -2229,7 +2236,7 @@ class VIGILANTAddon:
                         )
                         conn.commit()
                         _refresh_bypass_cache()
-                        print(f"[VIGILANT] Persisted {clean} to custom_bypass_domains (total: {len(existing)} domains)")
+                        print(f"[VIGILANT] Persisted exact domain {clean} to custom_bypass_domains")
                 finally:
                     conn.close()
         except Exception as e:
