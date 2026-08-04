@@ -436,6 +436,17 @@ def init_db():
             updated_at REAL
         )
     """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS pending_bypass_review (
+            domain TEXT PRIMARY KEY,
+            client_ip TEXT,
+            error_msg TEXT,
+            first_seen REAL,
+            last_seen REAL,
+            occurrence_count INTEGER DEFAULT 1
+        )
+    """)
     # Add doomscroll_exempt column if missing (for older databases)
     try:
         columns = [row[1] for row in c.execute("PRAGMA table_info(network_devices)").fetchall()]
@@ -2130,49 +2141,40 @@ class VIGILANTAddon:
             velocity_rps = compute_sni_velocity(client_ip, server_name)
             log_sni_request(client_ip, server_name, velocity_rps)
 
-            # 2. Bypass list check — skip TLS interception immediately to avoid
-            # latency on video/CDN connections. Throttling is still applied via
-            # tc on the interface, which runs at the kernel level regardless of
-            # mitmproxy's involvement.
+            # 2. Check bypass conditions in explicit order
+            is_bypassed = False
+            
+            # a) Admin DB overrides
             if is_custom_bypass(server_name):
-                # Still check if this device should be throttled — the circuit
-                # breaker state persists across connections even when bypassed.
-                flagged, rpm_now, rpm_base = should_throttle(client_ip, server_name)
-                if flagged and not is_device_exempt(client_ip):
-                    level = escalate_circuit_breaker(client_ip, server_name, rpm_now, rpm_base)
-                    if level >= CB_LEVEL_PAUSE:
-                        _mark_client_throttled(client_ip)
-                    apply_circuit_breaker_action(client_ip, server_name, level, rpm_now, rpm_base)
-                data.ignore_connection = True
-                return
+                is_bypassed = True
+                
+            # b) In-memory SSL pinning auto-detected during current uptime
+            elif server_name in self.pinned_hosts:
+                is_bypassed = True
+                
+            # c) Hardcoded system safety domains
+            else:
+                _APPLE_DOMAINS = {"apple.com", "icloud.com", "mzstatic.com"}
+                clean_sni = server_name.lower().removeprefix("www.")
+                if any(clean_sni == d or clean_sni.endswith("." + d) for d in _APPLE_DOMAINS):
+                    is_bypassed = True
 
+            # Throttling is applied via tc on the interface regardless of bypass
             flagged, rpm_now, rpm_base = should_throttle(client_ip, server_name)
             if flagged and not is_device_exempt(client_ip):
                 level = escalate_circuit_breaker(client_ip, server_name, rpm_now, rpm_base)
                 if level >= CB_LEVEL_PAUSE:
                     _mark_client_throttled(client_ip)
                 apply_circuit_breaker_action(client_ip, server_name, level, rpm_now, rpm_base)
-                if level >= CB_LEVEL_PAUSE:
+                if level >= CB_LEVEL_PAUSE and not is_bypassed:
                     print(f"[VIGILANT] TLS CB Level {level} ({CB_LEVEL_NAMES[level]}) {client_ip} @ {server_name} "
                           f"RPM={rpm_now:.1f} baseline={rpm_base:.1f} RPS={velocity_rps:.2f}")
 
-            # 4. Certificate Pinning Dynamic Bypass (AFTER logging and throttling)
-            if server_name in self.pinned_hosts:
-                print(f"[VIGILANT DEBUG] SSL pinned, bypassing: {server_name}")
-                data.ignore_connection = True
-                print(f"[VIGILANT] Dynamic L4 Passthrough activated for pinned SNI: {server_name}")
-                return
-
-            # 6. Bypass core internal Apple traffic to prevent OS-level freezes.
-            # Uses suffix matching (not substring) to avoid a malicious site like
-            # "evilapple.com" or "scam-apple.com" inadvertently bypassing MITM.
-            _APPLE_DOMAINS = {"apple.com", "icloud.com", "mzstatic.com"}
-            clean_sni = server_name.lower().removeprefix("www.")
-            if any(clean_sni == d or clean_sni.endswith("." + d) for d in _APPLE_DOMAINS):
+            if is_bypassed:
                 data.ignore_connection = True
                 return
 
-            # 7. Log social domain requests to traffic log (non-pinned only)
+            # 3. Log social domain requests to traffic log (non-pinned only)
             social_domains = load_social_domains()
             clean_sni = server_name.removeprefix("www.")
             base = ".".join(clean_sni.split(".")[-2:])
@@ -2185,27 +2187,43 @@ class VIGILANTAddon:
             print(f"[VIGILANT] TLS ClientHello error: {e}")
 
     def tls_failed_client(self, data: tls.TlsData):
-        """Automatically catch TLS pinning rejections and register for persistent pass-through.
-        Saves the domain to both mitmproxy's runtime ignore_hosts AND the database
-        custom_bypass_domains so it survives proxy restarts."""
+        """Automatically catch TLS pinning rejections and register for admin review.
+        Saves the domain to mitmproxy's runtime ignore_hosts only and adds to pending DB."""
         server_name = getattr(data.conn, "sni", None)
+        if not server_name:
+            return
 
-        if server_name and server_name not in self.pinned_hosts:
-            print(
-                f"[VIGILANT] Detected TLS Certificate Pinning on {server_name}. Registering for L4 bypass."
-            )
-            self.pinned_hosts.add(server_name)
+        error_msg = str(getattr(data.conn, "error", "")).lower()
+        if not error_msg:
+            error_msg = str(getattr(data, "error", "")).lower()
 
-            # Instruct mitmproxy to dynamically ignore future connections to this SNI
-            current_ignores = list(ctx.options.ignore_hosts)
-            pattern = f"^{re.escape(server_name)}:443$"
-            if pattern not in current_ignores:
-                current_ignores.append(pattern)
-                ctx.options.ignore_hosts = current_ignores
-                print(f"[VIGILANT] Added {server_name} to mitmproxy ignore_hosts rule.")
+        # Check for missing root CA errors
+        ca_errors = ["unknown ca", "bad certificate", "certificate unknown", "sec_error_unknown_issuer", "self signed certificate"]
+        if any(err in error_msg for err in ca_errors):
+            print(f"[VIGILANT] Ignored TLS failure for {server_name} (Missing Root CA)")
+            return
 
-            # Persist to database so it survives proxy restarts
-            self._persist_bypass_domain(server_name)
+        # Handle True SSL Pinning Failures (FAIL-CLOSED)
+        # We do NOT add to self.pinned_hosts or ctx.options.ignore_hosts so the connection stays blocked.
+        client_ip = self._extract_client_ip_from_tls(data)
+        print(f"[VIGILANT] SSL Pinning detected on {server_name}. Connection remains blocked. Queued for admin review.")
+
+        try:
+            with db_lock:
+                conn = _connect_db()
+                now = time.time()
+                conn.execute(
+                    "INSERT INTO pending_bypass_review (domain, client_ip, error_msg, first_seen, last_seen, occurrence_count) "
+                    "VALUES (?, ?, ?, ?, ?, 1) "
+                    "ON CONFLICT(domain) DO UPDATE SET "
+                    "last_seen = excluded.last_seen, "
+                    "occurrence_count = occurrence_count + 1",
+                    (server_name, client_ip, error_msg, now, now)
+                )
+                conn.commit()
+                conn.close()
+        except Exception as e:
+            print(f"[VIGILANT] Error queuing pending bypass for {server_name}: {e}")
 
     def _persist_bypass_domain(self, domain: str):
         """Add exact domain to custom_bypass_domains in DB without broad base-domain wildcards."""
@@ -2489,5 +2507,84 @@ class VIGILANTAddon:
                 render_block_page(host, category),
                 {"Content-Type": "text/html"}
             )
+
+def get_pending_bypasses():
+    """Returns all records from pending_bypass_review sorted by last_seen DESC."""
+    try:
+        with db_lock:
+            conn = _connect_db()
+            cursor = conn.execute("SELECT domain, client_ip, error_msg, first_seen, last_seen, occurrence_count FROM pending_bypass_review ORDER BY last_seen DESC")
+            results = [
+                {
+                    "domain": row[0],
+                    "client_ip": row[1],
+                    "error_msg": row[2],
+                    "first_seen": row[3],
+                    "last_seen": row[4],
+                    "occurrence_count": row[5]
+                }
+                for row in cursor.fetchall()
+            ]
+            conn.close()
+            return results
+    except Exception as e:
+        print(f"[VIGILANT] Error fetching pending bypasses: {e}")
+        return []
+
+def approve_pending_bypass(domain: str):
+    """Approve a pending bypass domain and persist it."""
+    clean = domain.removeprefix("www.").lower()
+    try:
+        with db_lock:
+            conn = _connect_db()
+            cursor = conn.execute("SELECT value FROM config_settings WHERE key = 'custom_bypass_domains'")
+            row = cursor.fetchone()
+            existing = set()
+            if row and row[0]:
+                existing = set(d.strip() for d in row[0].split(",") if d.strip())
+            
+            if clean not in existing:
+                existing.add(clean)
+                new_value = ",".join(sorted(existing))
+                conn.execute(
+                    "INSERT OR REPLACE INTO config_settings (key, value, updated_at) VALUES (?, ?, ?)",
+                    ("custom_bypass_domains", new_value, time.time())
+                )
+            
+            # Remove from pending queue
+            conn.execute("DELETE FROM pending_bypass_review WHERE domain = ?", (domain,))
+            conn.commit()
+            conn.close()
+            
+        _refresh_bypass_cache()
+        return True
+    except Exception as e:
+        print(f"[VIGILANT] Error approving bypass for {domain}: {e}")
+        return False
+
+def reject_pending_bypass(domain: str):
+    """Reject a pending bypass and remove it from memory if present."""
+    try:
+        with db_lock:
+            conn = _connect_db()
+            conn.execute("DELETE FROM pending_bypass_review WHERE domain = ?", (domain,))
+            conn.commit()
+            conn.close()
+            
+        if _active_addon and domain in _active_addon.pinned_hosts:
+            _active_addon.pinned_hosts.remove(domain)
+            
+            # Also remove from current ignore_hosts if possible
+            if ctx and ctx.options:
+                current_ignores = list(ctx.options.ignore_hosts)
+                pattern = f"^{re.escape(domain)}:443$"
+                if pattern in current_ignores:
+                    current_ignores.remove(pattern)
+                    ctx.options.ignore_hosts = current_ignores
+                    
+        return True
+    except Exception as e:
+        print(f"[VIGILANT] Error rejecting bypass for {domain}: {e}")
+        return False
 
 addons = [VIGILANTAddon()]
