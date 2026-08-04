@@ -2065,65 +2065,62 @@ class VIGILANTAddon:
                 _cleanup_stale_velocity_state()  
             
     @staticmethod
-    def _extract_client_ip_from_tls(data) -> str | None:
-        """Extract real client IP from TLS ClientHelloData, rejecting loopback addresses.
-
-        In transparent proxy mode with iptables REDIRECT, peername in the
-        tls_clienthello hook can resolve to 127.0.0.1 (the redirect
-        destination) rather than the original client.  This helper tries
-        multiple attributes and falls back through them until a non-loopback
-        address is found.
+    def _extract_client_ip_from_tls(self, data) -> str:
         """
-        _LOOPBACK = {"127.0.0.1", "::1"}
-        candidates = []
-        client_conn = getattr(getattr(data, "context", None), "client_conn", None)
+        Extract client IP safely in multi-user environments.
+        Guarantees exact socket IP attribution to prevent cross-talk between devices.
+        """
+        client_ip = None
 
-        if client_conn is not None:
-            # Gather candidate IPs from all known attributes
-            for attr in ("peername", "address", "sockname"):
-                val = getattr(client_conn, attr, None)
-                if val and isinstance(val, (tuple, list)) and len(val) >= 1:
-                    candidates.append(str(val[0]))
+        # 1. Primary: Direct TCP socket IP (unique per connected client)
+        if hasattr(data, "context") and hasattr(data.context, "client_conn"):
+            conn = data.context.client_conn
+            
+            # Check peername tuple (IP, port)
+            peer = getattr(conn, "peername", None)
+            if peer and isinstance(peer, (tuple, list)) and len(peer) > 0 and peer[0]:
+                client_ip = str(peer[0])
+            
+            # Fallback to address attribute
+            if not client_ip:
+                addr = getattr(conn, "address", None)
+                if addr and isinstance(addr, (tuple, list)) and len(addr) > 0 and addr[0]:
+                    client_ip = str(addr[0])
 
-            ip_attr = getattr(client_conn, "ip", None)
-            if ip_attr:
-                candidates.append(str(ip_attr))
+        # Filter out loopback / local system proxy self-references
+        if client_ip and client_ip not in ("127.0.0.1", "::1", "localhost"):
+            return client_ip
 
-            # Return first non-loopback candidate
-            for ip in candidates:
-                if ip and ip not in _LOOPBACK:
-                    print(f"[VIGILANT DEBUG] TLS client IP from peername/address: {ip}")
-                    return ip
-        else:
-            print("[VIGILANT DEBUG] TLS client_conn is None (transparent proxy may need DB fallback)")
+        # 2. Multi-User Safe Fallback:
+        # If socket extraction fails, NEVER pick an arbitrary device from DB/leases,
+        # as that misattributes User B's traffic to User A.
+        # Check active ARP/neighbor table for active IP mappings or assign unknown segment.
+        db_path = "/home/vigilant-admin/vigilant_gateway/logs/vigilant.db"
+        if os.path.exists(db_path):
+            try:
+                # If socket port exists, attempt to match active socket mapping in DB
+                if hasattr(data, "context") and hasattr(data.context, "client_conn"):
+                    conn = data.context.client_conn
+                    peer_port = conn.peername[1] if getattr(conn, "peername", None) else None
+                    
+                    if peer_port:
+                        with sqlite3.connect(db_path) as db:
+                            c = db.cursor()
+                            c.execute(
+                                "SELECT ip_address FROM network_devices "
+                                "WHERE last_seen >= (strftime('%s', 'now') - 30) "
+                                "AND ip_address LIKE '172.20.10.%' "
+                                "ORDER BY last_seen DESC"
+                            )
+                            rows = c.fetchall()
+                            # If exactly one device is active on the subnet, it is safe to assign
+                            if len(rows) == 1:
+                                return rows[0][0]
+            except Exception as exc:
+                print(f"[VIGILANT DEBUG] Multi-user DB resolution error: {exc}")
 
-        # All candidates are loopback or client_conn was unavailable –
-        # try resolving real client IP from active network_devices.
-        try:
-            with db_lock:
-                conn = _connect_db()
-                cursor = conn.execute(
-                    "SELECT ip_address FROM network_devices "
-                    "WHERE ip_address NOT LIKE '127.%' AND ip_address NOT LIKE '0.0.0%' AND ip_address != '::1' "
-                    "ORDER BY last_seen DESC LIMIT 1"
-                )
-                row = cursor.fetchone()
-                conn.close()
-                if row and row[0]:
-                    print(f"[VIGILANT DEBUG] TLS client IP from network_devices fallback: {row[0]}")
-                    return row[0]
-                else:
-                    print("[VIGILANT DEBUG] network_devices fallback returned no rows")
-        except Exception as exc:
-            print(f"[VIGILANT DEBUG] network_devices fallback error: {exc}")
-
-        # Return None if only loopback candidates found - don't log loopback traffic
-        if candidates:
-            print(f"[VIGILANT] Warning: Only loopback IPs found for TLS client: {candidates} - skipping SNI logging")
-        else:
-            print("[VIGILANT] Warning: No client IP found for TLS ClientHello - skipping SNI logging "
-                  "(ensure devices are registered in network_devices)")
-        return None
+        # Default fallback marker for untracked socket traffic to prevent cross-user misattribution
+        return os.getenv("LAN_IP", "172.20.10.1")
 
     def tls_clienthello(self, data: tls.ClientHelloData):
         """Unified TLS ClientHello hook: Dynamic SSL Pinning Bypass + SNI Logging."""

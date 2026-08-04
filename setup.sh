@@ -198,7 +198,7 @@ stage_4_copy_files() {
             cp -a "$CURRENT_DIR/$f" "$VIGILANT_HOME/" 2>/dev/null || true
         fi
     done
-    
+
     chmod +x "$VIGILANT_HOME/src/scripts/setup-iptables.sh" 2>/dev/null || true
     chmod +x "$VIGILANT_HOME/setup.sh" 2>/dev/null || true
     
@@ -341,9 +341,10 @@ EOF
 stage_8_certificates() {
     echo ""
     log_info "═══════════════════════════════════════════"
-    log_info "STAGE 8: MITMPROXY CERTIFICATES"
+    log_info "STAGE 8: MITMPROXY CERTIFICATES & LOG PERMISSIONS"
     log_info "═══════════════════════════════════════════"
     
+    # 1. Generate mitmproxy certificates
     sudo -u "$VIGILANT_USER" bash << CMD
 source $VIGILANT_HOME/venv/bin/activate
 timeout 3 mitmdump --listen-port 8081 > /dev/null 2>&1 || true
@@ -357,6 +358,20 @@ CMD
     else
         log_warn "Certificate not found — will be generated on first proxy start"
     fi
+
+    # 2. Configure DNS log permissions and system group memberships
+    log_info "Configuring log permissions for non-root proxy access..."
+    touch /var/log/dnsmasq.log
+    chmod 644 /var/log/dnsmasq.log
+    
+    # Grant service user permission to tail system/dns logs
+    usermod -aG adm,syslog "$VIGILANT_USER" || true
+    
+    # Ensure logrotate maintains read permissions on log rotation
+    if [ -f /etc/logrotate.d/dnsmasq ]; then
+        sed -i 's/create 640/create 644/g' /etc/logrotate.d/dnsmasq 2>/dev/null || true
+    fi
+    log_success "Log permissions and group memberships configured"
 }
 
 # ─── Stage 9: Systemd Services ──────────────────────────────────────────────
