@@ -2064,7 +2064,6 @@ class VIGILANTAddon:
                 _cleanup_counter = 0
                 _cleanup_stale_velocity_state()  
             
-    @staticmethod
     def _extract_client_ip_from_tls(self, data=None) -> str:
         """Extract client IP safely across all mitmproxy object shapes."""
         if data is None:
@@ -2095,7 +2094,7 @@ class VIGILANTAddon:
                     client_ip = str(addr[0])
 
         # 3. Guard against loopback or self-referential IPs
-        if client_ip and client_ip not in ("127.0.0.1", "::1", "localhost", "172.20.10.1"):
+        if client_ip and client_ip not in ("127.0.0.1", "::1", "localhost"):
             return client_ip
 
         # If socket lookup failed, fallback to default LAN IP
@@ -2213,35 +2212,28 @@ class VIGILANTAddon:
         try:
             with db_lock:
                 conn = _connect_db()
-                # Extract the base domain (e.g. "graph.facebook.com" -> "facebook.com")  
-                clean = domain.removeprefix("www.").lower()
-                # Read current bypass list
-                cursor = conn.execute("SELECT value FROM config_settings WHERE key = 'custom_bypass_domains'")
-                row = cursor.fetchone()
-                existing = set()
-                if row and row[0]:
-                    existing = set(d.strip() for d in row[0].split(",") if d.strip())
-                
-                # Add the exact domain and its base domain
-                added = False
-                for d in [clean]:
-                    if d and d not in existing:
-                        existing.add(d)
-                        added = True
-                
-                if added:
-                    new_value = ",".join(sorted(existing))
-                    conn.execute(
-                        "INSERT OR REPLACE INTO config_settings (key, value, updated_at) VALUES (?, ?, ?)",
-                        ("custom_bypass_domains", new_value, time.time())
-                    )
-                    conn.commit()
+                try:
+                    clean = domain.removeprefix("www.").lower()
+                    cursor = conn.execute("SELECT value FROM config_settings WHERE key = 'custom_bypass_domains'")
+                    row = cursor.fetchone()
+                    existing = set()
+                    if row and row[0]:
+                        existing = set(d.strip() for d in row[0].split(",") if d.strip())
+                    
+                    if clean not in existing:
+                        existing.add(clean)
+                        new_value = ",".join(sorted(existing))
+                        conn.execute(
+                            "INSERT OR REPLACE INTO config_settings (key, value, updated_at) VALUES (?, ?, ?)",
+                            ("custom_bypass_domains", new_value, time.time())
+                        )
+                        conn.commit()
+                        _refresh_bypass_cache()
+                        print(f"[VIGILANT] Persisted {clean} to custom_bypass_domains (total: {len(existing)} domains)")
+                finally:
                     conn.close()
-                    _refresh_bypass_cache()
-                    print(f"[VIGILANT] Persisted {clean} to custom_bypass_domains (total: {len(existing)} domains)")
         except Exception as e:
             print(f"[VIGILANT] Failed to persist bypass domain {domain}: {e}")
-
 
     def log_to_dashboard(self, client_ip: str, sni: str):
         """Log SNI domain to dashboard database for transparent passthrough tracking using TF-IDF classification"""
