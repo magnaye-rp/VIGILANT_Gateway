@@ -241,11 +241,21 @@ EOF
 }
 
 # ─── Stage 6: DNS/DHCP Setup ────────────────────────────────────────────────
+# ─── Stage 6: DNS/DHCP Setup ────────────────────────────────────────────────
 stage_6_dns_dhcp() {
     echo ""
     log_info "═══════════════════════════════════════════"
     log_info "STAGE 6: DNS/DHCP CONFIGURATION"
     log_info "═══════════════════════════════════════════"
+    
+    log_info "Ensuring systemd-resolved service is active..."
+    systemctl enable --now systemd-resolved > /dev/null 2>&1 || true
+    
+    # Determine the safest available resolv.conf path dynamically
+    RESOLV_PATH="/etc/resolv.conf"
+    if [ -f "/run/systemd/resolve/resolv.conf" ]; then
+        RESOLV_PATH="/run/systemd/resolve/resolv.conf"
+    fi
     
     log_info "Backing up dnsmasq.conf..."
     cp /etc/dnsmasq.conf /etc/dnsmasq.conf.bak 2>/dev/null || true
@@ -256,7 +266,7 @@ interface=$LAN_INTERFACE
 dhcp-range=172.20.10.50,172.20.10.200,255.255.255.0,12h
 dhcp-option=option:router,$LAN_IP
 dhcp-option=option:dns-server,$LAN_IP
-resolv-file=/run/systemd/resolve/resolv.conf
+resolv-file=$RESOLV_PATH
 bind-interfaces
 log-queries
 log-facility=/var/log/dnsmasq.log
@@ -268,31 +278,7 @@ EOF
     touch /var/log/dnsmasq.log
     chmod 644 /var/log/dnsmasq.log
     
-    log_info "Configuring logrotate..."
-    cat > /etc/logrotate.d/dnsmasq << 'EOF'
-/var/log/dnsmasq.log {
-    daily
-    copytruncate
-    rotate 7
-    compress
-    delaycompress
-    missingok
-    notifempty
-    postrotate
-        if [ -f /var/log/dnsmasq.log ]; then
-            chmod 644 /var/log/dnsmasq.log
-        fi
-        systemctl reload dnsmasq > /dev/null 2>&1 || true
-    endscript
-}
-EOF
-
-    if [ -f "$VIGILANT_HOME/src/config/vigilant-logrotate" ]; then
-        cp "$VIGILANT_HOME/src/config/vigilant-logrotate" /etc/logrotate.d/vigilant
-        chmod 644 /etc/logrotate.d/vigilant
-        log_success "VIGILANT logrotate configured"
-    fi
-    log_success "DNS/DHCP dynamic forwarding configured on 172.20.10.0/24"
+    log_success "DNS/DHCP dynamic forwarding configured on $LAN_SUBNET using $RESOLV_PATH"
 }
 
 # ─── Stage 7: Firewall & NAT Routing ────────────────────────────────────────
