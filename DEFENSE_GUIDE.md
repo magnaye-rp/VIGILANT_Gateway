@@ -30,7 +30,7 @@ What it shows:
 ┌─ Doomscroll Circuit Breaker ────────────────────────────────┐
 │ [Pause/Friction/Circuit Break]                               │
 │ 1 device(s) under intervention                               │
-│ 192.168.10.25  Score: 34.2 • 32kbit • idle 12s               │
+│ 172.20.10.25  Score: 34.2 • 32kbit • idle 12s               │
 │ L2: Friction                              [Release]           │
 └─────────────────────────────────────────────────────────────┘
 
@@ -59,7 +59,7 @@ Hardware resource monitoring. Proves system runs within 8GB budget.
 
 ┌─ Throttled Devices ─────────────────────────────────────────┐
 │ Hostname | IP Address    | Status    | Action                │
-│ iPhone   | 192.168.10.25 | THROTTLED | [Release]             │
+│ iPhone   | 172.20.10.25 | THROTTLED | [Release]             │
 └─────────────────────────────────────────────────────────────┘
 
 Shows every device currently under bandwidth restriction.
@@ -68,7 +68,7 @@ Shows every device currently under bandwidth restriction.
 
 ┌─ Active Devices ────────────────────────────────────────────┐
 │ Hostname | IP Address                                        │
-│ iPhone   | 192.168.10.25                                     │
+│ iPhone   | 172.20.10.25                                     │
 └─────────────────────────────────────────────────────────────┘
 
 Shows devices seen in the last 2 minutes (based on actual traffic, not DHCP leases).
@@ -202,7 +202,7 @@ Raw TLS handshake records. Paginated, searchable, time-filtered.
 Auto-detects actual system interfaces. Only shows real physical NICs.
 
 ┌─ IP & DHCP ─────────────────────────────────────────────────┐
-│ Gateway: 192.168.10.1 | DHCP Start: .10 | End: .50           │
+│ Gateway: 172.20.10.1 | DHCP Start: .10 | End: .50           │
 │ DNS Servers: 8.8.8.8, 8.8.4.4                               │
 └─────────────────────────────────────────────────────────────┘
 
@@ -242,11 +242,11 @@ Master switches. Unchecking "Distracting" means social media passes through unfi
 **Step 2: Trigger detection (0:30-2:00)**
 - Open Instagram/Facebook on the phone
 - Scroll through Reels continuously for 90+ seconds
-- SSH Session 1 will show: `[VIGILANT] Engaged: 192.168.10.25 @ 5 RPM for 180s`
+- SSH Session 1 will show: `[VIGILANT] Engaged: 172.20.10.25 @ 5 RPM for 180s`
 
 **Step 3: L1 throttle (at ~3:00 mark)**
 - Dashboard Circuit Breaker panel appears: "L1: Pause"
-- SSH shows: `[VIGILANT] ENGAGEMENT 192.168.10.25: 3.0min → L1 @ 128kbit`
+- SSH shows: `[VIGILANT] ENGAGEMENT 172.20.10.25: 3.0min → L1 @ 128kbit`
 - Phone: images load slowly, videos buffer
 - SSH Session 2 (tc watch) shows: `rate 128Kbit`
 
@@ -259,7 +259,7 @@ Master switches. Unchecking "Distracting" means social media passes through unfi
 **Step 5: Release (at any point)**
 - Close Instagram on the phone (don't just minimize — actually close it)
 - Wait 2 minutes
-- SSH shows: `[VIGILANT] ENGAGEMENT RESET: 192.168.10.25 idle 130s, releasing`
+- SSH shows: `[VIGILANT] ENGAGEMENT RESET: 172.20.10.25 idle 130s, releasing`
 - Dashboard panel disappears
 - Phone: full speed restored
 - tc shows: no throttled classes

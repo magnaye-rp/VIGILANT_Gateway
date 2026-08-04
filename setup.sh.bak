@@ -676,7 +676,7 @@ stage_12_status() {
     log_success "║         VIGILANT GATEWAY SETUP COMPLETE!                 ║"
     log_success "╚═══════════════════════════════════════════════════════════╝"
     echo ""
-    echo -e "${GREEN}Dashboard:${NC} http://192.168.10.1:5000"
+    echo -e "${GREEN}Dashboard:${NC} http://172.20.10.1:5000"
     echo -e "${GREEN}Proxy:${NC} 127.0.0.1:8080"
     echo -e "${GREEN}Admin User:${NC} $VIGILANT_USER"
     echo -e "${GREEN}Install Path:${NC} $VIGILANT_HOME"

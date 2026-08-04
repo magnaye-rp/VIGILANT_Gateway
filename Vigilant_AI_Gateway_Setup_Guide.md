@@ -18,7 +18,7 @@ Network architecture:
 
 Internet ⇄ [enp0s5] Ubuntu Gateway [enp0s6] ⇄ Client VM
 
-Gateway IP: 192.168.10.1
+Gateway IP: 172.20.10.1
 
 ---
 
@@ -97,7 +97,7 @@ network:
 
     enp0s6:
       addresses:
-        - 192.168.10.1/24
+        - 172.20.10.1/24
 
       nameservers:
         addresses:
@@ -123,11 +123,11 @@ sudo nano /etc/dnsmasq.conf
 interface=enp0s6
 bind-interfaces
 
-dhcp-range=192.168.10.10,192.168.10.50,24h
+dhcp-range=172.20.10.10,172.20.10.50,24h
 
-dhcp-option=3,192.168.10.1
+dhcp-option=3,172.20.10.1
 
-dhcp-option=6,192.168.10.1
+dhcp-option=6,172.20.10.1
 
 server=8.8.8.8
 server=1.1.1.1
@@ -201,7 +201,7 @@ ip addr
 Expected:
 
 ```
-192.168.10.x
+172.20.10.x
 ```
 
 Verify DNS:
@@ -213,7 +213,7 @@ cat /etc/resolv.conf
 Expected:
 
 ```
-nameserver 192.168.10.1
+nameserver 172.20.10.1
 ```
 
 ---
@@ -221,7 +221,7 @@ nameserver 192.168.10.1
 # Step 13 — Testing
 
 ```bash
-ping 192.168.10.1
+ping 172.20.10.1
 ping 8.8.8.8
 ping google.com
 ```

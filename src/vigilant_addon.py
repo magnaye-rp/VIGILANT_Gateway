@@ -1322,7 +1322,7 @@ def get_distribution_interface():
     
     First tries the database config. If that's missing or the interface doesn't
     exist, scans /proc/net/dev for the interface that carries the gateway IP
-    (192.168.10.1). This ensures tc rules are applied to the correct interface
+    (172.20.10.1). This ensures tc rules are applied to the correct interface
     even if the database has stale defaults like "eth1".
     """
     try:
@@ -1343,7 +1343,7 @@ def get_distribution_interface():
     except Exception:
         pass
     
-    # Auto-detect: find the interface with the LAN gateway IP (192.168.10.1)
+    # Auto-detect: find the interface with the LAN gateway IP (172.20.10.1)
     import subprocess
     try:
         result = subprocess.run(
@@ -1359,8 +1359,8 @@ def get_distribution_interface():
                     name = parts[1].strip().split()[0] if parts[1].strip() else None
                     if name:
                         current_iface = name
-            # Line with IP address: "    inet 192.168.10.1/24 ..."
-            if current_iface and "inet 192.168.10." in line:
+            # Line with IP address: "    inet 172.20.10.1/24 ..."
+            if current_iface and "inet 172.20.10." in line:
                 return current_iface
     except Exception:
         pass
@@ -1380,7 +1380,7 @@ def get_distribution_interface():
 
 def _ip_to_class_id(client_ip: str) -> tuple:
     """Derive a deterministic tc class ID and priority from an IP address.
-    Uses the last two octets of the IP (e.g. 192.168.10.25 → octets 10.25)
+    Uses the last two octets of the IP (e.g. 172.20.10.25 → octets 10.25)
     to compute a unique ID in range 1:10 through 1:fffe.
     
     This is deterministic across all processes, unlike Python's hash()

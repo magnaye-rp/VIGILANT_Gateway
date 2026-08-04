@@ -207,7 +207,7 @@ def _parse_dnsmasq_config() -> dict:
     if not config_path.exists():
         config_path = Path("/etc/dnsmasq.conf")
     
-    settings = {"interface": "eth1", "listen_address": "192.168.10.1", ...}
+    settings = {"interface": "eth1", "listen_address": "172.20.10.1", ...}
     
     if config_path.exists():
         try:
@@ -657,7 +657,7 @@ def get_stats():
 - **Recommended Fix:**
 ```python
 # Remove hardcoded values, use environment variables or config
-SERVER_IP = os.getenv("VIGILANT_SERVER_IP", "192.168.10.1")
+SERVER_IP = os.getenv("VIGILANT_SERVER_IP", "172.20.10.1")
 DEFAULT_INTERFACE = os.getenv("VIGILANT_INTERFACE", "eth1")
 
 def _parse_dnsmasq_config() -> dict:
@@ -772,7 +772,7 @@ def _parse_netplan_config() -> dict:
     settings = {
         "upstream_interface": "eth0",
         "distribution_interface": "eth1",
-        "lan_address": "192.168.10.1/24"
+        "lan_address": "172.20.10.1/24"
     }
     
     if yaml is None:
@@ -799,7 +799,7 @@ def _parse_netplan_config() -> dict:
                     settings["upstream_interface"] = iface_name
                 elif "addresses" in iface_config:
                     settings["distribution_interface"] = iface_name
-                    settings["lan_address"] = iface_config["addresses"][0] if iface_config["addresses"] else "192.168.10.1/24"
+                    settings["lan_address"] = iface_config["addresses"][0] if iface_config["addresses"] else "172.20.10.1/24"
     except yaml.YAMLError as exc:
         app.logger.error("Failed to parse netplan YAML: %s", exc)
         return settings
@@ -1706,7 +1706,7 @@ def save_setup_config():
 ```python
 import os
 
-allowed_origins = os.getenv("VIGILANT_ALLOWED_ORIGINS", "http://192.168.10.1:5000").split(",")
+allowed_origins = os.getenv("VIGILANT_ALLOWED_ORIGINS", "http://172.20.10.1:5000").split(",")
 CORS(app, resources={r"/*": {"origins": allowed_origins}})
 ```
 

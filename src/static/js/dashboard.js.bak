@@ -651,9 +651,9 @@ async function saveUnifiedConfig(e) {
     // Network configuration
     upstream_interface: upstreamInterfaceEl?.value || 'enp0s31f6',
     distribution_interface: distributionInterfaceEl?.value || 'wlp1s0',
-    gateway_ip: gatewayIpEl?.value || '192.168.10.1',
-    dhcp_start: dhcpStartEl?.value || '192.168.10.10',
-    dhcp_end: dhcpEndEl?.value || '192.168.10.50',
+    gateway_ip: gatewayIpEl?.value || '172.20.10.1',
+    dhcp_start: dhcpStartEl?.value || '172.20.10.10',
+    dhcp_end: dhcpEndEl?.value || '172.20.10.50',
     upstream_dns: dnsServersEl?.value || '8.8.8.8\n8.8.4.4',
     // Advanced configuration
     nlp_accuracy: nlpModeEl?.value || 'balanced',
@@ -1256,9 +1256,9 @@ async function saveWizardConfig(e) {
     // Network configuration
     upstream_interface: upstreamInterfaceEl?.value || 'en0',
     distribution_interface: distributionInterfaceEl?.value || 'wlp1s0',
-    gateway_ip: gatewayIpEl?.value || '192.168.10.1',
-    dhcp_start: dhcpStartEl?.value || '192.168.10.10',
-    dhcp_end: dhcpEndEl?.value || '192.168.10.50',
+    gateway_ip: gatewayIpEl?.value || '172.20.10.1',
+    dhcp_start: dhcpStartEl?.value || '172.20.10.10',
+    dhcp_end: dhcpEndEl?.value || '172.20.10.50',
     dns_servers: dnsServersEl?.value || '8.8.8.8,8.8.4.4'
   };
 

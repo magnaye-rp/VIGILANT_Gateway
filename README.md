@@ -82,7 +82,7 @@ cd vigilant-gateway
 sudo bash setup.sh
 
 # 3. Done! Dashboard is ready at:
-# http://192.168.10.1:5000
+# http://172.20.10.1:5000
 ```
 
 That's it. The `setup.sh` script handles everything:
@@ -103,7 +103,7 @@ That's it. The `setup.sh` script handles everything:
 ### Real-Time Dashboard
 
 ```
-http://192.168.10.1:5000
+http://172.20.10.1:5000
 ```
 
 Live stats for:
@@ -259,7 +259,7 @@ sudo systemctl restart vigilant-proxy
 
 ```bash
 # Via dashboard
-# → Click "Clear all logs" button @ http://192.168.10.1:5000
+# → Click "Clear all logs" button @ http://172.20.10.1:5000
 
 # Or via terminal
 sqlite3 /home/vigilant_admin/vigilant/logs/vigilant.db << EOF
@@ -278,15 +278,15 @@ Edit `/etc/netplan/00-installer-config.yaml`:
 
 ```yaml
 enp0s5: # WAN interface (gets DHCP)
-enp0s6: # LAN interface (192.168.10.1/24)
+enp0s6: # LAN interface (172.20.10.1/24)
 ```
 
 ### DNS/DHCP
 
 Edit `/etc/dnsmasq.conf`:
 
-- Gateway IP: 192.168.10.1
-- DHCP range: 192.168.10.100-200
+- Gateway IP: 172.20.10.1
+- DHCP range: 172.20.10.100-200
 - Default route points to gateway
 
 ### Firewall Rules

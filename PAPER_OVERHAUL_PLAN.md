@@ -25,8 +25,8 @@ The Implemented Fact: The gateway host does not use internal Wi-Fi or Linux host
 The Empirical Rationale: SoftAP modes (hostapd) suffer from driver-level instabilites under concurrent load and lack hardware offloading for multi-user MIMO. Offloading 802.11 Layer-1/Layer-2 physical radio management to a dedicated external Access Point isolates the VIGILANT server to focus exclusively on Layer-3/4 packet inspection, queuing, and routing.
 Interfaces:
 WAN Interface (enp0s31f6): DHCP client bound to upstream network.
-LAN Interface (enp1s0): 192.168.10.1/24 gateway connected via PCIe-to-Ethernet adapter to external AP.
-Routing Stack: dnsmasq (DHCP pool 192.168.10.10–192.168.10.250 + local DNS resolver), iptables NAT/MASQUERADE, and PREROUTING REDIRECT targeting local port 8080.
+LAN Interface (enp1s0): 172.20.10.1/24 gateway connected via PCIe-to-Ethernet adapter to external AP.
+Routing Stack: dnsmasq (DHCP pool 172.20.10.10–172.20.10.250 + local DNS resolver), iptables NAT/MASQUERADE, and PREROUTING REDIRECT targeting local port 8080.
 4. Traffic Shaping & Kernel Enforcement
 The Implemented Fact: Bandwidth throttling uses Linux Kernel Traffic Control (tc) with Hierarchical Token Bucket (htb) qdisc attached to interface enp1s0.
 Mechanics: Per-device classful hierarchy dynamically allocated via IP-derived classid. Bilateral filtering is applied using u32 matching on dst IP (download traffic) and src IP (upload traffic). A 2 KB burst allowance permits fast TCP 3-way handshakes and initial HTTP/TLS negotiation before applying the hard bandwidth floor, avoiding abrupt TCP connection reset errors (RST).
@@ -106,7 +106,7 @@ REPLACE SECTION WITH:
                [ External Wireless Access Point ]
                     │           │           │
                 [Client 1]  [Client 2]  [Client N (up to 30)]
-Interface enp0s31f6 handles the WAN uplink via upstream DHCP. Interface enp1s0 serves as the local area gateway (192.168.10.1/24) connected via a high-speed PCIe adapter to an external wireless access point. Network clients obtain leases through dnsmasq in the 192.168.10.10–192.168.10.250 subnet. All traffic routed over ports 80 and 443 is redirected to the transparent proxy via iptables PREROUTING rules."
+Interface enp0s31f6 handles the WAN uplink via upstream DHCP. Interface enp1s0 serves as the local area gateway (172.20.10.1/24) connected via a high-speed PCIe adapter to an external wireless access point. Network clients obtain leases through dnsmasq in the 172.20.10.10–172.20.10.250 subnet. All traffic routed over ports 80 and 443 is redirected to the transparent proxy via iptables PREROUTING rules."
 CHANGE 3.2: NLP Categorization Engine (TF-IDF Specification)
 LOCATION: CHAPTER_III.md, Content Inspection Engine
 REPLACE SECTION WITH:

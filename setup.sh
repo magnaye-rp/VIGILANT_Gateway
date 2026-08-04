@@ -1,7 +1,8 @@
 #!/bin/bash
 #══════════════════════════════════════════════════════════════════════════════
-# VIGILANT GATEWAY - UNIFIED AUTOMATED SETUP SCRIPT
+# VIGILANT GATEWAY - UNIFIED PLUG-AND-PLAY SETUP SCRIPT
 # Deploy the system directly in /home/vigilant-admin/vigilant_gateway
+# Subnet: 172.20.10.0/24 (Server LAN IP: 172.20.10.1)
 #══════════════════════════════════════════════════════════════════════════════
 
 set -e  # Exit on any error
@@ -17,6 +18,8 @@ NC='\033[0m' # No Color
 VIGILANT_USER="vigilant-admin"
 VIGILANT_HOME="/home/$VIGILANT_USER/vigilant_gateway"
 REPO_DIR="$VIGILANT_HOME"
+LAN_IP="172.20.10.1"
+LAN_SUBNET="172.20.10.0/24"
 WAN_INTERFACE=""
 LAN_INTERFACE=""
 
@@ -42,55 +45,38 @@ check_os() {
 }
 
 detect_network_interfaces() {
-    log_info "Detecting available network interfaces..."
+    log_info "Auto-detecting available network interfaces for Plug-and-Play operation..."
     
-    INTERFACES=($(ip link show | grep "^[0-9]:" | grep -v "lo" | awk -F: '{print $2}' | tr -d ' '))
+    # Filter out loopback, virtual, and bridge interfaces
+    INTERFACES=($(ip -o link show | awk -F': ' '{print $2}' | grep -Ev '^(lo|docker|veth|tun|tap|br-)'))
     
-    if [ ${#INTERFACES[@]} -eq 0 ]; then
-        log_error "No network interfaces found!"
+    if [ ${#INTERFACES[@]} -lt 2 ]; then
+        log_error "At least 2 physical network interfaces are required (WAN & LAN)!"
         exit 1
     fi
+
+    # Automatically set WAN to the interface with an active default route
+    WAN_INTERFACE=$(ip route | grep default | awk '{print $5}' | head -n 1 || true)
     
-    log_info "Available network interfaces:"
-    for i in "${!INTERFACES[@]}"; do
-        iface="${INTERFACES[$i]}"
-        state=$(ip link show "$iface" | grep -oP '(?<=state )\w+' || echo "unknown")
-        ip_addr=$(ip -4 addr show "$iface" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1 || echo "none")
-        echo "  [$i] $iface - State: $state - IP: $ip_addr"
-    done
-    
-    echo ""
-    log_info "Select the WAN/Internet-facing interface (connects to upstream router/modem):"
-    read -p "Enter interface number or name: " wan_selection
-    
-    if [[ "$wan_selection" =~ ^[0-9]+$ ]] && [ "$wan_selection" -ge 0 ] && [ "$wan_selection" -lt ${#INTERFACES[@]} ]; then
-        WAN_INTERFACE="${INTERFACES[$wan_selection]}"
-    elif [[ " ${INTERFACES[@]} " =~ " ${wan_selection} " ]]; then
-        WAN_INTERFACE="$wan_selection"
+    if [ -z "$WAN_INTERFACE" ]; then
+        WAN_INTERFACE="${INTERFACES[0]}"
+        LAN_INTERFACE="${INTERFACES[1]}"
     else
-        log_error "Invalid selection: $wan_selection"
+        for iface in "${INTERFACES[@]}"; do
+            if [ "$iface" != "$WAN_INTERFACE" ]; then
+                LAN_INTERFACE="$iface"
+                break
+            fi
+        done
+    fi
+    
+    if [ -z "$LAN_INTERFACE" ] || [ "$WAN_INTERFACE" = "$LAN_INTERFACE" ]; then
+        log_error "Failed to automatically separate WAN and LAN interfaces!"
         exit 1
     fi
     
-    log_info "Select the LAN/Client-facing interface (Ethernet/Wi-Fi for clients):"
-    read -p "Enter interface number or name: " lan_selection
-    
-    if [[ "$lan_selection" =~ ^[0-9]+$ ]] && [ "$lan_selection" -ge 0 ] && [ "$lan_selection" -lt ${#INTERFACES[@]} ]; then
-        LAN_INTERFACE="${INTERFACES[$lan_selection]}"
-    elif [[ " ${INTERFACES[@]} " =~ " ${lan_selection} " ]]; then
-        LAN_INTERFACE="$lan_selection"
-    else
-        log_error "Invalid selection: $lan_selection"
-        exit 1
-    fi
-    
-    if [ "$WAN_INTERFACE" = "$LAN_INTERFACE" ]; then
-        log_error "WAN and LAN interfaces cannot be the same!"
-        exit 1
-    fi
-    
-    log_success "WAN Interface: $WAN_INTERFACE"
-    log_success "LAN Interface: $LAN_INTERFACE"
+    log_success "Auto-selected WAN Interface: $WAN_INTERFACE"
+    log_success "Auto-selected LAN Interface: $LAN_INTERFACE"
     
     export WAN_INTERFACE LAN_INTERFACE
 }
@@ -155,7 +141,6 @@ stage_2_directories() {
     mkdir -p "$VIGILANT_HOME"/{src,logs,certs,scripts}
     mkdir -p /var/log/vigilant
 
-    # Set user permissions across repository and log structures
     chmod 755 "/home/$VIGILANT_USER"
     chown -R "$VIGILANT_USER:$VIGILANT_USER" "$VIGILANT_HOME" /var/log/vigilant
     chmod -R 775 "$VIGILANT_HOME" /var/log/vigilant
@@ -202,22 +187,18 @@ stage_4_copy_files() {
     
     CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     
-    # Always sync the src/ directory from the repo to the runtime location.
-    # The static/templates can be copied as whole directories.
     if [ -d "$CURRENT_DIR/src" ]; then
         log_info "Syncing src/ from $CURRENT_DIR to $VIGILANT_HOME..."
         rsync -a --delete "$CURRENT_DIR/src/" "$VIGILANT_HOME/src/" 2>/dev/null || \
             cp -a "$CURRENT_DIR/src/." "$VIGILANT_HOME/src/" 2>/dev/null || true
     fi
     
-    # Also sync setup.sh and requirements.txt if they changed
     for f in setup.sh requirements.txt vigilant_boot.sh; do
         if [ -f "$CURRENT_DIR/$f" ]; then
             cp -a "$CURRENT_DIR/$f" "$VIGILANT_HOME/" 2>/dev/null || true
         fi
     done
 
-    # Make setup scripts executable
     chmod +x "$VIGILANT_HOME/src/scripts/setup-iptables.sh" 2>/dev/null || true
     chmod +x "$VIGILANT_HOME/setup.sh" 2>/dev/null || true
     
@@ -236,10 +217,8 @@ stage_5_network_config() {
     cp /etc/netplan/00-installer-config.yaml \
        /etc/netplan/00-installer-config.yaml.bak 2>/dev/null || true
 
-    log_info "Configuring Netplan for WAN ($WAN_INTERFACE) and LAN ($LAN_INTERFACE)..."
+    log_info "Configuring Netplan: WAN ($WAN_INTERFACE) via DHCP, LAN ($LAN_INTERFACE) on $LAN_IP/24..."
     
-    # Both WAN and LAN are wired ethernet interfaces.
-    # (The LAN connects to a PCIe-to-Ethernet adapter → access point.)
     cat > /etc/netplan/00-installer-config.yaml << EOF
 network:
   version: 2
@@ -250,17 +229,15 @@ network:
     $LAN_INTERFACE:
       dhcp4: no
       addresses:
-        - 192.168.10.1/24
+        - ${LAN_IP}/24
 EOF
-
-    log_info "WARNING: If you are connected via SSH on the LAN interface ($LAN_INTERFACE), you may lose connection during netplan apply."
 
     log_info "Applying netplan changes..."
     netplan generate > /dev/null 2>&1
     netplan apply > /dev/null 2>&1
     systemctl restart systemd-networkd > /dev/null 2>&1 || true
     
-    log_success "Network configured: WAN ($WAN_INTERFACE), LAN ($LAN_INTERFACE - 192.168.10.1)"
+    log_success "Network configured: WAN ($WAN_INTERFACE), LAN ($LAN_INTERFACE - $LAN_IP)"
 }
 
 # ─── Stage 6: DNS/DHCP Setup ────────────────────────────────────────────────
@@ -273,12 +250,17 @@ stage_6_dns_dhcp() {
     log_info "Backing up dnsmasq.conf..."
     cp /etc/dnsmasq.conf /etc/dnsmasq.conf.bak 2>/dev/null || true
     
-    log_info "Generating dnsmasq.conf with LAN interface $LAN_INTERFACE..."
-    if [ -f "$VIGILANT_HOME/src/config/dnsmasq.conf" ]; then
-        sed "s/interface=__LAN_INTERFACE__/interface=$LAN_INTERFACE/g" "$VIGILANT_HOME/src/config/dnsmasq.conf" > /tmp/dnsmasq-vigilant.conf
-        cat /tmp/dnsmasq-vigilant.conf > /etc/dnsmasq.conf
-        rm -f /tmp/dnsmasq-vigilant.conf
-    fi
+    log_info "Generating Plug-and-Play dnsmasq.conf for interface $LAN_INTERFACE..."
+    cat > /etc/dnsmasq.conf << EOF
+interface=$LAN_INTERFACE
+dhcp-range=172.20.10.50,172.20.10.200,255.255.255.0,12h
+dhcp-option=option:router,$LAN_IP
+dhcp-option=option:dns-server,$LAN_IP
+resolv-file=/run/systemd/resolve/resolv.conf
+bind-interfaces
+log-queries
+log-facility=/var/log/dnsmasq.log
+EOF
     
     log_info "Restarting dnsmasq..."
     systemctl restart dnsmasq
@@ -286,7 +268,7 @@ stage_6_dns_dhcp() {
     touch /var/log/dnsmasq.log
     chmod 644 /var/log/dnsmasq.log
     
-    log_info "Configuring logrotate for dnsmasq..."
+    log_info "Configuring logrotate..."
     cat > /etc/logrotate.d/dnsmasq << 'EOF'
 /var/log/dnsmasq.log {
     daily
@@ -305,20 +287,19 @@ stage_6_dns_dhcp() {
 }
 EOF
 
-    log_info "Configuring logrotate for VIGILANT logs..."
     if [ -f "$VIGILANT_HOME/src/config/vigilant-logrotate" ]; then
         cp "$VIGILANT_HOME/src/config/vigilant-logrotate" /etc/logrotate.d/vigilant
         chmod 644 /etc/logrotate.d/vigilant
         log_success "VIGILANT logrotate configured"
     fi
-    log_success "DNS/DHCP configured"
+    log_success "DNS/DHCP dynamic forwarding configured on 172.20.10.0/24"
 }
 
-# ─── Stage 7: Firewall Setup ────────────────────────────────────────────────
+# ─── Stage 7: Firewall & NAT Routing ────────────────────────────────────────
 stage_7_firewall() {
     echo ""
     log_info "═══════════════════════════════════════════"
-    log_info "STAGE 7: FIREWALL RULES"
+    log_info "STAGE 7: FIREWALL & NAT RULES"
     log_info "═══════════════════════════════════════════"
     
     log_info "Saving network interface environment variables..."
@@ -328,34 +309,37 @@ LAN_INTERFACE=$LAN_INTERFACE
 EOF
     chown "$VIGILANT_USER:$VIGILANT_USER" "$VIGILANT_HOME/.env"
 
-    if [ -f "$VIGILANT_HOME/src/scripts/setup-iptables.sh" ]; then
-        WAN_INTERFACE="$WAN_INTERFACE" LAN_INTERFACE="$LAN_INTERFACE" bash "$VIGILANT_HOME/src/scripts/setup-iptables.sh"
-    fi
-    
     log_info "Enabling IPv4 packet forwarding..."
     sysctl -w net.ipv4.ip_forward=1 > /dev/null
-    
     if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
         echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
     fi
     
-    log_info "Applying NAT routing rules..."
+    # Flush existing NAT rules to prevent duplicates
+    iptables -F
+    iptables -t nat -F
+    
+    log_info "Applying NAT Masquerade rules for downstream 172.20.10.0/24..."
     iptables -t nat -A POSTROUTING -o "$WAN_INTERFACE" -j MASQUERADE
 
+    # Intercept DNS and redirect transparently
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p udp --dport 53 -j REDIRECT --to-ports 53
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 53 -j REDIRECT --to-ports 53
 
+    # Redirect Web traffic into mitmproxy (Port 8080)
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 80 -j REDIRECT --to-ports 8080
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 443 -j REDIRECT --to-ports 8080
     
+    # Drop QUIC and encrypted DNS to force HTTPS/TLS fallback through proxy
     iptables -A FORWARD -i "$LAN_INTERFACE" -p udp --dport 443 -j DROP
     iptables -A FORWARD -i "$LAN_INTERFACE" -p udp --dport 80 -j DROP
     iptables -A FORWARD -i "$LAN_INTERFACE" -p tcp --dport 853 -j REJECT
     iptables -A FORWARD -i "$LAN_INTERFACE" -p udp --dport 853 -j REJECT
     iptables -A OUTPUT -p udp --dport 443 -j DROP
     iptables -A OUTPUT -p udp --dport 80 -j DROP
-    ip6tables -P FORWARD DROP
+    ip6tables -P FORWARD DROP 2>/dev/null || true
 
+    # Forwarding state rules
     iptables -A FORWARD -i "$LAN_INTERFACE" -o "$WAN_INTERFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
     iptables -A FORWARD -i "$LAN_INTERFACE" -o "$WAN_INTERFACE" -j ACCEPT
 
@@ -364,7 +348,7 @@ EOF
     else
         iptables-save > /etc/iptables/rules.v4
     fi
-    log_success "NAT routing rules applied persistently"
+    log_success "NAT routing rules persistently applied"
 }
 
 # ─── Stage 8: Certificates ──────────────────────────────────────────────────
@@ -374,18 +358,13 @@ stage_8_certificates() {
     log_info "STAGE 8: MITMPROXY CERTIFICATES"
     log_info "═══════════════════════════════════════════"
     
-    # Run mitmdump briefly in non-transparent mode to generate the CA certificate.
-    # mitmproxy creates ~/.mitmproxy/mitmproxy-ca-cert.pem on first start.
     sudo -u "$VIGILANT_USER" bash << CMD
 source $VIGILANT_HOME/venv/bin/activate
 timeout 3 mitmdump --listen-port 8081 > /dev/null 2>&1 || true
 CMD
     
-    # Verify cert was created
     if [ -f "/home/$VIGILANT_USER/.mitmproxy/mitmproxy-ca-cert.pem" ]; then
         log_success "mitmproxy CA certificate created"
-        
-        # Install into system trust store so local HTTPS works
         cp "/home/$VIGILANT_USER/.mitmproxy/mitmproxy-ca-cert.pem" /usr/local/share/ca-certificates/mitmproxy.crt 2>/dev/null || true
         update-ca-certificates --fresh > /dev/null 2>&1 || true
         log_success "CA certificate installed in system trust store"
@@ -410,7 +389,7 @@ After=network.target
 Type=oneshot
 RemainAfterExit=yes
 EnvironmentFile=$VIGILANT_HOME/.env
-ExecStart=/usr/bin/bash $VIGILANT_HOME/src/scripts/setup-iptables.sh
+ExecStart=/usr/bin/sysctl -w net.ipv4.ip_forward=1
 
 [Install]
 WantedBy=multi-user.target
@@ -491,15 +470,10 @@ stage_9_5_database_init() {
     log_info "STAGE 9.5: SQLITE DATABASE INITIALIZATION"
     log_info "═══════════════════════════════════════════"
     
-    log_info "Creating database directory..."
     mkdir -p "$VIGILANT_HOME/logs"
     
-    # Create a minimal database file with just the config_settings table seeded
-    # with the user's selected network interfaces. The app's own init_db() will
-    # create all other tables and insert remaining defaults on first run.
     cat << 'PYEOF' > "$VIGILANT_HOME/init_db.py"
 #!/usr/bin/env python3
-"Minimal DB bootstrap — app.py init_db() handles full schema on first start."""
 import sqlite3, os, time
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'logs', 'vigilant.db')
@@ -508,8 +482,6 @@ os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 conn = sqlite3.connect(DB_PATH)
 c = conn.cursor()
 
-# Pre-seed network interface config so the dashboard shows correct values
-# on first load. The app inserts all other defaults in init_config_db().
 DEFAULTS = {
     'upstream_interface': 'WAN_PLACEHOLDER',
     'distribution_interface': 'LAN_PLACEHOLDER',
@@ -523,10 +495,8 @@ for k, v in DEFAULTS.items():
               (k, v, time.time()))
 conn.commit()
 conn.close()
-print("Database bootstrapped at " + DB_PATH)
 PYEOF
 
-    # Substitute the actual interface names into the placeholders
     sed -i "s/WAN_PLACEHOLDER/$WAN_INTERFACE/g" "$VIGILANT_HOME/init_db.py"
     sed -i "s/LAN_PLACEHOLDER/$LAN_INTERFACE/g" "$VIGILANT_HOME/init_db.py"
     
@@ -534,8 +504,7 @@ PYEOF
     rm -f "$VIGILANT_HOME/init_db.py"
     
     chown -R "$VIGILANT_USER:$VIGILANT_USER" "$VIGILANT_HOME/logs" 2>/dev/null || true
-    log_success "SQLite database bootstrapped at $VIGILANT_HOME/logs/vigilant.db"
-    log_info "Full schema + defaults will be applied by app.py on first dashboard start."
+    log_success "Database bootstrapped with LAN subnet 172.20.10.0/24"
 }
 
 # ─── Stage 10: Verification ─────────────────────────────────────────────────
@@ -548,13 +517,7 @@ stage_10_verify() {
     declare -a FILES=(
         "$VIGILANT_HOME/src/app.py"
         "$VIGILANT_HOME/src/vigilant_addon.py"
-        "$VIGILANT_HOME/src/templates/dashboard.html"
-        "$VIGILANT_HOME/src/templates/login.html"
-        "$VIGILANT_HOME/src/templates/setup.html"
         "$VIGILANT_HOME/logs/vigilant.db"
-        "$VIGILANT_HOME/src/static/vendor/chartjs/chart.umd.min.js"
-        "$VIGILANT_HOME/src/static/vendor/fontawesome/all.min.css"
-        "$VIGILANT_HOME/src/static/vendor/fonts/inter.css"
         "/etc/systemd/system/vigilant-firewall.service"
         "/etc/systemd/system/vigilant-proxy.service"
         "/etc/systemd/system/vigilant-dashboard.service"
@@ -582,13 +545,10 @@ stage_11_start_services() {
     log_info "STAGE 11: STARTING SERVICES"
     log_info "═══════════════════════════════════════════"
 
-    log_info "Clearing lingering proxy instances..."
-    # Kill only the VIGILANT processes, NOT all python3 processes on the system
     pkill -f "mitmdump.*vigilant_addon" 2>/dev/null || true
     pkill -f "app.py.*vigilant" 2>/dev/null || true
     sleep 1
 
-    log_info "Starting vigilant services..."
     systemctl restart vigilant-firewall || true
     systemctl restart vigilant-proxy || true
     systemctl restart vigilant-dashboard || true
@@ -608,12 +568,12 @@ stage_12_status() {
     
     echo ""
     log_success "╔═══════════════════════════════════════════════════════════╗"
-    log_success "║         VIGILANT GATEWAY SETUP COMPLETE!                 ║"
+    log_success "║   VIGILANT GATEWAY PLUG-AND-PLAY SETUP COMPLETE!          ║"
     log_success "╚═══════════════════════════════════════════════════════════╝"
     echo ""
-    echo -e "${GREEN}Dashboard:${NC} http://192.168.10.1:5000"
-    echo -e "${GREEN}Proxy:${NC} 127.0.0.1:8080"
-    echo -e "${GREEN}Unified Path:${NC} $VIGILANT_HOME"
+    echo -e "${GREEN}Dashboard:${NC} http://${LAN_IP}:5000"
+    echo -e "${GREEN}LAN Subnet:${NC} 172.20.10.0/24"
+    echo -e "${GREEN}Proxy Port:${NC} 8080"
     echo ""
 }
 
@@ -621,16 +581,9 @@ stage_12_status() {
 main() {
     echo ""
     echo "╔═══════════════════════════════════════════════════════════╗"
-    echo "║     VIGILANT GATEWAY - UNIFIED AUTOMATED SETUP            ║"
+    echo "║     VIGILANT GATEWAY - AUTOMATED PLUG-AND-PLAY SETUP      ║"
     echo "╚═══════════════════════════════════════════════════════════╝"
     echo ""
-    
-    read -p "Continue with setup? (y/n) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        log_warn "Setup cancelled"
-        exit 1
-    fi
     
     stage_0_preflight
     stage_1_dependencies
