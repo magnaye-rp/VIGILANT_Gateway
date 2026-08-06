@@ -2495,7 +2495,7 @@ class VIGILANTAddon:
 
                 matched = scan_text_for_keywords(combined_search_text, keywords)
                 if matched:
-                    print(f"[VIGILANT] INSTAGRAM KEYWORD BLOCKED: {matched} from {client_ip}")
+                    print(f"[VIGILANT] KEYWORD BLOCKED (request): {matched} from {client_ip} @ {host}")
                     log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "KEYWORD_MATCH")
                     flow.response = http.Response.make(
                         403,
@@ -2546,28 +2546,29 @@ class VIGILANTAddon:
 
         # Optional secondary check: scan request BODY (POST payloads) with the more
         # lenient body-context rules, since body text is closer to passive content
-        # than a deliberately-typed URL.
-        if domain_category is None:
-            try:
-                keywords = get_blacklisted_keywords()
-                if keywords:
-                    try:
-                        request_body = flow.request.get_text(strict=False) if flow.request.content else ""
-                    except Exception:
-                        request_body = ""
-                    # Use efficient token intersection for keyword detection (unified approach for all domains)
-                    matched = scan_text_for_keywords(request_body, keywords)
-                    if matched:
-                        print(f"[VIGILANT] REQUEST KEYWORD BLOCKED: {matched} in request body from {host}")
-                        log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "KEYWORD_MATCH")
-                        flow.response = http.Response.make(
-                            403,
-                            render_block_page(host, "Harmful"),
-                            {"Content-Type": "text/html"}
-                        )
-                        return
-            except sqlite3.Error as e:
-                print(f"[VIGILANT] Request body keyword blacklist check failed: {e}")
+        # than a deliberately-typed URL. Runs for ALL domains — a category hint
+        # (e.g. "Distracting") routes traffic but must NOT exempt POST bodies
+        # from keyword blocking.
+        try:
+            keywords = get_blacklisted_keywords()
+            if keywords:
+                try:
+                    request_body = flow.request.get_text(strict=False) if flow.request.content else ""
+                except Exception:
+                    request_body = ""
+                # Use efficient token intersection for keyword detection (unified approach for all domains)
+                matched = scan_text_for_keywords(request_body, keywords)
+                if matched:
+                    print(f"[VIGILANT] REQUEST KEYWORD BLOCKED: {matched} in request body from {host}")
+                    log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "KEYWORD_MATCH")
+                    flow.response = http.Response.make(
+                        403,
+                        render_block_page(host, "Harmful"),
+                        {"Content-Type": "text/html"}
+                    )
+                    return
+        except sqlite3.Error as e:
+            print(f"[VIGILANT] Request body keyword blacklist check failed: {e}")
 
     def response(self, flow: http.HTTPFlow):
         try:
@@ -2649,8 +2650,10 @@ class VIGILANTAddon:
 
         # Additional keyword blacklist check on response content, using the lenient
         # body-context rules (repeat occurrences or stuffed-bypass required - see
-        # FIX #2), only when the domain isn't already explicitly categorized.
-        if domain_category is None and any(ct in content_type for ct in TEXT_CONTENT_TYPES):
+        # FIX #2). Runs for ALL domains — a category hint routes traffic for
+        # behavioral handling but must NOT exempt response bodies from keyword
+        # blocking (e.g. facebook.com search results must still be blocked).
+        if any(ct in content_type for ct in TEXT_CONTENT_TYPES):
             try:
                 keywords = get_blacklisted_keywords()
                 if keywords:
