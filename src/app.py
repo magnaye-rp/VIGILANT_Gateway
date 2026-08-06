@@ -362,6 +362,11 @@ def init_db() -> None:
                 "client_ip TEXT PRIMARY KEY, is_throttled INTEGER DEFAULT 0, "
                 "applied_at REAL, recovery_at REAL, cycle_count INTEGER DEFAULT 0)"
             )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS pending_bypass_review ("
+                "domain TEXT PRIMARY KEY, client_ip TEXT, error_msg TEXT, "
+                "first_seen REAL, last_seen REAL, occurrence_count INTEGER DEFAULT 1)"
+            )
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_timestamp ON traffic_log(timestamp DESC)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_category ON traffic_log(category)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_flagged ON traffic_log(flagged)")
@@ -3357,6 +3362,46 @@ def _discover_network_devices() -> list:
     except sqlite3.Error as e:
         app.logger.warning(f"Device storage failed: {e}")
     return list(discovered_devices.values())
+
+
+# ─── Pending Bypass Review API ────────────────────────────────────────
+
+@app.route('/api/pending-bypasses', methods=["GET"])
+@require_auth
+def api_get_pending_bypasses():
+    """Return all pending SSL-pinning bypass domains awaiting admin review."""
+    try:
+        from vigilant_addon import get_pending_bypasses
+        bypasses = get_pending_bypasses()
+        return jsonify({"status": "success", "pending": bypasses})
+    except ImportError:
+        return jsonify({"status": "error", "error": "mitmproxy addon not loaded"}), 503
+
+
+@app.route('/api/pending-bypasses/<path:domain>/approve', methods=["POST"])
+@require_auth
+def api_approve_pending_bypass(domain):
+    """Approve a pending SSL-pinning bypass domain and persist it."""
+    try:
+        from vigilant_addon import approve_pending_bypass
+        if approve_pending_bypass(domain):
+            return jsonify({"status": "success", "message": f"{domain} approved and added to bypass list"})
+        return jsonify({"status": "error", "error": "Failed to approve bypass"}), 500
+    except ImportError:
+        return jsonify({"status": "error", "error": "mitmproxy addon not loaded"}), 503
+
+
+@app.route('/api/pending-bypasses/<path:domain>/reject', methods=["POST"])
+@require_auth
+def api_reject_pending_bypass(domain):
+    """Reject a pending SSL-pinning bypass domain and remove it from the queue."""
+    try:
+        from vigilant_addon import reject_pending_bypass
+        if reject_pending_bypass(domain):
+            return jsonify({"status": "success", "message": f"{domain} rejected and removed from queue"})
+        return jsonify({"status": "error", "error": "Failed to reject bypass"}), 500
+    except ImportError:
+        return jsonify({"status": "error", "error": "mitmproxy addon not loaded"}), 503
 
 
 # ─── Global Error Handlers ───────────────────────────────────────────

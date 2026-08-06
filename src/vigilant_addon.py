@@ -5,6 +5,7 @@ import sqlite3
 import threading
 import subprocess
 import urllib.parse
+import ipaddress
 from collections import defaultdict, deque
 from pathlib import Path
 try:
@@ -120,11 +121,11 @@ _cached_bypass_lock = threading.Lock()
 
 def _refresh_bypass_cache():
     """Load the custom bypass domains into the module-level cache."""
+    conn = None
     try:
         conn = _connect_db()
         cursor = conn.execute("SELECT value FROM config_settings WHERE key = 'custom_bypass_domains'")
         row = cursor.fetchone()
-        conn.close()
         with _cached_bypass_lock:
             _cached_bypass_domains.clear()
             if row and row[0]:
@@ -135,6 +136,9 @@ def _refresh_bypass_cache():
         return True
     except Exception:
         return False
+    finally:
+        if conn:
+            conn.close()
 
 
 def is_custom_bypass(host: str) -> bool:
@@ -576,13 +580,13 @@ def load_category_hints():
             if _active_addon._last_cache_refresh > 0:
                 return {k: set(v) for k, v in _active_addon.cached_hints.items()}
 
+    conn = None
     try:
         conn = _connect_db()
         cursor = conn.cursor()
 
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='category_hints'")
         if not cursor.fetchone():
-            conn.close()
             return {}
 
         cursor.execute("SELECT category, domain FROM category_hints")
@@ -594,11 +598,13 @@ def load_category_hints():
                 category_hints[category] = set()
             category_hints[category].add(domain)
 
-        conn.close()
         return category_hints
     except Exception as e:
         print(f"[VIGILANT] Error loading category hints from database: {e}, using empty set")
         return {}
+    finally:
+        if conn:
+            conn.close()
 
 
 def get_blacklisted_keywords():
@@ -632,13 +638,13 @@ def load_social_domains():
                     social_domains.add(f"www.{domain}")
             return social_domains
 
+    conn = None
     try:
         conn = _connect_db()
         cursor = conn.cursor()
 
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='category_hints'")
         if not cursor.fetchone():
-            conn.close()
             return DEFAULT_SOCIAL_DOMAINS
 
         cursor.execute("SELECT domain FROM category_hints WHERE category = 'Distracting'")
@@ -650,8 +656,6 @@ def load_social_domains():
             if not domain.startswith('www.'):
                 social_domains.add(f'www.{domain}')
 
-        conn.close()
-
         if not social_domains:
             return DEFAULT_SOCIAL_DOMAINS
 
@@ -659,6 +663,9 @@ def load_social_domains():
     except Exception as e:
         print(f"[VIGILANT] Error loading social domains from database: {e}, using defaults")
         return DEFAULT_SOCIAL_DOMAINS
+    finally:
+        if conn:
+            conn.close()
 
 # Categories that represent real, classified user web activity.
 _LOGGABLE_CATEGORIES = {"educational", "productive", "distracting", "harmful"}
@@ -699,14 +706,16 @@ def log_request(client_ip, host, path, method, category, flagged, entities, bloc
     try:
         with db_lock:
             conn = _connect_db()
-            conn.execute(
-                "INSERT INTO traffic_log (timestamp, client_ip, host, path, method, category, flagged, entities, block_reason) "
-                "VALUES (?,?,?,?,?,?,?,?,?)",
-                (time.time(), client_ip, host, path, method,
-                 category, int(flagged), str(entities), block_reason)
-            )
-            conn.commit()
-            conn.close()
+            try:
+                conn.execute(
+                    "INSERT INTO traffic_log (timestamp, client_ip, host, path, method, category, flagged, entities, block_reason) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    (time.time(), client_ip, host, path, method,
+                     category, int(flagged), str(entities), block_reason)
+                )
+                conn.commit()
+            finally:
+                conn.close()
     except sqlite3.Error as e:
         print(f"[VIGILANT] Database error in log_request: {e}")
     except Exception as e:
@@ -721,15 +730,17 @@ def update_device_activity(client_ip):
     try:
         with db_lock:
             conn = _connect_db()
-            now = time.time()
-            conn.execute(
-                "INSERT INTO network_devices (ip_address, last_seen, first_seen) "
-                "VALUES (?, ?, ?) "
-                "ON CONFLICT(ip_address) DO UPDATE SET last_seen = excluded.last_seen",
-                (client_ip, now, now)
-            )
-            conn.commit()
-            conn.close()
+            try:
+                now = time.time()
+                conn.execute(
+                    "INSERT INTO network_devices (ip_address, last_seen, first_seen) "
+                    "VALUES (?, ?, ?) "
+                    "ON CONFLICT(ip_address) DO UPDATE SET last_seen = excluded.last_seen",
+                    (client_ip, now, now)
+                )
+                conn.commit()
+            finally:
+                conn.close()
     except Exception as e:
         print(f"[VIGILANT] Error updating device activity for {client_ip}: {e}")
 
@@ -782,12 +793,14 @@ def log_throttle(client_ip, host, rpm_now, rpm_base, action, reason=""):
     try:
         with db_lock:
             conn = _connect_db()
-            conn.execute(
-                "INSERT INTO throttle_events (timestamp, client_ip, host, rpm_current, rpm_baseline, action, reason) VALUES (?,?,?,?,?,?,?)",
-                (time.time(), client_ip, host, rpm_now, rpm_base, action, reason)
-            )
-            conn.commit()
-            conn.close()
+            try:
+                conn.execute(
+                    "INSERT INTO throttle_events (timestamp, client_ip, host, rpm_current, rpm_baseline, action, reason) VALUES (?,?,?,?,?,?,?)",
+                    (time.time(), client_ip, host, rpm_now, rpm_base, action, reason)
+                )
+                conn.commit()
+            finally:
+                conn.close()
     except sqlite3.Error as e:
         print(f"[VIGILANT] Database error in log_throttle: {e}")
     except Exception as e:
@@ -805,13 +818,15 @@ def log_sni_request(client_ip, domain, velocity_rps):
     try:
         with db_lock:
             conn = _connect_db()
-            conn.execute(
-                "INSERT INTO sni_requests (timestamp, client_ip, domain, request_count, velocity_rps) "
-                "VALUES (?,?,?,?,?)",
-                (time.time(), client_ip, domain, 1, velocity_rps)
-            )
-            conn.commit()
-            conn.close()
+            try:
+                conn.execute(
+                    "INSERT INTO sni_requests (timestamp, client_ip, domain, request_count, velocity_rps) "
+                    "VALUES (?,?,?,?,?)",
+                    (time.time(), client_ip, domain, 1, velocity_rps)
+                )
+                conn.commit()
+            finally:
+                conn.close()
     except sqlite3.Error as e:
         print(f"[VIGILANT] Database error in log_sni_request: {e}")
     except Exception as e:
@@ -1338,9 +1353,11 @@ def get_distribution_interface():
     """
     try:
         conn = _connect_db()
-        cursor = conn.execute("SELECT value FROM config_settings WHERE key = 'distribution_interface'")
-        row = cursor.fetchone()
-        conn.close()
+        try:
+            cursor = conn.execute("SELECT value FROM config_settings WHERE key = 'distribution_interface'")
+            row = cursor.fetchone()
+        finally:
+            conn.close()
         candidate = row[0] if row else None
         # Verify the configured interface actually exists
         if candidate:
@@ -1355,7 +1372,6 @@ def get_distribution_interface():
         pass
     
     # Auto-detect: find the interface with the LAN gateway IP (172.20.10.1)
-    import subprocess
     try:
         result = subprocess.run(
             ["ip", "-4", "addr", "show"],
@@ -1441,13 +1457,12 @@ def apply_throttle(client_ip, rate=None):
     class_id, prio = _ip_to_class_id(client_ip)
 
     try:
-        # Ensure root qdisc exists (quietly; it may already be set up)
-        result = subprocess.run(
-            ["tc", "qdisc", "add", "dev", interface, "root", "handle", "1:", "htb", "default", "1"],
+        # Ensure root qdisc exists. Using 'replace' is idempotent and avoids
+        # RTNETLINK "File exists" errors from bare 'add' on pre-existing qdiscs.
+        subprocess.run(
+            ["tc", "qdisc", "replace", "dev", interface, "root", "handle", "1:", "htb", "default", "1"],
             check=False, capture_output=True, text=True
         )
-        if result.returncode != 0 and "RTNETLINK answers: File exists" not in result.stderr:
-            print(f"[VIGILANT] tc qdisc add error on {interface}: {result.stderr.strip()}")
 
         # Remove any stale class + filter for this client first (clean re-apply).
         # This is critical: without it, tc class add fails with "File exists"
@@ -1459,6 +1474,9 @@ def apply_throttle(client_ip, rate=None):
         # burst=2k allows only ~2KB at line rate before the throttle kicks in.
         # This means the TCP handshake completes but the very first data packet
         # gets shaped, making throttling immediately noticeable.
+        #
+        # First try 'add'; if the class survived remove_throttle (e.g. due to
+        # a prio mismatch from a previous process), fall back to 'replace'.
         result = subprocess.run(
             ["tc", "class", "add", "dev", interface, "parent", "1:", "classid", class_id,
              "htb", "rate", throttle_rate, "ceil", throttle_rate,
@@ -1466,8 +1484,16 @@ def apply_throttle(client_ip, rate=None):
             check=False, capture_output=True, text=True
         )
         if result.returncode != 0:
-            print(f"[VIGILANT] tc class add failed for {client_ip} on {interface}: {result.stderr.strip()}")
-            return False
+            if "RTNETLINK answers: File exists" in result.stderr:
+                result = subprocess.run(
+                    ["tc", "class", "replace", "dev", interface, "parent", "1:",
+                     "classid", class_id, "htb", "rate", throttle_rate,
+                     "ceil", throttle_rate, "burst", "2k", "cburst", "2k"],
+                    check=False, capture_output=True, text=True
+                )
+            if result.returncode != 0:
+                print(f"[VIGILANT] tc class add/replace failed for {client_ip} on {interface}: {result.stderr.strip()}")
+                return False
 
         # Match traffic sent TO the client (downloads)
         result = subprocess.run(
@@ -1683,28 +1709,30 @@ def save_throttle_state(client_ip, is_throttled, recovery_at):
         recovery_at: Unix timestamp when throttle should recover
     """
     try:
+        now = time.time()
         with db_lock:
             conn = _connect_db()
+            try:
+                cursor = conn.execute("SELECT cycle_count FROM throttle_state WHERE client_ip = ?", (client_ip,))
+                existing = cursor.fetchone()
 
-            cursor = conn.execute("SELECT cycle_count FROM throttle_state WHERE client_ip = ?", (client_ip,))
-            existing = cursor.fetchone()
+                if existing:
+                    cycle_count = existing[0] + 1 if is_throttled else existing[0]
+                    conn.execute(
+                        "UPDATE throttle_state SET is_throttled=?, applied_at=?, recovery_at=?, cycle_count=? WHERE client_ip=?",
+                        (int(is_throttled), now, recovery_at, cycle_count, client_ip)
+                    )
+                else:
+                    cycle_count = 1 if is_throttled else 0
+                    conn.execute(
+                        "INSERT INTO throttle_state (client_ip, is_throttled, applied_at, recovery_at, cycle_count) "
+                        "VALUES (?,?,?,?,?)",
+                        (client_ip, int(is_throttled), now, recovery_at, cycle_count)
+                    )
 
-            if existing:
-                cycle_count = existing[0] + 1 if is_throttled else existing[0]
-                conn.execute(
-                    "UPDATE throttle_state SET is_throttled=?, applied_at=?, recovery_at=?, cycle_count=? WHERE client_ip=?",
-                    (int(is_throttled), time.time(), recovery_at, cycle_count, client_ip)
-                )
-            else:
-                cycle_count = 1 if is_throttled else 0
-                conn.execute(
-                    "INSERT INTO throttle_state (client_ip, is_throttled, applied_at, recovery_at, cycle_count) "
-                    "VALUES (?,?,?,?,?)",
-                    (client_ip, int(is_throttled), time.time(), recovery_at, cycle_count)
-                )
-
-            conn.commit()
-            conn.close()
+                conn.commit()
+            finally:
+                conn.close()
     except sqlite3.Error as e:
         print(f"[VIGILANT] Database error in save_throttle_state: {e}")
     except Exception as e:
@@ -1973,6 +2001,7 @@ class VIGILANTAddon:
 
     def _refresh_rule_cache(self):
         """Fetch blacklisted keywords and category hints from the database."""
+        conn = None
         try:
             conn = _connect_db()
             cursor = conn.execute("SELECT keyword FROM keyword_blacklist")
@@ -1995,7 +2024,6 @@ class VIGILANTAddon:
                 exempt_ips = {row[0] for row in cursor.fetchall()}
             except sqlite3.OperationalError:
                 exempt_ips = set()
-            conn.close()
 
             with self._cache_lock:
                 self.cached_keywords = keywords
@@ -2003,9 +2031,11 @@ class VIGILANTAddon:
                 self.cached_exempt_devices = exempt_ips
 
                 self._last_cache_refresh = time.time()
-                self.cached_exempt_devices = exempt_ips
         except Exception as e:
             print(f"[VIGILANT] Error refreshing rule cache: {e}")
+        finally:
+            if conn:
+                conn.close()
 
     def _cache_refresh_loop(self):
         """Periodically refresh cached rules or reload immediately on API trigger.
@@ -2036,9 +2066,9 @@ class VIGILANTAddon:
                         if ip == '__RESET_ALL__':
                             print("[VIGILANT] Processing RESET_ALL from release queue")
                             iface = get_distribution_interface()
-                            subprocess.run(["tc", "qdisc", "del", "dev", iface, "root"],
-                                           capture_output=True, check=False)
-                            subprocess.run(["tc", "qdisc", "add", "dev", iface, "root",
+                            # Atomically replace the root qdisc — avoids the race window
+                            # between 'del' and 'add' where no qdisc exists.
+                            subprocess.run(["tc", "qdisc", "replace", "dev", iface, "root",
                                             "handle", "1:", "htb", "default", "1"],
                                            capture_output=True, check=False)
                             with _engagement_lock:
@@ -2089,7 +2119,9 @@ class VIGILANTAddon:
             conn = getattr(ctx, "client", None) or getattr(ctx, "client_conn", None)
         
         if not conn:
-            conn = getattr(data, "client_conn", None) or getattr(data, "conn", None) or data
+            # Prefer data.client_conn (HTTPFlow-like) then data.conn (TlsData).
+            # Do NOT fall back to `data` itself — TlsData objects lack peername.
+            conn = getattr(data, "client_conn", None) or getattr(data, "conn", None)
 
         # 2. Extract peername IP string
         if conn:
@@ -2104,9 +2136,17 @@ class VIGILANTAddon:
                 if addr and isinstance(addr, (tuple, list)) and len(addr) > 0 and addr[0]:
                     client_ip = str(addr[0])
 
-        # 3. Guard against loopback or self-referential IPs
-        if client_ip and client_ip not in ("127.0.0.1", "::1", "localhost"):
-            return client_ip
+        # 3. Guard against loopback or self-referential IPs using the ipaddress module
+        #    to catch all representations (127.0.0.1, ::1, ::ffff:127.0.0.1, etc.)
+        if client_ip:
+            try:
+                ip_obj = ipaddress.ip_address(client_ip)
+                if not ip_obj.is_loopback:
+                    return client_ip
+            except ValueError:
+                # Not a valid IP — check for literal 'localhost'
+                if client_ip.lower() != "localhost":
+                    return client_ip
 
         # If socket lookup failed, fallback to default LAN IP
         return os.getenv("LAN_IP", "172.20.10.1")
@@ -2144,15 +2184,20 @@ class VIGILANTAddon:
             # 2. Check bypass conditions in explicit order
             is_bypassed = False
             
-            # a) Admin DB overrides
-            if is_custom_bypass(server_name):
+            # a) Global asset whitelist (infrastructure/CDN domains — checked first
+            #    to avoid intercepting TLS for known-trusted asset domains)
+            if is_whitelisted(server_name):
+                is_bypassed = True
+            
+            # b) Admin DB overrides
+            elif is_custom_bypass(server_name):
                 is_bypassed = True
                 
-            # b) In-memory SSL pinning auto-detected during current uptime
+            # c) In-memory SSL pinning auto-detected during current uptime
             elif server_name in self.pinned_hosts:
                 is_bypassed = True
                 
-            # c) Hardcoded system safety domains
+            # d) Hardcoded system safety domains
             else:
                 _APPLE_DOMAINS = {"apple.com", "icloud.com", "mzstatic.com"}
                 clean_sni = server_name.lower().removeprefix("www.")
