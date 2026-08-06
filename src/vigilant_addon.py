@@ -84,6 +84,7 @@ _engagement_current_level = defaultdict(int)   # client_ip → active level 0-3
 _engagement_lock = threading.Lock()
 _previous_rate = {}
 _engagement_low_activity_since = defaultdict(float)  # client_ip → when RPM first dropped below baseline
+_engaged_log_times = {}  # client_ip → last "Engaged:" log timestamp (rate-limited)
 
 # Level → tc rate
 ENGAGEMENT_LEVEL_RATE = {
@@ -971,6 +972,27 @@ def _engagement_tracking_loop():
             check_interval = int(config.get('engagement_check_interval', 30))
             
             now = time.time()
+
+            # ── Stale-session cleanup (never-flagged devices) ──
+            # Background app pings (1 req / 1-2 min) keep request_history fresh,
+            # so _cleanup_stale_velocity_state never resets a device's social
+            # session — even though it was never flagged. The stale session start
+            # then inflates elapsed engagement minutes, causing an instant
+            # high-level throttle when the user picks the device up again.
+            # Reset any social session whose last request is older than reset_idle.
+            # (Benign unlocked .get() on _engagement_start — GIL-atomic in CPython;
+            # taking _engagement_lock here would invert lock order and risk deadlock.)
+            with velocity_lock:
+                for ip in list(social_session_start.keys()):
+                    if _engagement_start.get(ip, 0) != 0:
+                        continue  # flagged devices are handled by the checks below
+                    sdq = social_request_history.get(ip)
+                    last_social = sdq[-1] if sdq else 0
+                    if now - last_social >= reset_idle:
+                        social_session_start.pop(ip, None)
+                        social_session_totals.pop(ip, None)
+                        social_request_history.pop(ip, None)
+
             with _engagement_lock:
                 for ip in list(_engagement_start.keys()):
                     started = _engagement_start[ip]
@@ -1200,6 +1222,11 @@ def _cleanup_stale_velocity_state():
             social_session_totals.pop(ip, None)
             social_session_start.pop(ip, None)
 
+    # Prune rate-limit timestamps for devices idle > 10 minutes
+    prune_cutoff = now - 600
+    for ip in [ip for ip, ts in _engaged_log_times.items() if ts < prune_cutoff]:
+        _engaged_log_times.pop(ip, None)
+
 def should_throttle(client_ip, host, path=""):
     config = load_proxy_config()
     network_velocity_threshold = config['network_velocity_threshold']
@@ -1284,9 +1311,15 @@ def should_throttle(client_ip, host, path=""):
     flagged = social_elapsed >= 180 and social_rpm >= 2
 
     if flagged:
-        # Show domain + total requests so you can see the baseline and which app
-        short_host = host.removeprefix("www.")
-        print(f"[VIGILANT] Engaged: {client_ip} on {short_host} — {social_rpm} RPM ({social_count} total) for {social_elapsed:.0f}s")
+        # Rate-limit the "Engaged" log — should_throttle is called on every
+        # request (TLS + HTTP + response hooks), so without throttling this
+        # floods journalctl at the device's RPM rate (20+ lines/min).
+        now_ts = time.time()
+        if now_ts - _engaged_log_times.get(client_ip, 0) >= 10.0:
+            _engaged_log_times[client_ip] = now_ts
+            # Show domain + total requests so you can see the baseline and which app
+            short_host = host.removeprefix("www.")
+            print(f"[VIGILANT] Engaged: {client_ip} on {short_host} — {social_rpm} RPM ({social_count} total) for {social_elapsed:.0f}s")
 
     return flagged, rpm_now, rpm_base
 
