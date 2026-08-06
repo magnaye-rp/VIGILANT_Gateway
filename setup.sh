@@ -91,7 +91,24 @@ stage_0_preflight() {
     check_root
     check_os
     detect_network_interfaces
-    
+
+    # Network preflight: apt/pip installs (Stages 1 & 3) require WAN reachability.
+    # Fail early with a clear message instead of dying silently inside apt-get.
+    log_info "Checking WAN connectivity..."
+    if ping -c 2 -W 2 8.8.8.8 > /dev/null 2>&1; then
+        log_success "WAN reachable (ICMP to 8.8.8.8)"
+    else
+        log_warn "No ICMP to 8.8.8.8 — checking DNS resolution..."
+        if getent hosts archive.ubuntu.com > /dev/null 2>&1; then
+            log_warn "DNS resolves but ICMP blocked — continuing (apt uses HTTP/HTTPS)"
+        else
+            log_error "No network connectivity to archive.ubuntu.com!"
+            log_error "This gateway cannot reach the internet yet."
+            log_error "Check: ip a (WAN interface state) and ip route show default"
+            exit 1
+        fi
+    fi
+
     CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     if [ ! -f "$CURRENT_DIR/src/app.py" ] && [ ! -f "$VIGILANT_HOME/src/app.py" ]; then
         log_error "src/app.py not found!"
@@ -108,16 +125,26 @@ stage_1_dependencies() {
     log_info "STAGE 1: INSTALLING DEPENDENCIES"
     log_info "═══════════════════════════════════════════"
     
+    # Noninteractive frontend prevents iptables-persistent's debconf prompts
+    # ("Save current IPv4 rules?") from hanging the install.
+    export DEBIAN_FRONTEND=noninteractive
+    
     log_info "Updating package lists..."
-    apt-get update > /dev/null 2>&1
+    if ! apt-get update 2>&1 | tee "$VIGILANT_HOME/setup_apt.log" >/dev/null; then
+        log_error "apt-get update FAILED. See $VIGILANT_HOME/setup_apt.log"
+        log_error "Check WAN connectivity: ping -c 3 8.8.8.8 and ping -c 3 archive.ubuntu.com"
+        exit 1
+    fi
     
     log_info "Installing system packages..."
-    apt-get install -y \
+    if ! apt-get install -y \
         python3 python3-pip python3-venv \
         dnsmasq iptables iptables-persistent \
         netfilter-persistent \
-        git curl wget nano acl \
-        > /dev/null 2>&1
+        git curl wget nano acl 2>&1 | tee -a "$VIGILANT_HOME/setup_apt.log" >/dev/null; then
+        log_error "apt-get install FAILED. See $VIGILANT_HOME/setup_apt.log"
+        exit 1
+    fi
     
     log_success "System packages installed"
 }
@@ -159,16 +186,24 @@ stage_3_python_env() {
     
     log_info "Installing Python packages..."
     source "$VIGILANT_HOME/venv/bin/activate"
-    pip install --upgrade pip > /dev/null 2>&1
+    pip install --upgrade pip 2>&1 | tee "$VIGILANT_HOME/setup_pip.log" >/dev/null || true
     
     if [ -f "$VIGILANT_HOME/requirements.txt" ]; then
-        pip install -r "$VIGILANT_HOME/requirements.txt" > /dev/null 2>&1
+        if ! pip install -r "$VIGILANT_HOME/requirements.txt" 2>&1 | tee -a "$VIGILANT_HOME/setup_pip.log" >/dev/null; then
+            log_error "pip install requirements.txt FAILED. See $VIGILANT_HOME/setup_pip.log"
+            exit 1
+        fi
     fi
     
-    pip install mitmproxy==9.0.1 spacy flask flask-cors > /dev/null 2>&1
+    if ! pip install mitmproxy==9.0.1 spacy flask flask-cors 2>&1 | tee -a "$VIGILANT_HOME/setup_pip.log" >/dev/null; then
+        log_error "pip install core packages FAILED. See $VIGILANT_HOME/setup_pip.log"
+        exit 1
+    fi
     
     log_info "Downloading spaCy model (en_core_web_sm)..."
-    python -m spacy download en_core_web_sm > /dev/null 2>&1
+    if ! python -m spacy download en_core_web_sm 2>&1 | tee -a "$VIGILANT_HOME/setup_pip.log" >/dev/null; then
+        log_warn "spaCy model download failed — NLP will run in degraded mode"
+    fi
     
     deactivate
     chown -R "$VIGILANT_USER:$VIGILANT_USER" "$VIGILANT_HOME/venv"
