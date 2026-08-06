@@ -2710,8 +2710,16 @@ def get_pending_bypasses():
         return []
 
 def approve_pending_bypass(domain: str):
-    """Approve a pending bypass domain and persist it."""
-    clean = domain.removeprefix("www.").lower()
+    """Approve a pending bypass domain and persist it.
+
+    The domain is persisted EXACTLY as seen in the SNI (lowercased, www
+    preserved).  Stripping "www." here would expand a single approved host
+    (e.g. www.facebook.com) into the bare registrable root (facebook.com),
+    which the suffix-match in is_custom_bypass() then applies to EVERY
+    subdomain — silently disabling inspection for the entire platform,
+    web version included.
+    """
+    clean = domain.strip().lower()
     try:
         with db_lock:
             conn = _connect_db()
