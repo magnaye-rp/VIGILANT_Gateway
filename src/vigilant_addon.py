@@ -1871,41 +1871,77 @@ def restore_throttle_states():
 
 # ─── DNS Log Tailing Thread ─────────────────────────────────────────────
 def tail_dnsmasq_log():
-    """Background thread to tail dnsmasq log for passive DNS tracking"""
+    """Background thread to tail dnsmasq log for passive DNS tracking.
+
+    Monitors /var/log/dnsmasq.log and reopens it when the file is rotated
+    (rename-based: inode change) or truncated in place (copytruncate-based:
+    size regression), so device liveness tracking keeps working across
+    logrotate runs.
+    """
     log_path = "/var/log/dnsmasq.log"
+    f = None
+    last_inode = None
+    last_pos = 0
 
     while True:
         try:
-            with open(log_path, 'r') as f:
-                f.seek(0, 2)
-                while True:
-                    line = f.readline()
-                    if not line:
-                        time.sleep(0.1)
-                        continue
+            if not os.path.exists(log_path):
+                if f is not None:
+                    f.close()
+                    f = None
+                last_inode = None
+                last_pos = 0
+                time.sleep(5)
+                continue
 
-                    if "query[" in line and " from " in line:
-                        parts = line.split()
-                        for i, part in enumerate(parts):
-                            if part.startswith("query[") and i + 2 < len(parts):
-                                    domain = parts[i + 1]
-                                    client_ip = parts[i + 3]
-                                    
-                                    update_device_activity(client_ip)
+            stat = os.stat(log_path)
+            current_inode = stat.st_ino
+            size = stat.st_size
 
-                                    # DNS queries are used ONLY for velocity/RPM tracking
-                                    # and device-liveness. Throttle escalation comes from
-                                    # actual TLS/content traffic, not DNS lookups — background
-                                    # app refreshes generate DNS prefetches for social CDNs
-                                    # (graph.facebook.com etc.) even when the user is idle.
-                                    compute_velocity(client_ip)
+            # Reopen when: first open, rename-rotated (inode changed), or
+            # copytruncate-rotated (file shrank below our read position).
+            if f is None or current_inode != last_inode or size < last_pos:
+                if f is not None:
+                    f.close()
+                f = open(log_path, 'r')
+                f.seek(0, 2)  # start at end: only process NEW queries
+                last_inode = current_inode
+                last_pos = f.tell()
+                continue
 
-                                    # DNS queries are NOT logged to traffic_log to avoid noise.
-                                    # Velocity tracking (should_throttle above) and
-                                    # update_device_activity cover the behavioral detection
-                                    # and device-liveness tracking already.
-                                    break
+            # Drain any newly-appended lines without blocking.
+            while True:
+                line = f.readline()
+                if not line:
+                    break
+                last_pos = f.tell()
+
+                if "query[" in line and " from " in line:
+                    parts = line.split()
+                    for i, part in enumerate(parts):
+                        if part.startswith("query[") and i + 3 < len(parts):
+                            domain = parts[i + 1]
+                            client_ip = parts[i + 3]
+
+                            update_device_activity(client_ip)
+
+                            # DNS queries are used ONLY for velocity/RPM tracking
+                            # and device-liveness. Throttle escalation comes from
+                            # actual TLS/content traffic, not DNS lookups — background
+                            # app refreshes generate DNS prefetches for social CDNs
+                            # (graph.facebook.com etc.) even when the user is idle.
+                            compute_velocity(client_ip)
+
+                            # DNS queries are NOT logged to traffic_log to avoid noise.
+                            break
+
+            time.sleep(0.2)
         except FileNotFoundError:
+            if f is not None:
+                f.close()
+                f = None
+            last_inode = None
+            last_pos = 0
             time.sleep(5)
         except Exception as e:
             print(f"[VIGILANT] DNS log tailing error: {e}")

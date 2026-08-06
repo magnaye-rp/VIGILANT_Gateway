@@ -2897,7 +2897,13 @@ def get_devices():
 @app.route("/api/devices/active", methods=["GET"])
 @require_auth
 def get_active_devices():
-    """Get currently active devices from network_devices (last 60 seconds)"""
+    """Get currently active devices from network_devices (last 60 seconds).
+
+    Primary source: network_devices.last_seen (populated by the proxy addon
+    from real HTTP/DNS/TLS traffic). Fallback: the kernel ARP table — an ARP
+    entry on the LAN interface proves the device answered L2 within the last
+    ~60 seconds, so it counts as active even if the addon never logged it.
+    """
     try:
         active_devices = []
         managed_prefix = _managed_ip_prefix()
@@ -2928,7 +2934,26 @@ def get_active_devices():
                             "mac_address": mac_address,
                             "last_seen": last_seen
                         })
-        
+
+        # Fallback: ARP table — entries present on the LAN interface mean the
+        # device responded at L2 recently (kernel expires stale entries after
+        # ~60s of silence on most distros).
+        known_ips = {d["ip_address"] for d in active_devices}
+        prefix_bare = managed_prefix.rstrip("%")
+        arp_table = _read_arp_table()
+        for ip, arp_data in arp_table.items():
+            if ip in known_ips:
+                continue
+            if not ip.startswith(prefix_bare):
+                continue
+            active_devices.append({
+                "ip_address": ip,
+                "hostname": "Unknown Device",
+                "mac_address": arp_data.get("mac_address", "—"),
+                "last_seen": time.time()
+            })
+
+        active_devices.sort(key=lambda d: d.get("last_seen") or 0, reverse=True)
         return jsonify({"devices": active_devices})
     except Exception as exc:
         app.logger.error("Failed to get active devices: %s", exc)

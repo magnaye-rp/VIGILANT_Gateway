@@ -315,10 +315,17 @@ log-facility=/var/log/dnsmasq.log
 EOF
     
     log_info "Restarting dnsmasq..."
-    systemctl restart dnsmasq
-    
+    # CRITICAL: create /var/log/dnsmasq.log BEFORE starting dnsmasq and grant
+    # write access to the unprivileged dnsmasq user. A root-owned 644 file is
+    # NOT writable by dnsmasq, which silently falls back to syslog and leaves
+    # the file empty — breaking DNS-based device liveness tracking in the proxy
+    # addon (tail_dnsmasq_log reads this file).
     touch /var/log/dnsmasq.log
-    chmod 644 /var/log/dnsmasq.log
+    chown dnsmasq:dnsmasq /var/log/dnsmasq.log 2>/dev/null \
+        || chown nobody:nogroup /var/log/dnsmasq.log 2>/dev/null \
+        || true
+    chmod 664 /var/log/dnsmasq.log
+    systemctl restart dnsmasq
     
     log_success "DNS/DHCP dynamic forwarding configured on $LAN_SUBNET using $RESOLV_PATH"
 }
