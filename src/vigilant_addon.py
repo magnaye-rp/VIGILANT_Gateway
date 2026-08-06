@@ -99,21 +99,49 @@ SAMPLE_PREFIX_BYTES = 512 * 1024
 SAMPLE_SUFFIX_BYTES = 256 * 1024
 
 
-# Global asset whitelist
-GLOBAL_WHITELIST = {
+# ── Global Asset Whitelist ──────────────────────────────────────────
+# Default seed values; the authoritative list lives in the database
+# (global_whitelist table) and is refreshed into an in-memory cache
+# every CACHE_REFRESH_INTERVAL seconds or on dashboard signal.
+DEFAULT_WHITELIST = {
     "github.com", "githubassets.com", "githubusercontent.com", "git-scm.com",
     "gstatic.com", "googleapis.com", "googleusercontent.com",
     "microsoft.com", "windows.net", "live.com", "office.com", "apple.com",
     "mzstatic.com", "icloud.com", "aws.amazon.com", "cloudfront.net", "cdnjs.cloudflare.com"
 }
 
+_cached_whitelist = DEFAULT_WHITELIST.copy()
+_whitelist_lock = threading.Lock()
+
+
+def _refresh_whitelist_cache():
+    """Reload the global whitelist from the database into the in-memory cache."""
+    conn = None
+    try:
+        conn = _connect_db()
+        cursor = conn.execute("SELECT domain FROM global_whitelist")
+        domains = {row[0] for row in cursor.fetchall()}
+        with _whitelist_lock:
+            _cached_whitelist.clear()
+            if domains:
+                _cached_whitelist.update(domains)
+            else:
+                _cached_whitelist.update(DEFAULT_WHITELIST)
+    except Exception:
+        pass
+    finally:
+        if conn:
+            conn.close()
+
 
 def is_whitelisted(host: str) -> bool:
-    """Check if a host (or its parent domain) is in the global whitelist."""
+    """Check if a host (or its parent domain) is in the global whitelist.
+    Uses an in-memory cache refreshed from the database."""
     clean = host.removeprefix("www.")
-    for w in GLOBAL_WHITELIST:
-        if clean == w or clean.endswith('.' + w):
-            return True
+    with _whitelist_lock:
+        for w in _cached_whitelist:
+            if clean == w or clean.endswith('.' + w):
+                return True
     return False
 
 
@@ -464,6 +492,19 @@ def init_db():
             occurrence_count INTEGER DEFAULT 1
         )
     """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS global_whitelist (
+            domain TEXT PRIMARY KEY,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    # Seed default whitelist domains if table is empty
+    if c.execute("SELECT COUNT(*) FROM global_whitelist").fetchone()[0] == 0:
+        for d in sorted(DEFAULT_WHITELIST):
+            try:
+                c.execute("INSERT OR IGNORE INTO global_whitelist (domain) VALUES (?)", (d,))
+            except sqlite3.Error:
+                pass
     # Add doomscroll_exempt column if missing (for older databases)
     try:
         columns = [row[1] for row in c.execute("PRAGMA table_info(network_devices)").fetchall()]
@@ -1997,6 +2038,7 @@ class VIGILANTAddon:
         self.pinned_hosts = set()
         self._refresh_rule_cache()
         _refresh_bypass_cache()
+        _refresh_whitelist_cache()
         print("[VIGILANT] Addon loaded. DB initialised. NLP model ready.")
 
         cache_thread = threading.Thread(target=self._cache_refresh_loop, daemon=True)
@@ -2116,6 +2158,7 @@ class VIGILANTAddon:
             if reload_requested or stale:
                 self._refresh_rule_cache()
                 _refresh_bypass_cache()
+                _refresh_whitelist_cache()
 
             # Periodically clean up stale velocity tracking state (every 60s)
             _cleanup_counter += 1

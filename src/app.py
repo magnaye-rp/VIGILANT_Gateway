@@ -382,6 +382,10 @@ def init_db() -> None:
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, keyword TEXT NOT NULL UNIQUE, "
                 "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
             )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS global_whitelist ("
+                "domain TEXT PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+            )
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_timestamp ON traffic_log(timestamp DESC)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_category ON traffic_log(category)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_flagged ON traffic_log(flagged)")
@@ -944,6 +948,19 @@ def init_config_db() -> None:
                  now_ts),
             )
             connection.commit()
+
+            # Seed default global whitelist domains (CDN/infrastructure)
+            connection.execute("CREATE TABLE IF NOT EXISTS global_whitelist (domain TEXT PRIMARY KEY)")
+            if connection.execute("SELECT COUNT(*) FROM global_whitelist").fetchone()[0] == 0:
+                DEFAULT_WHITELIST_SEED = [
+                    "github.com", "githubassets.com", "githubusercontent.com", "git-scm.com",
+                    "gstatic.com", "googleapis.com", "googleusercontent.com",
+                    "microsoft.com", "windows.net", "live.com", "office.com", "apple.com",
+                    "mzstatic.com", "icloud.com", "aws.amazon.com", "cloudfront.net", "cdnjs.cloudflare.com"
+                ]
+                for d in DEFAULT_WHITELIST_SEED:
+                    connection.execute("INSERT OR IGNORE INTO global_whitelist (domain) VALUES (?)", (d,))
+                connection.commit()
     except sqlite3.Error as exc:
         app.logger.debug("init_config_db missing permissions or locked: %s", exc)
     init_category_hints_db()
@@ -2591,6 +2608,52 @@ def delete_keyword(keyword_id):
             if not _table_exists(connection, "keyword_blacklist"):
                 return jsonify({"error": "Not found"}), 404
             cursor = connection.execute("DELETE FROM keyword_blacklist WHERE id = ?", (keyword_id,))
+            connection.commit()
+        _signal_rule_cache_reload()
+        return jsonify({"status": "success"}) if cursor.rowcount > 0 else (jsonify({"error": "Not found"}), 404)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ─── GLOBAL WHITELIST API ENDPOINTS ─────────────────────────────────
+
+@app.route("/api/whitelist", methods=["GET", "POST"])
+@require_auth
+def manage_whitelist():
+    """List or add global whitelist domains for TLS/CDN bypass."""
+    if request.method == "GET":
+        try:
+            rows = query_db("SELECT domain FROM global_whitelist ORDER BY domain") or []
+            return jsonify([r["domain"] if isinstance(r, dict) else r[0] for r in rows])
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    # POST — add a domain
+    data = request.get_json(silent=True) or {}
+    domain = (data.get("domain") or "").strip().lower()
+    if not domain:
+        return jsonify({"error": "Domain required"}), 400
+    try:
+        with _open_db() as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS global_whitelist (domain TEXT PRIMARY KEY)")
+            conn.execute("INSERT INTO global_whitelist (domain) VALUES (?)", (domain,))
+            conn.commit()
+        _signal_rule_cache_reload()
+        return jsonify({"status": "success", "domain": domain}), 201
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "Domain already in whitelist"}), 409
+
+
+@app.route("/api/whitelist/<path:domain>", methods=["DELETE"])
+@require_auth
+def delete_whitelist_entry(domain):
+    """Remove a domain from the global whitelist."""
+    try:
+        domain = domain.strip().lower()
+        with _open_db() as connection:
+            if not _table_exists(connection, "global_whitelist"):
+                return jsonify({"error": "Not found"}), 404
+            cursor = connection.execute("DELETE FROM global_whitelist WHERE domain = ?", (domain,))
             connection.commit()
         _signal_rule_cache_reload()
         return jsonify({"status": "success"}) if cursor.rowcount > 0 else (jsonify({"error": "Not found"}), 404)

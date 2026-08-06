@@ -96,6 +96,8 @@ function switchTab(tabId, triggerElement = null) {
     loadCategoryHints();
     loadKeywords();
     loadBypassDomains();
+    loadPendingBypasses();
+    loadWhitelist();
   }
   if (tabId === 'behavioral-control') {
     loadBehavioralSettings();
@@ -1090,6 +1092,165 @@ async function removeBypassDomain(domain) {
     showToast("Error removing bypass domain", "danger");
   }
 }
+
+// ─── Pending Bypass Waitlist (SSL Pinning) ───
+
+async function loadPendingBypasses() {
+  const tableBody = document.getElementById("pending-bypass-table-body");
+  const table = document.getElementById("pending-bypass-table");
+  const empty = document.getElementById("pending-bypass-empty");
+  const badge = document.getElementById("pending-bypass-count");
+  if (!tableBody) return;
+
+  try {
+    const response = await fetch("/api/pending-bypasses");
+    const data = await response.json();
+    const bypasses = data.pending || [];
+
+    if (badge) {
+      badge.textContent = bypasses.length + " pending";
+      badge.style.display = bypasses.length > 0 ? "inline-block" : "none";
+    }
+
+    if (bypasses.length === 0) {
+      if (table) table.style.display = "none";
+      if (empty) empty.style.display = "";
+      return;
+    }
+
+    if (table) table.style.display = "";
+    if (empty) empty.style.display = "none";
+
+    tableBody.innerHTML = bypasses.map(b => {
+      const seen = b.last_seen ? new Date(b.last_seen * 1000).toLocaleString() : "—";
+      const errShort = (b.error_msg || "").substring(0, 40);
+      return `
+        <tr>
+          <td style="font-family: monospace;">${b.domain}</td>
+          <td>${b.client_ip || "—"}</td>
+          <td style="font-size: 0.8rem; color: var(--text-secondary);">${errShort}</td>
+          <td style="font-size: 0.8rem;">${seen}</td>
+          <td>${b.occurrence_count}</td>
+          <td style="text-align: right; white-space: nowrap;">
+            <button class="btn-primary" style="padding: 0.25rem 0.6rem; font-size: 0.8rem;" onclick="approvePendingBypass('${b.domain}')">Approve</button>
+            <button class="btn-secondary" style="padding: 0.25rem 0.6rem; font-size: 0.8rem; margin-left: 0.25rem;" onclick="rejectPendingBypass('${b.domain}')">Reject</button>
+          </td>
+        </tr>
+      `;
+    }).join("");
+  } catch (error) {
+    if (tableBody) tableBody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-secondary);">Error loading pending bypasses</td></tr>';
+  }
+}
+
+async function approvePendingBypass(domain) {
+  if (!confirm("Approve " + domain + " for bypass? This will add it to the permanent bypass list.")) return;
+  try {
+    const resp = await fetch("/api/pending-bypasses/" + encodeURIComponent(domain) + "/approve", { method: "POST" });
+    const data = await resp.json();
+    if (resp.ok) {
+      showToast(domain + " approved and added to bypass list", "success");
+      loadPendingBypasses();
+      loadBypassDomains();
+    } else {
+      showToast(data.error || "Failed to approve", "danger");
+    }
+  } catch (error) {
+    showToast("Error approving bypass", "danger");
+  }
+}
+
+async function rejectPendingBypass(domain) {
+  if (!confirm("Reject " + domain + "? It will be removed from the waitlist.")) return;
+  try {
+    const resp = await fetch("/api/pending-bypasses/" + encodeURIComponent(domain) + "/reject", { method: "POST" });
+    const data = await resp.json();
+    if (resp.ok) {
+      showToast(domain + " rejected", "success");
+      loadPendingBypasses();
+    } else {
+      showToast(data.error || "Failed to reject", "danger");
+    }
+  } catch (error) {
+    showToast("Error rejecting bypass", "danger");
+  }
+}
+
+// ─── Global Whitelist Management ───
+
+async function loadWhitelist() {
+  const tableBody = document.getElementById("whitelist-table-body");
+  if (!tableBody) return;
+
+  try {
+    const response = await fetch("/api/whitelist");
+    const domains = await response.json();
+
+    if (!domains || domains.length === 0) {
+      tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No whitelist domains configured</td></tr>';
+      return;
+    }
+
+    tableBody.innerHTML = domains.map(d => `
+      <tr>
+        <td style="font-family: monospace;">${d}</td>
+        <td style="text-align: right;">
+          <a href="#" onclick="removeWhitelistDomain('${d}'); return false;" style="color: var(--danger);">[Remove]</a>
+        </td>
+      </tr>
+    `).join("");
+  } catch (error) {
+    tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary);">Error loading whitelist</td></tr>';
+  }
+}
+
+async function addWhitelistDomain() {
+  const input = document.getElementById("whitelist-domain-input");
+  if (!input) return;
+
+  const domain = input.value.trim().toLowerCase();
+  if (!domain) {
+    showToast("Enter a domain to whitelist", "danger");
+    return;
+  }
+
+  try {
+    const resp = await fetch("/api/whitelist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ domain: domain })
+    });
+
+    if (resp.ok) {
+      showToast(domain + " added to whitelist", "success");
+      input.value = "";
+      loadWhitelist();
+    } else {
+      const data = await resp.json();
+      showToast(data.error || "Failed to add domain", "danger");
+    }
+  } catch (error) {
+    showToast("Error adding whitelist domain", "danger");
+  }
+}
+
+async function removeWhitelistDomain(domain) {
+  if (!confirm("Remove " + domain + " from the global whitelist?")) return;
+
+  try {
+    const resp = await fetch("/api/whitelist/" + encodeURIComponent(domain), { method: "DELETE" });
+    if (resp.ok) {
+      showToast(domain + " removed from whitelist", "success");
+      loadWhitelist();
+    } else {
+      const data = await resp.json();
+      showToast(data.error || "Failed to remove", "danger");
+    }
+  } catch (error) {
+    showToast("Error removing whitelist domain", "danger");
+  }
+}
+
 async function loadCategoryHints() {
   const tableBody = document.getElementById('category-hints-table-body');
 
@@ -2115,6 +2276,18 @@ function startDashboardPolling() {
         await loadCircuitBreakerState();
       } catch (e) {
         // Circuit breaker updates are non-critical
+      }
+      // 5. Update pending bypass count badge (lightweight — only badge text)
+      try {
+        const pbResp = await fetch("/api/pending-bypasses");
+        const pbData = await pbResp.json();
+        const badge = document.getElementById("pending-bypass-count");
+        if (badge && pbData.pending) {
+          badge.textContent = pbData.pending.length + " pending";
+          badge.style.display = pbData.pending.length > 0 ? "inline-block" : "none";
+        }
+      } catch (e) {
+        // Non-critical
       }
       
     } catch (error) {
