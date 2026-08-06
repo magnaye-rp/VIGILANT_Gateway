@@ -256,10 +256,20 @@ def _ensure_directory(path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
 
 
+def _signal_dir() -> Path:
+    """Return the directory used for mitmproxy addon IPC signal files.
+
+    This MUST match the directory computed by vigilant_addon.py's
+    _rule_cache_reload_path() / _throttle_release_queue_path() helpers.
+    Both resolve to Path(DB_PATH).parent.
+    """
+    return Path(DB_PATH).parent
+
+
 def _signal_rule_cache_reload() -> None:
     """Signal the mitmproxy addon to refresh its in-memory rule cache."""
     try:
-        reload_file = Path(DB_PATH).parent / ".rule_cache_reload"
+        reload_file = _signal_dir() / ".rule_cache_reload"
         _ensure_directory(reload_file)
         reload_file.write_text(str(time.time()))
     except OSError as exc:
@@ -280,7 +290,7 @@ def _signal_throttle_release(client_ip: str) -> None:
     """
     # Write to the release queue so mitmproxy removes the tc rules.
     try:
-        queue_file = Path(DB_PATH).parent / ".throttle_release_queue"
+        queue_file = _signal_dir() / ".throttle_release_queue"
         _ensure_directory(queue_file)
         # Append so concurrent releases from different requests aren't lost.
         with queue_file.open("a") as fh:
@@ -366,6 +376,11 @@ def init_db() -> None:
                 "CREATE TABLE IF NOT EXISTS pending_bypass_review ("
                 "domain TEXT PRIMARY KEY, client_ip TEXT, error_msg TEXT, "
                 "first_seen REAL, last_seen REAL, occurrence_count INTEGER DEFAULT 1)"
+            )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS keyword_blacklist ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, keyword TEXT NOT NULL UNIQUE, "
+                "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
             )
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_timestamp ON traffic_log(timestamp DESC)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_category ON traffic_log(category)")
@@ -2722,7 +2737,7 @@ def reset_all_throttles():
     try:
         # 1. Delegate tc qdisc flush to mitmproxy (which has CAP_NET_ADMIN).
         try:
-            queue_file = Path(DB_PATH).parent / ".throttle_release_queue"
+            queue_file = _signal_dir() / ".throttle_release_queue"
             _ensure_directory(queue_file)
             with queue_file.open("a") as fh:
                 fh.write("__RESET_ALL__\n")

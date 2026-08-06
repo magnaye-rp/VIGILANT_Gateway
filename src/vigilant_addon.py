@@ -33,7 +33,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 PRODUCTION_DB_PATH = Path("/home/vigilant-admin/vigilant_gateway/logs/vigilant.db")
 LOCAL_DB_PATH = BASE_DIR / "logs" / "vigilant.db"
 
-if PRODUCTION_DB_PATH.exists() and os.access(PRODUCTION_DB_PATH.parent, os.W_OK):
+# Resolve DB_PATH consistently with app.py: prefer production if the parent
+# directory exists and is writable (NOT checking whether the file itself
+# exists, since it may not have been created yet on first run).
+if PRODUCTION_DB_PATH.parent.exists() and os.access(PRODUCTION_DB_PATH.parent, os.W_OK):
     DB_PATH = str(PRODUCTION_DB_PATH)
 else:
     DB_PATH = str(LOCAL_DB_PATH)
@@ -335,8 +338,18 @@ tfidf_classifier = VigilantTFIDFClassifier(CATEGORY_KEYWORDS)
 # ─── Database Setup ───────────────────────────────────────────────
 DB_TIMEOUT = 30.0
 CACHE_REFRESH_INTERVAL = 60.0
-RULE_CACHE_RELOAD_FILE = Path(DB_PATH).parent / ".rule_cache_reload"
-THROTTLE_RELEASE_QUEUE = Path(DB_PATH).parent / ".throttle_release_queue"
+
+# IMPORTANT: These paths are computed lazily via helper functions because
+# DB_PATH is resolved at import time and may differ from what Flask (app.py)
+# resolves at runtime.  If the production DB file does not exist when this
+# module is first imported, DB_PATH falls back to the local path, while
+# Flask may resolve DB_PATH to the production path.  Computing the signal
+# files at access time ensures both processes target the same directory.
+def _rule_cache_reload_path() -> Path:
+    return Path(DB_PATH).parent / ".rule_cache_reload"
+
+def _throttle_release_queue_path() -> Path:
+    return Path(DB_PATH).parent / ".throttle_release_queue"
 
 _active_addon = None
 
@@ -614,15 +627,18 @@ def get_blacklisted_keywords():
             if _active_addon._last_cache_refresh > 0:
                 return list(_active_addon.cached_keywords)
 
+    conn = None
     try:
         conn = _connect_db()
         cursor = conn.execute("SELECT keyword FROM keyword_blacklist")
         keywords = [row[0] for row in cursor.fetchall()]
-        conn.close()
         return keywords
     except Exception as e:
         print(f"[VIGILANT] Error loading keyword blacklist from database: {e}")
         return []
+    finally:
+        if conn:
+            conn.close()
 
 
 def load_social_domains():
@@ -2046,8 +2062,9 @@ class VIGILANTAddon:
             time.sleep(1.0)
             reload_requested = False
             try:
-                if RULE_CACHE_RELOAD_FILE.exists():
-                    RULE_CACHE_RELOAD_FILE.unlink(missing_ok=True)
+                reload_file = _rule_cache_reload_path()
+                if reload_file.exists():
+                    reload_file.unlink(missing_ok=True)
                     reload_requested = True
             except OSError:
                 pass
@@ -2056,9 +2073,10 @@ class VIGILANTAddon:
             # Flask writes release requests here because it lacks CAP_NET_ADMIN
             # for tc commands; mitmproxy has the capability.
             try:
-                if THROTTLE_RELEASE_QUEUE.exists():
-                    lines = THROTTLE_RELEASE_QUEUE.read_text().strip().split('\n')
-                    THROTTLE_RELEASE_QUEUE.unlink(missing_ok=True)
+                release_queue = _throttle_release_queue_path()
+                if release_queue.exists():
+                    lines = release_queue.read_text().strip().split('\n')
+                    release_queue.unlink(missing_ok=True)
                     for line in lines:
                         ip = line.strip()
                         if not ip:
