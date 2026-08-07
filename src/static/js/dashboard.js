@@ -2361,7 +2361,9 @@ async function loadPinnedEditor() {
   try {
     const r = await fetch("/api/config");
     const cfg = await r.json();
-    const raw = cfg.proxy_pinned_domains || "";
+    // Fall back to the effective default so the dropdown always shows data,
+    // even before proxy_pinned_domains has been saved to config_settings.
+    const raw = cfg.proxy_pinned_domains || "facebook.com,twitter.com,x.com,tiktok.com,instagram.com,reddit.com,youtube.com";
     const domains = raw ? raw.split(",").map(d => d.trim()).filter(Boolean) : [];
     select.innerHTML = '<option value="">Select to remove...</option>' +
       domains.map(d => `<option value="${d}">${d}</option>`).join('');

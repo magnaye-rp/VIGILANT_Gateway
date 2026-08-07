@@ -144,7 +144,7 @@ CONFIG_DEFAULTS = DEFAULT_CONFIG
 
 ALLOWED_CONFIG_KEYS = set(CONFIG_DEFAULTS) | {
     "block_harmful", "block_distracting", "enable_https", "log_retention",
-    "custom_bypass_domains",
+    "custom_bypass_domains", "proxy_pinned_domains", "proxy_throttle_rate",
     "engagement_l1_minutes", "engagement_l2_minutes", "engagement_l3_minutes", "engagement_reset_idle",
     "engagement_l1_rate", "engagement_l2_rate", "engagement_l3_rate",
     "engagement_check_interval", "engagement_min_requests"
