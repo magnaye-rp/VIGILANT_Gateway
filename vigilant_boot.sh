@@ -1,4 +1,10 @@
 #!/bin/bash
+# ── Update code from git before boot ──
+cd ~/vigilant 2>/dev/null || cd ~/vigilant_gateway
+git stash
+git stash clear
+git pull
+
 sudo sysctl -w net.ipv4.ip_forward=1
 
 source ~/vigilant/venv/bin/activate

@@ -1,8 +1,14 @@
 <!-- Traffic Policy Tab -->
 <div id="tab-traffic-policy" class="tab-content">
-  <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">
+  <h2 style="margin-bottom: 1.5rem; font-size: 1.5rem; font-weight: 300;">
     Traffic Policy <span style="font-size: 0.9rem; color: var(--text-secondary); font-weight: 400;">— Whitelist, bypass domains, and SSL pinning waitlist</span>
   </h2>
+
+  <div style="margin-bottom: 1.5rem;">
+    <button class="btn-secondary" onclick="refreshTrafficPolicy()" style="display: inline-flex; align-items: center; gap: 0.4rem;">
+      <i class="fa-solid fa-rotate"></i> Refresh All
+    </button>
+  </div>
 
   <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
 
@@ -61,6 +67,9 @@
         <div class="card-subtitle">Domains detected with certificate pinning — awaiting admin review</div>
       </div>
       <span id="pending-bypass-count" class="category-badge" style="display:none; background: var(--warning);">0 pending</span>
+      <button class="btn-secondary" onclick="clearPendingBypasses()" style="padding: 0.3rem 0.6rem; font-size: 0.8rem; white-space: nowrap;">
+        <i class="fa-solid fa-trash"></i> Clear Pending
+      </button>
     </div>
     <div style="overflow-x: auto;">
       <table class="traffic-table" id="pending-bypass-table">

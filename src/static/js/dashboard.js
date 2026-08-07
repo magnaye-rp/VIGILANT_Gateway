@@ -1267,6 +1267,29 @@ let tpBypassPage = 1;
 let tpPendingPage = 1;
 const TP_PER_PAGE = 20;
 
+function refreshTrafficPolicy() {
+  loadTPWhitelist(tpWhitelistPage);
+  loadTPBypass(tpBypassPage);
+  loadTPPending(tpPendingPage);
+  showToast("Traffic policy refreshed", "success");
+}
+
+async function clearPendingBypasses() {
+  if (!confirm("Clear ALL pending SSL pinning bypass entries? This cannot be undone.")) return;
+  try {
+    const r = await fetch("/api/pending-bypasses/clear", { method: "POST" });
+    const d = await r.json();
+    if (r.ok) {
+      showToast(d.message || "Pending list cleared", "success");
+      loadTPPending(1);
+    } else {
+      showToast(d.error || "Failed to clear", "danger");
+    }
+  } catch (_) {
+    showToast("Error clearing pending bypasses", "danger");
+  }
+}
+
 function renderPagination(containerId, page, totalPages, loadFunc) {
   const container = document.getElementById(containerId);
   if (!container || totalPages <= 1) { if (container) container.innerHTML = ''; return; }

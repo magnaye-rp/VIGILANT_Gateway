@@ -3550,6 +3550,22 @@ def api_reject_pending_bypass(domain):
         return jsonify({"status": "error", "error": "mitmproxy addon not loaded"}), 503
 
 
+@app.route('/api/pending-bypasses/clear', methods=["POST"])
+@require_auth
+def api_clear_pending_bypasses():
+    """Delete ALL pending SSL-pinning bypass review entries."""
+    try:
+        deleted = 0
+        if DB_PATH.exists():
+            with _open_db() as conn:
+                if _table_exists(conn, "pending_bypass_review"):
+                    deleted = conn.execute("DELETE FROM pending_bypass_review").rowcount or 0
+                    conn.commit()
+        return jsonify({"status": "success", "message": f"Cleared {deleted} pending bypass entries"})
+    except Exception as exc:
+        return jsonify({"status": "error", "error": str(exc)}), 500
+
+
 # ─── Global Error Handlers ───────────────────────────────────────────
 @app.errorhandler(404)
 def handle_not_found(error):
