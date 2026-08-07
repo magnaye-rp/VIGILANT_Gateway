@@ -1159,8 +1159,8 @@ async function approvePendingBypass(domain) {
     const data = await resp.json();
     if (resp.ok) {
       showToast(domain + " approved and added to bypass list", "success");
-      loadPendingBypasses();
-      loadBypassDomains();
+      loadTPPending(tpPendingPage);
+      loadTPBypass(tpBypassPage);
     } else {
       showToast(data.error || "Failed to approve", "danger");
     }
@@ -1176,7 +1176,7 @@ async function rejectPendingBypass(domain) {
     const data = await resp.json();
     if (resp.ok) {
       showToast(domain + " rejected", "success");
-      loadPendingBypasses();
+      loadTPPending(tpPendingPage);
     } else {
       showToast(data.error || "Failed to reject", "danger");
     }

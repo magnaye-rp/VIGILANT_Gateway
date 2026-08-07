@@ -2216,10 +2216,17 @@ class VIGILANTAddon:
                             print("[VIGILANT] RESET_ALL complete")
                         else:
                             print(f"[VIGILANT] Processing release queue: {ip}")
-                            if not release_circuit_breaker(ip):
+                            try:
+                                ok = release_circuit_breaker(ip)
+                            except Exception as e:
+                                print(f"[VIGILANT] Release queue exception for {ip}: {e}")
+                                ok = False
+                            if not ok:
                                 print(f"[VIGILANT] Release queue failed to remove tc state for {ip}")
-            except OSError:
-                pass
+            except Exception as e:
+                # A transient failure here must NEVER kill the refresh loop,
+                # otherwise releases + cache reloads stop working entirely.
+                print(f"[VIGILANT] Release queue processing error: {e}")
 
             with self._cache_lock:
                 stale = (time.time() - self._last_cache_refresh) >= CACHE_REFRESH_INTERVAL
@@ -2720,28 +2727,31 @@ def approve_pending_bypass(domain: str):
     web version included.
     """
     clean = domain.strip().lower()
+    conn = None
     try:
         with db_lock:
             conn = _connect_db()
-            cursor = conn.execute("SELECT value FROM config_settings WHERE key = 'custom_bypass_domains'")
-            row = cursor.fetchone()
-            existing = set()
-            if row and row[0]:
-                existing = set(d.strip() for d in row[0].split(",") if d.strip())
-            
-            if clean not in existing:
-                existing.add(clean)
-                new_value = ",".join(sorted(existing))
-                conn.execute(
-                    "INSERT OR REPLACE INTO config_settings (key, value, updated_at) VALUES (?, ?, ?)",
-                    ("custom_bypass_domains", new_value, time.time())
-                )
-            
-            # Remove from pending queue
-            conn.execute("DELETE FROM pending_bypass_review WHERE domain = ?", (domain,))
-            conn.commit()
-            conn.close()
-            
+            try:
+                cursor = conn.execute("SELECT value FROM config_settings WHERE key = 'custom_bypass_domains'")
+                row = cursor.fetchone()
+                existing = set()
+                if row and row[0]:
+                    existing = set(d.strip() for d in row[0].split(",") if d.strip())
+
+                if clean not in existing:
+                    existing.add(clean)
+                    new_value = ",".join(sorted(existing))
+                    conn.execute(
+                        "INSERT OR REPLACE INTO config_settings (key, value, updated_at) VALUES (?, ?, ?)",
+                        ("custom_bypass_domains", new_value, time.time())
+                    )
+
+                # Remove from pending queue
+                conn.execute("DELETE FROM pending_bypass_review WHERE domain = ?", (domain,))
+                conn.commit()
+            finally:
+                conn.close()
+
         _refresh_bypass_cache()
         return True
     except Exception as e:
@@ -2750,12 +2760,15 @@ def approve_pending_bypass(domain: str):
 
 def reject_pending_bypass(domain: str):
     """Reject a pending bypass and remove it from memory if present."""
+    conn = None
     try:
         with db_lock:
             conn = _connect_db()
-            conn.execute("DELETE FROM pending_bypass_review WHERE domain = ?", (domain,))
-            conn.commit()
-            conn.close()
+            try:
+                conn.execute("DELETE FROM pending_bypass_review WHERE domain = ?", (domain,))
+                conn.commit()
+            finally:
+                conn.close()
             
         if _active_addon and domain in _active_addon.pinned_hosts:
             _active_addon.pinned_hosts.remove(domain)
