@@ -305,11 +305,14 @@ stage_6_dns_dhcp() {
     log_info "Generating Plug-and-Play dnsmasq.conf for interface $LAN_INTERFACE..."
     cat > /etc/dnsmasq.conf << EOF
 interface=$LAN_INTERFACE
+# bind-dynamic (NOT bind-interfaces): tolerates the interface address not
+# being assigned yet when dnsmasq starts at boot, preventing the bind-failure
+# crash that leaves devices without DHCP after a reboot.
+bind-dynamic
 dhcp-range=172.20.10.50,172.20.10.200,255.255.255.0,12h
 dhcp-option=option:router,$LAN_IP
 dhcp-option=option:dns-server,$LAN_IP
 resolv-file=$RESOLV_PATH
-bind-interfaces
 log-queries
 log-facility=/var/log/dnsmasq.log
 EOF
