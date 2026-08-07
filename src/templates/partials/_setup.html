@@ -142,40 +142,24 @@
 
             <div class="card" style="margin-bottom: 2rem;">
               <div class="card-header">
-                <div class="card-title"><i class="fa-solid fa-gauge" style="margin-right: 0.5rem;"></i> Throttle Settings</div>
-                <div class="card-subtitle">Bandwidth shaping defaults</div>
+                <div class="card-title"><i class="fa-solid fa-thumbtack" style="margin-right: 0.5rem;"></i> Pinned Domains</div>
+                <div class="card-subtitle">SSL-pinned domains that skip content scanning (mobile apps)</div>
               </div>
               <div class="form-row">
-                <div class="form-group">
-                  <label class="form-label">Enable Throttling</label>
-                  <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer; margin-top: 0.5rem;">
-                    <input type="checkbox" id="throttle-enabled" checked>
-                    <span id="throttle-status-label" style="font-weight: 600;">Enabled</span>
-                  </label>
-                  <div class="form-hint">Master switch for bandwidth throttling</div>
+                <div class="form-group" style="flex: 2;">
+                  <label class="form-label">Add a domain</label>
+                  <div style="display: flex; gap: 0.5rem;">
+                    <input type="text" id="pinned-domain-input" class="form-input" placeholder="e.g., facebook.com" style="flex: 1;">
+                    <button type="button" class="btn-primary" onclick="addPinnedDomain()" style="white-space: nowrap;">Add</button>
+                  </div>
+                  <div class="form-hint">Press button to add — comma-separated list is saved automatically</div>
                 </div>
-                <div class="form-group">
-                  <label class="form-label">Default Throttle Rate</label>
-                  <select id="throttle-rate">
-                    <option value="16">16 Kbps (Text only)</option>
-                    <option value="32" selected>32 Kbps (Default)</option>
-                    <option value="64">64 Kbps (Slow images)</option>
-                    <option value="128">128 Kbps (Light throttle)</option>
-                    <option value="256">256 Kbps (Mild)</option>
-                    <option value="512">512 Kbps (Barely noticeable)</option>
+                <div class="form-group" style="flex: 1;">
+                  <label class="form-label">Remove a domain</label>
+                  <select id="pinned-domain-select" onchange="removePinnedDomain()">
+                    <option value="">Select to remove...</option>
                   </select>
-                  <div class="form-hint">Bandwidth cap applied to throttled clients</div>
-                </div>
-                <div class="form-group">
-                  <label class="form-label">Throttle Cycle Duration</label>
-                  <select id="throttle-duration">
-                    <option value="120">2 minutes</option>
-                    <option value="300">5 minutes</option>
-                    <option value="600" selected>10 minutes (Default)</option>
-                    <option value="1800">30 minutes</option>
-                    <option value="3600">1 hour</option>
-                  </select>
-                  <div class="form-hint">How long a throttle cycle lasts before auto-recovery</div>
+                  <div class="form-hint">Choosing a domain removes it immediately</div>
                 </div>
               </div>
             </div>

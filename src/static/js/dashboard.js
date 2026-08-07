@@ -83,6 +83,10 @@ function switchTab(tabId, triggerElement = null) {
   
   currentTab = tabId;
   
+  if (tabId === 'system') {
+    loadPinnedDisplay();
+    loadCircuitBreakerState();
+  }
   if (tabId === 'device-management') {
     loadThrottledDevices();
     loadActiveDevices();
@@ -572,7 +576,10 @@ async function loadUnifiedConfig() {
     
     // Update network interface dropdowns with actual values
     updateInterfaceDropdowns(config.upstream_interface, config.distribution_interface);
-    
+
+    // Populate pinned domains editor dropdown in Setup tab
+    loadPinnedEditor().catch(() => {});
+
   } catch (error) {
     showToast('Failed to load configuration', 'danger');
   }
@@ -2303,6 +2310,79 @@ function refreshSNI() {
   showToast('SNI dashboard refreshed', 'success');
 }
 
+// ─── Pinned Domains — System tab display + Setup tab editor ───
+
+async function loadPinnedDisplay() {
+  const container = document.getElementById("pinned-domains-display");
+  if (!container) return;
+  try {
+    const r = await fetch("/api/config");
+    const cfg = await r.json();
+    const raw = cfg.proxy_pinned_domains || "facebook.com,twitter.com,x.com,tiktok.com,instagram.com,reddit.com,youtube.com";
+    const domains = raw.split(",").map(d => d.trim()).filter(Boolean);
+    if (domains.length === 0) {
+      container.innerHTML = '<span style="color: var(--text-secondary);">(none)</span>';
+      return;
+    }
+    container.innerHTML = domains.map(d =>
+      `<span style="background: var(--surface); color: var(--text-primary); padding: 0.25rem 0.6rem; border-radius: 6px; font-size: 0.85rem; font-family: monospace;">${d}</span>`
+    ).join('');
+  } catch (_) {
+    container.innerHTML = '<span style="color: var(--danger);">Error</span>';
+  }
+}
+
+async function loadPinnedEditor() {
+  const select = document.getElementById("pinned-domain-select");
+  if (!select) return;
+  try {
+    const r = await fetch("/api/config");
+    const cfg = await r.json();
+    const raw = cfg.proxy_pinned_domains || "";
+    const domains = raw ? raw.split(",").map(d => d.trim()).filter(Boolean) : [];
+    select.innerHTML = '<option value="">Select to remove...</option>' +
+      domains.map(d => `<option value="${d}">${d}</option>`).join('');
+  } catch (_) {}
+}
+
+async function addPinnedDomain() {
+  const input = document.getElementById("pinned-domain-input");
+  if (!input) return;
+  const domain = input.value.trim().toLowerCase();
+  if (!domain) { showToast("Enter a domain", "danger"); return; }
+  try {
+    const r = await fetch("/api/config");
+    const cfg = await r.json();
+    const raw = cfg.proxy_pinned_domains || "";
+    const domains = raw ? raw.split(",").map(d => d.trim()).filter(Boolean) : [];
+    if (domains.includes(domain)) { showToast("Already in list", "warning"); return; }
+    domains.push(domain);
+    await fetch("/api/config/setup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ proxy_pinned_domains: domains.join(",") }) });
+    showToast(domain + " added", "success"); input.value = "";
+    loadPinnedEditor();
+    loadPinnedDisplay();
+  } catch (_) { showToast("Error", "danger"); }
+}
+
+async function removePinnedDomain() {
+  const select = document.getElementById("pinned-domain-select");
+  if (!select) return;
+  const domain = select.value;
+  if (!domain) return;
+  if (!confirm("Remove " + domain + " from pinned domains?")) { select.value = ""; return; }
+  try {
+    const r = await fetch("/api/config");
+    const cfg = await r.json();
+    const raw = cfg.proxy_pinned_domains || "";
+    const domains = raw ? raw.split(",").map(d => d.trim()).filter(Boolean) : [];
+    const filtered = domains.filter(d => d !== domain);
+    await fetch("/api/config/setup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ proxy_pinned_domains: filtered.join(",") }) });
+    showToast(domain + " removed", "success");
+    loadPinnedEditor();
+    loadPinnedDisplay();
+  } catch (_) { showToast("Error", "danger"); }
+}
+
 // ─── Unified Polling Engine ───
 let dashboardPollInterval = null;
 
@@ -2427,9 +2507,9 @@ function startDashboardPolling() {
       // 4. Update Circuit Breaker status
       try {
         await loadCircuitBreakerState();
-      } catch (e) {
-        // Circuit breaker updates are non-critical
-      }
+      } catch (e) { }
+      // 5. Update pinned domains display on System tab
+      loadPinnedDisplay().catch(() => {});
       // 5. Update pending bypass count badge (lightweight — only badge text)
       try {
         const pbResp = await fetch("/api/pending-bypasses?page=1&per_page=1");
