@@ -95,9 +95,11 @@ function switchTab(tabId, triggerElement = null) {
   if (tabId === 'filtering') {
     loadCategoryHints();
     loadKeywords();
-    loadBypassDomains();
-    loadPendingBypasses();
-    loadWhitelist();
+  }
+  if (tabId === 'traffic-policy') {
+    loadTPWhitelist();
+    loadTPBypass();
+    loadTPPending();
   }
   if (tabId === 'behavioral-control') {
     loadBehavioralSettings();
@@ -1251,6 +1253,157 @@ async function removeWhitelistDomain(domain) {
   }
 }
 
+// ─── Traffic Policy Tab — paginated versions ───
+
+let tpWhitelistPage = 1;
+let tpBypassPage = 1;
+let tpPendingPage = 1;
+const TP_PER_PAGE = 20;
+
+function renderPagination(containerId, page, totalPages, loadFunc) {
+  const container = document.getElementById(containerId);
+  if (!container || totalPages <= 1) { if (container) container.innerHTML = ''; return; }
+  let html = '<button class="btn-secondary" style="padding:0.2rem 0.5rem;font-size:0.8rem;" ';
+  html += page > 1 ? `onclick="${loadFunc}(${page-1})"` : 'disabled';
+  html += '><i class="fa-solid fa-chevron-left"></i></button>';
+  html += `<span>Page ${page} of ${totalPages}</span>`;
+  html += '<button class="btn-secondary" style="padding:0.2rem 0.5rem;font-size:0.8rem;" ';
+  html += page < totalPages ? `onclick="${loadFunc}(${page+1})"` : 'disabled';
+  html += '><i class="fa-solid fa-chevron-right"></i></button>';
+  container.innerHTML = html;
+}
+
+// ── Traffic Policy — Whitelist ──
+
+async function loadTPWhitelist(page = 1) {
+  tpWhitelistPage = page;
+  const tbody = document.getElementById("wl-table-body");
+  if (!tbody) return;
+  try {
+    const r = await fetch(`/api/whitelist?page=${page}&per_page=${TP_PER_PAGE}`);
+    const d = await r.json();
+    if (!d.domains || d.domains.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="2" style="text-align:center;color:var(--text-secondary);padding:2rem;">No whitelist domains</td></tr>';
+    } else {
+      tbody.innerHTML = d.domains.map(dn => `<tr><td style="font-family:monospace;">${dn}</td><td style="text-align:right;"><a href="#" onclick="removeWhitelistDomain('${dn}');return false;" style="color:var(--danger);">[Remove]</a></td></tr>`).join('');
+    }
+    renderPagination("wl-pagination", page, d.total_pages || 1, "loadTPWhitelist");
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="2" style="text-align:center;color:var(--text-secondary);">Error</td></tr>';
+  }
+}
+
+async function addWhitelistDomain() {
+  const input = document.getElementById("wl-domain-input");
+  if (!input) return;
+  const domain = input.value.trim().toLowerCase();
+  if (!domain) { showToast("Enter a domain", "danger"); return; }
+  try {
+    const r = await fetch("/api/whitelist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain }) });
+    if (r.ok) { showToast(domain + " added", "success"); input.value = ""; loadTPWhitelist(1); }
+    else { const e = await r.json(); showToast(e.error || "Failed", "danger"); }
+  } catch (_) { showToast("Error", "danger"); }
+}
+
+async function removeWhitelistDomain(domain) {
+  if (!confirm("Remove " + domain + "?")) return;
+  try {
+    const r = await fetch("/api/whitelist/" + encodeURIComponent(domain), { method: "DELETE" });
+    if (r.ok) { showToast(domain + " removed", "success"); loadTPWhitelist(tpWhitelistPage); }
+    else { const e = await r.json(); showToast(e.error || "Failed", "danger"); }
+  } catch (_) { showToast("Error", "danger"); }
+}
+
+// ── Traffic Policy — Bypass List ──
+
+async function loadTPBypass(page = 1) {
+  tpBypassPage = page;
+  const tbody = document.getElementById("bypass-table-body");
+  if (!tbody) return;
+  try {
+    const r = await fetch("/api/config");
+    const cfg = await r.json();
+    const raw = cfg.custom_bypass_domains || "";
+    const allDomains = raw ? raw.split(",").map(d => d.trim()).filter(Boolean) : [];
+    const total = allDomains.length;
+    const totalPages = Math.max(1, Math.ceil(total / TP_PER_PAGE));
+    const start = (page - 1) * TP_PER_PAGE;
+    const pageDomains = allDomains.slice(start, start + TP_PER_PAGE);
+    if (pageDomains.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="2" style="text-align:center;color:var(--text-secondary);padding:2rem;">No bypass domains</td></tr>';
+    } else {
+      tbody.innerHTML = pageDomains.map(d => `<tr><td style="font-family:monospace;">${d}</td><td style="text-align:right;"><a href="#" onclick="removeBypassDomain('${d}');return false;" style="color:var(--danger);">[Remove]</a></td></tr>`).join('');
+    }
+    renderPagination("bypass-pagination", page, totalPages, "loadTPBypass");
+  } catch (_) {
+    tbody.innerHTML = '<tr><td colspan="2" style="text-align:center;color:var(--text-secondary);">Error</td></tr>';
+  }
+}
+
+// ── Traffic Policy — Pending Bypass Waitlist ──
+
+async function loadTPPending(page = 1) {
+  tpPendingPage = page;
+  const tbody = document.getElementById("pending-bypass-table-body");
+  const badge = document.getElementById("pending-bypass-count");
+  if (!tbody) return;
+  try {
+    const r = await fetch(`/api/pending-bypasses?page=${page}&per_page=${TP_PER_PAGE}`);
+    const d = await r.json();
+    const bypasses = d.pending || [];
+    if (badge) {
+      badge.textContent = (d.total || 0) + " pending";
+      badge.style.display = (d.total || 0) > 0 ? "inline-block" : "none";
+    }
+    if (bypasses.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-secondary);padding:2rem;">No pending bypass requests</td></tr>';
+    } else {
+      tbody.innerHTML = bypasses.map(b => {
+        const seen = b.last_seen ? new Date(b.last_seen * 1000).toLocaleString() : "—";
+        const errShort = (b.error_msg || "").substring(0, 35);
+        return `<tr><td style="font-family:monospace;">${b.domain}</td><td>${b.client_ip||"—"}</td><td style="font-size:0.8rem;color:var(--text-secondary);">${errShort}</td><td style="font-size:0.8rem;">${seen}</td><td>${b.occurrence_count}</td><td style="text-align:right;white-space:nowrap;"><button class="btn-primary" style="padding:0.2rem 0.5rem;font-size:0.8rem;" onclick="approvePendingBypass('${b.domain}')">Approve</button><button class="btn-secondary" style="padding:0.2rem 0.5rem;font-size:0.8rem;margin-left:0.2rem;" onclick="rejectPendingBypass('${b.domain}')">Reject</button></td></tr>`;
+      }).join('');
+    }
+    renderPagination("pb-pagination", page, d.total_pages || 1, "loadTPPending");
+  } catch (_) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-secondary);">Error</td></tr>';
+  }
+}
+
+async function addBypassDomain() {
+  const input = document.getElementById("bypass-domain-input");
+  if (!input) return;
+  const domain = input.value.trim().toLowerCase();
+  if (!domain) { showToast("Enter a domain", "danger"); return; }
+  try {
+    const r = await fetch("/api/config");
+    const cfg = await r.json();
+    const raw = cfg.custom_bypass_domains || "";
+    const domains = raw ? raw.split(",").map(d => d.trim()).filter(Boolean) : [];
+    if (domains.includes(domain)) { showToast("Already in list", "warning"); return; }
+    domains.push(domain);
+    const s = await fetch("/api/config/setup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ custom_bypass_domains: domains.join(",") }) });
+    if (s.ok) { showToast(domain + " added", "success"); input.value = ""; loadTPBypass(1); }
+    else { showToast("Failed to save", "danger"); }
+  } catch (_) { showToast("Error", "danger"); }
+}
+
+async function removeBypassDomain(domain) {
+  if (!confirm("Remove " + domain + "?")) return;
+  try {
+    const r = await fetch("/api/config");
+    const cfg = await r.json();
+    const raw = cfg.custom_bypass_domains || "";
+    const domains = raw ? raw.split(",").map(d => d.trim()).filter(Boolean) : [];
+    const filtered = domains.filter(d => d !== domain);
+    const s = await fetch("/api/config/setup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ custom_bypass_domains: filtered.join(",") }) });
+    if (s.ok) { showToast(domain + " removed", "success"); loadTPBypass(tpBypassPage); }
+    else { showToast("Failed", "danger"); }
+  } catch (_) { showToast("Error", "danger"); }
+}
+
+// ─── Category Hints ───
+
 async function loadCategoryHints() {
   const tableBody = document.getElementById('category-hints-table-body');
 
@@ -2279,12 +2432,13 @@ function startDashboardPolling() {
       }
       // 5. Update pending bypass count badge (lightweight — only badge text)
       try {
-        const pbResp = await fetch("/api/pending-bypasses");
+        const pbResp = await fetch("/api/pending-bypasses?page=1&per_page=1");
         const pbData = await pbResp.json();
         const badge = document.getElementById("pending-bypass-count");
-        if (badge && pbData.pending) {
-          badge.textContent = pbData.pending.length + " pending";
-          badge.style.display = pbData.pending.length > 0 ? "inline-block" : "none";
+        if (badge) {
+          const total = pbData.total || (pbData.pending ? pbData.pending.length : 0);
+          badge.textContent = total + " pending";
+          badge.style.display = total > 0 ? "inline-block" : "none";
         }
       } catch (e) {
         // Non-critical

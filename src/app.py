@@ -2623,8 +2623,25 @@ def manage_whitelist():
     """List or add global whitelist domains for TLS/CDN bypass."""
     if request.method == "GET":
         try:
-            rows = query_db("SELECT domain FROM global_whitelist ORDER BY domain") or []
-            return jsonify([r["domain"] if isinstance(r, dict) else r[0] for r in rows])
+            page = max(1, request.args.get("page", 1, type=int))
+            per_page = max(10, min(request.args.get("per_page", 25, type=int), 100))
+            offset = (page - 1) * per_page
+
+            rows = query_db("SELECT domain FROM global_whitelist ORDER BY domain LIMIT ? OFFSET ?",
+                            (per_page, offset)) or []
+            total = 0
+            if DB_PATH.exists():
+                with _open_db() as c:
+                    if _table_exists(c, "global_whitelist"):
+                        total = c.execute("SELECT COUNT(*) FROM global_whitelist").fetchone()[0] or 0
+
+            return jsonify({
+                "domains": [r["domain"] if isinstance(r, dict) else r[0] for r in rows],
+                "page": page,
+                "per_page": per_page,
+                "total": total,
+                "total_pages": max(1, (total + per_page - 1) // per_page),
+            })
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
@@ -3472,13 +3489,39 @@ def _discover_network_devices() -> list:
 @app.route('/api/pending-bypasses', methods=["GET"])
 @require_auth
 def api_get_pending_bypasses():
-    """Return all pending SSL-pinning bypass domains awaiting admin review."""
+    """Return pending SSL-pinning bypass domains with pagination."""
     try:
-        from vigilant_addon import get_pending_bypasses
-        bypasses = get_pending_bypasses()
-        return jsonify({"status": "success", "pending": bypasses})
-    except ImportError:
-        return jsonify({"status": "error", "error": "mitmproxy addon not loaded"}), 503
+        page = max(1, request.args.get("page", 1, type=int))
+        per_page = max(10, min(request.args.get("per_page", 25, type=int), 100))
+        offset = (page - 1) * per_page
+
+        rows = []
+        total = 0
+        if DB_PATH.exists():
+            with _open_db() as conn:
+                if _table_exists(conn, "pending_bypass_review"):
+                    total = conn.execute("SELECT COUNT(*) FROM pending_bypass_review").fetchone()[0] or 0
+                    rows = conn.execute(
+                        "SELECT domain, client_ip, error_msg, first_seen, last_seen, occurrence_count "
+                        "FROM pending_bypass_review ORDER BY last_seen DESC LIMIT ? OFFSET ?",
+                        (per_page, offset)
+                    ).fetchall()
+
+        bypasses = [
+            {"domain": r[0], "client_ip": r[1], "error_msg": r[2],
+             "first_seen": r[3], "last_seen": r[4], "occurrence_count": r[5]}
+            for r in rows
+        ]
+        return jsonify({
+            "status": "success",
+            "pending": bypasses,
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "total_pages": max(1, (total + per_page - 1) // per_page),
+        })
+    except Exception as exc:
+        return jsonify({"status": "error", "error": str(exc)}), 500
 
 
 @app.route('/api/pending-bypasses/<path:domain>/approve', methods=["POST"])

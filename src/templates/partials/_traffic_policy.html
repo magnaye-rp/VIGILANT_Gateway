@@ -1,0 +1,88 @@
+<!-- Traffic Policy Tab -->
+<div id="tab-traffic-policy" class="tab-content">
+  <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">
+    Traffic Policy <span style="font-size: 0.9rem; color: var(--text-secondary); font-weight: 400;">— Whitelist, bypass domains, and SSL pinning waitlist</span>
+  </h2>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+
+    <!-- CARD 1: Global Whitelist -->
+    <div class="settings-card">
+      <div class="card-header">
+        <div>
+          <div class="card-title"><i class="fa-solid fa-globe" style="margin-right: 0.5rem;"></i> Global Whitelist</div>
+          <div class="card-subtitle">CDN and infrastructure domains that always pass through</div>
+        </div>
+      </div>
+      <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+        <input type="text" id="wl-domain-input" class="form-input" placeholder="e.g., cdnjs.cloudflare.com" style="flex: 1;">
+        <button class="btn-primary" onclick="addWhitelistDomain()" style="white-space: nowrap; padding: 0.4rem 0.75rem;">
+          <i class="fa-solid fa-plus"></i> Add
+        </button>
+      </div>
+      <div style="overflow-x: auto;">
+        <table class="traffic-table">
+          <thead><tr><th>Domain</th><th style="text-align: right; width: 60px;">Action</th></tr></thead>
+          <tbody id="wl-table-body"><tr><td colspan="2" style="text-align: center; color: var(--text-secondary);">Loading...</td></tr></tbody>
+        </table>
+      </div>
+      <div class="pagination-row" id="wl-pagination" style="display: flex; justify-content: center; align-items: center; gap: 0.5rem; margin-top: 0.75rem; font-size: 0.85rem; color: var(--text-secondary);"></div>
+    </div>
+
+    <!-- CARD 2: Bypass List -->
+    <div class="settings-card">
+      <div class="card-header">
+        <div>
+          <div class="card-title"><i class="fa-solid fa-circle-check" style="margin-right: 0.5rem;"></i> Bypass List</div>
+          <div class="card-subtitle">Domains that bypass mitmproxy inspection entirely</div>
+        </div>
+      </div>
+      <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+        <input type="text" id="bypass-domain-input" class="form-input" placeholder="e.g., instagram.com" style="flex: 1;">
+        <button class="btn-primary" onclick="addBypassDomain()" style="white-space: nowrap; padding: 0.4rem 0.75rem;">
+          <i class="fa-solid fa-plus"></i> Add
+        </button>
+      </div>
+      <div style="overflow-x: auto;">
+        <table class="traffic-table">
+          <thead><tr><th>Domain</th><th style="text-align: right; width: 60px;">Action</th></tr></thead>
+          <tbody id="bypass-table-body"><tr><td colspan="2" style="text-align: center; color: var(--text-secondary);">Loading...</td></tr></tbody>
+        </table>
+      </div>
+      <div class="pagination-row" id="bypass-pagination" style="display: flex; justify-content: center; align-items: center; gap: 0.5rem; margin-top: 0.75rem; font-size: 0.85rem; color: var(--text-secondary);"></div>
+    </div>
+  </div>
+
+  <!-- CARD 3: SSL Pinning Bypass Waitlist (full width) -->
+  <div class="settings-card" style="margin-top: 1.5rem;">
+    <div class="card-header">
+      <div>
+        <div class="card-title"><i class="fa-solid fa-clock" style="margin-right: 0.5rem;"></i> SSL Pinning Bypass Waitlist</div>
+        <div class="card-subtitle">Domains detected with certificate pinning — awaiting admin review</div>
+      </div>
+      <span id="pending-bypass-count" class="category-badge" style="display:none; background: var(--warning);">0 pending</span>
+    </div>
+    <div style="overflow-x: auto;">
+      <table class="traffic-table" id="pending-bypass-table">
+        <thead>
+          <tr>
+            <th>Domain</th>
+            <th>Client IP</th>
+            <th>Error</th>
+            <th>Seen</th>
+            <th>Count</th>
+            <th style="text-align: right;">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="pending-bypass-table-body">
+              <tr><td colspan="6" style="text-align: center; color: var(--text-secondary);">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="pagination-row" id="pb-pagination" style="display: flex; justify-content: center; align-items: center; gap: 0.5rem; margin-top: 0.75rem; font-size: 0.85rem; color: var(--text-secondary);"></div>
+    <div id="pending-bypass-empty" style="text-align: center; color: var(--text-secondary); padding: 2rem; display: none;">
+      <i class="fa-solid fa-circle-check" style="font-size: 2rem; color: var(--success); margin-bottom: 0.5rem;"></i>
+      <div>No pending bypass requests — all clear</div>
+    </div>
+  </div>
+</div>

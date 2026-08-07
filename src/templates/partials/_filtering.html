@@ -46,40 +46,7 @@
             </table>
           </div>
 
-          <!-- CARD 3: Bypass List -->
-          <div class="settings-card full-width">
-            <div class="card-header">
-              <div>
-                <div class="card-title"><i class="fa-solid fa-circle-check" style="margin-right: 0.5rem;"></i> Bypass List</div>
-                <div class="card-subtitle">Domains that bypass mitmproxy inspection entirely — traffic passes through unmodified</div>
-              </div>
-            </div>
-            <div style="display: flex; gap: 0.75rem; align-items: flex-end; margin-bottom: 1.5rem;">
-              <div class="form-group" style="flex: 1; margin-bottom: 0;">
-                <label class="form-label">Domain to bypass</label>
-                <input type="text" id="bypass-domain-input" class="form-input" placeholder="e.g., instagram.com" style="width: 100%;">
-                <div class="form-hint">All subdomains will also bypass inspection</div>
-              </div>
-              <button class="btn-primary" onclick="addBypassDomain()" style="white-space: nowrap;">
-                <i class="fa-solid fa-plus"></i> Add Domain
-              </button>
-            </div>
-            <table class="traffic-table">
-              <thead>
-                <tr>
-                  <th>Domain</th>
-                  <th style="text-align: right;">Actions</th>
-                </tr>
-              </thead>
-              <tbody id="bypass-domains-table-body">
-                <tr>
-                  <td colspan="2" style="text-align: center; color: var(--text-secondary);">Loading...</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <!-- CARD 4: Traffic Categorization Rules -->
+          <!-- CARD 3: Traffic Categorization Rules -->
           <div class="settings-card full-width">
             <div class="card-header">
               <div>
@@ -127,68 +94,6 @@
                 </tbody>
               </table>
             </div>
-          </div>
-
-          <!-- CARD 5: SSL Pinning Bypass Waitlist -->
-          <div class="settings-card full-width">
-            <div class="card-header">
-              <div>
-                <div class="card-title"><i class="fa-solid fa-clock" style="margin-right: 0.5rem;"></i> SSL Pinning Bypass Waitlist</div>
-                <div class="card-subtitle">Domains detected with SSL certificate pinning — awaiting admin review</div>
-              </div>
-              <span id="pending-bypass-count" class="category-badge" style="display:none; background: var(--warning);">0 pending</span>
-            </div>
-            <table class="traffic-table" id="pending-bypass-table" style="display:none;">
-              <thead>
-                <tr>
-                  <th>Domain</th>
-                  <th>Client IP</th>
-                  <th>Error</th>
-                  <th>Seen</th>
-                  <th>Count</th>
-                  <th style="text-align: right;">Actions</th>
-                </tr>
-              </thead>
-              <tbody id="pending-bypass-table-body">
-              </tbody>
-            </table>
-            <div id="pending-bypass-empty" style="text-align: center; color: var(--text-secondary); padding: 2rem;">
-              <i class="fa-solid fa-circle-check" style="font-size: 2rem; color: var(--success); margin-bottom: 0.5rem;"></i>
-              <div>No pending bypass requests — all clear</div>
-            </div>
-          </div>
-
-          <!-- CARD 6: Global Whitelist -->
-          <div class="settings-card full-width">
-            <div class="card-header">
-              <div>
-                <div class="card-title"><i class="fa-solid fa-globe" style="margin-right: 0.5rem;"></i> Global Whitelist</div>
-                <div class="card-subtitle">CDN and infrastructure domains that always bypass inspection</div>
-              </div>
-            </div>
-            <div style="display: flex; gap: 0.75rem; align-items: flex-end; margin-bottom: 1.5rem;">
-              <div class="form-group" style="flex: 1; margin-bottom: 0;">
-                <label class="form-label">Add domain to whitelist</label>
-                <input type="text" id="whitelist-domain-input" class="form-input" placeholder="e.g., cdnjs.cloudflare.com" style="width: 100%;">
-                <div class="form-hint">Traffic to these domains passes through unmodified</div>
-              </div>
-              <button class="btn-primary" onclick="addWhitelistDomain()" style="white-space: nowrap;">
-                <i class="fa-solid fa-plus"></i> Add Domain
-              </button>
-            </div>
-            <table class="traffic-table">
-              <thead>
-                <tr>
-                  <th>Domain</th>
-                  <th style="text-align: right;">Actions</th>
-                </tr>
-              </thead>
-              <tbody id="whitelist-table-body">
-                <tr>
-                  <td colspan="2" style="text-align: center; color: var(--text-secondary);">Loading...</td>
-                </tr>
-              </tbody>
-            </table>
           </div>
         </div>
       </div>

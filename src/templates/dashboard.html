@@ -42,6 +42,10 @@
         <div class="nav-icon"><i class="fa-solid fa-shield-halved"></i></div>
         <span>SNI Monitoring</span>
       </div>
+      <div class="nav-item" onclick="switchTab('traffic-policy')">
+        <div class="nav-icon"><i class="fa-solid fa-gavel"></i></div>
+        <span>Traffic Policy</span>
+      </div>
       <div class="nav-item" onclick="switchTab('settings')">
         <div class="nav-icon"><i class="fa-solid fa-gear"></i></div>
         <span>Setup</span>
@@ -84,6 +88,7 @@
       {% include 'partials/_setup.html' %}
       {% include 'partials/_traffic_logs.html' %}
       {% include 'partials/_sni_dashboard.html' %}
+      {% include 'partials/_traffic_policy.html' %}
 
       <!-- System Tab -->
       <div id="tab-system" class="tab-content active">
