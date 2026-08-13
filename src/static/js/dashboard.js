@@ -107,6 +107,7 @@ function switchTab(tabId, triggerElement = null) {
   }
   if (tabId === 'behavioral-control') {
     loadBehavioralSettings();
+    loadBehavioralPolicies();
   }
   if (tabId === 'sni-monitoring') {
     // Wait for DOM layout before rendering charts (charts in hidden tabs have zero dimensions)
@@ -904,6 +905,63 @@ async function saveBehavioralSettings(event) {
     else showToast('Failed to save', 'danger');
   } catch (e) {
     showToast('Error saving', 'danger');
+  }
+}
+
+// ─── Domain Behavior Policies (PFR overrides) ───
+
+async function loadBehavioralPolicies() {
+  const tbody = document.getElementById('behavioral-policies-tbody');
+  if (!tbody) return;
+  try {
+    const r = await fetch('/api/behavioral-policies');
+    const d = await r.json();
+    const policies = d.policies || {};
+    const entries = Object.entries(policies);
+    if (entries.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:var(--text-secondary);padding:2rem;">No domain overrides — using auto profiling</td></tr>';
+      return;
+    }
+    const label = { auto: 'Auto', enforce_doomscroll: 'Enforce Doomscroll', exempt_media: 'Exempt Media' };
+    const cls = { auto: 'secondary', enforce_doomscroll: 'danger', exempt_media: 'success' };
+    tbody.innerHTML = entries.map(([domain, policy]) => `
+      <tr>
+        <td style="font-family:monospace;">${domain}</td>
+        <td><span class="category-badge ${cls[policy] || 'secondary'}">${label[policy] || policy}</span></td>
+        <td style="text-align:right;">
+          <a href="#" onclick="setBehavioralPolicy('${domain}','auto');return false;" style="color:var(--danger);">[Revert to Auto]</a>
+        </td>
+      </tr>
+    `).join('');
+  } catch (_) {
+    tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:var(--text-secondary);">Error loading policies</td></tr>';
+  }
+}
+
+async function setBehavioralPolicy(domain, policyType) {
+  const domainInput = document.getElementById('bp-domain-input');
+  const policySelect = document.getElementById('bp-policy-select');
+  if (domain === undefined) {
+    domain = domainInput?.value?.trim().toLowerCase() || '';
+    policyType = policySelect?.value || 'auto';
+  }
+  if (!domain) { showToast('Enter a domain', 'danger'); return; }
+  try {
+    const r = await fetch('/api/behavioral-policies', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain, policy_type: policyType })
+    });
+    const d = await r.json();
+    if (r.ok) {
+      showToast(`${domain} → ${policyType}`, 'success');
+      if (domainInput) domainInput.value = '';
+      loadBehavioralPolicies();
+    } else {
+      showToast(d.error || 'Failed', 'danger');
+    }
+  } catch (_) {
+    showToast('Error setting policy', 'danger');
   }
 }
 

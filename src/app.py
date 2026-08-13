@@ -386,6 +386,12 @@ def init_db() -> None:
                 "CREATE TABLE IF NOT EXISTS global_whitelist ("
                 "domain TEXT PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
             )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS domain_behavior_policies ("
+                "domain TEXT PRIMARY KEY, "
+                "policy_type TEXT CHECK(policy_type IN ('auto', 'enforce_doomscroll', 'exempt_media')) NOT NULL DEFAULT 'auto', "
+                "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+            )
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_timestamp ON traffic_log(timestamp DESC)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_category ON traffic_log(category)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_flagged ON traffic_log(flagged)")
@@ -2775,6 +2781,51 @@ def handle_behavioral_config():
     # Signal the vigilant_addon module to reload config (picks up new rates/intervals)
     _signal_rule_cache_reload()
     return jsonify({"status": "success"})
+
+
+@app.route("/api/behavioral-policies", methods=["GET", "POST"])
+@require_auth
+def manage_behavioral_policies():
+    """List or set per-domain behavior policies (auto / enforce_doomscroll / exempt_media)."""
+    if request.method == "GET":
+        try:
+            with _open_db() as conn:
+                if not _table_exists(conn, "domain_behavior_policies"):
+                    return jsonify({"policies": {}})
+                rows = conn.execute(
+                    "SELECT domain, policy_type FROM domain_behavior_policies ORDER BY domain"
+                ).fetchall()
+                return jsonify({"policies": {str(r[0]): str(r[1]) for r in rows}})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    # POST — set a domain policy
+    data = request.get_json(silent=True) or {}
+    domain = (data.get("domain") or "").strip().lower().removeprefix("www.")
+    policy_type = (data.get("policy_type") or "").strip().lower()
+    if not domain:
+        return jsonify({"error": "Domain required"}), 400
+    if policy_type not in ("auto", "enforce_doomscroll", "exempt_media"):
+        return jsonify({"error": "policy_type must be auto, enforce_doomscroll, or exempt_media"}), 400
+    try:
+        with _open_db() as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS domain_behavior_policies ("
+                "domain TEXT PRIMARY KEY, "
+                "policy_type TEXT CHECK(policy_type IN ('auto', 'enforce_doomscroll', 'exempt_media')) NOT NULL DEFAULT 'auto', "
+                "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+            )
+            conn.execute(
+                "INSERT INTO domain_behavior_policies (domain, policy_type, updated_at) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(domain) DO UPDATE SET policy_type = excluded.policy_type, "
+                "updated_at = excluded.updated_at",
+                (domain, policy_type, time.time())
+            )
+            conn.commit()
+        return jsonify({"status": "success", "domain": domain, "policy_type": policy_type})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/circuit-breaker/state", methods=["GET"])
 @require_auth

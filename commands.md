@@ -1,4 +1,8 @@
-Vigilant Gateway — SSH Monitoring Commands
+Here's a complete monitoring command reference for your SSH sessions:
+
+---
+
+## Vigilant Gateway — SSH Monitoring Commands
 
 ### 🔍 Proxy & Service Monitoring
 
@@ -99,3 +103,4 @@ sudo tc qdisc replace dev enp1s0 root handle 1: htb default 1
 
 # DHCP + ARP
 cat /var/lib/misc/dnsmasq.leases && arp -a
+```

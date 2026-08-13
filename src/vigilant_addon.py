@@ -6,6 +6,7 @@ import threading
 import subprocess
 import urllib.parse
 import ipaddress
+import difflib
 from collections import defaultdict, deque
 from pathlib import Path
 try:
@@ -28,6 +29,11 @@ try:
     import numpy as np
 except ImportError:
     np = None
+
+try:
+    import profiler
+except ImportError:
+    profiler = None
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 PRODUCTION_DB_PATH = Path("/home/vigilant-admin/vigilant_gateway/logs/vigilant.db")
@@ -187,6 +193,20 @@ def is_custom_bypass(host: str) -> bool:
                 print(f"[VIGILANT] Custom bypass match: {host} via {domain}")
                 return True
     return False
+
+
+def is_pinned_host(host: str) -> bool:
+    """Check if a host matches the configured SSL-pinned domain list."""
+    if not host:
+        return False
+    config = load_proxy_config()
+    pinned_domains = config['pinned_domains']
+    clean_host = host.removeprefix("www.").lower()
+    base_domain = ".".join(clean_host.split(".")[-2:])
+    return any(
+        base_domain in d or clean_host == d or clean_host.endswith("." + d)
+        for d in pinned_domains
+    )
 
 
 # Default social domains for doomscroll detection
@@ -506,6 +526,27 @@ def init_db():
                 c.execute("INSERT OR IGNORE INTO global_whitelist (domain) VALUES (?)", (d,))
             except sqlite3.Error:
                 pass
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS domain_behavior_policies (
+            domain TEXT PRIMARY KEY,
+            policy_type TEXT CHECK(policy_type IN ('auto', 'enforce_doomscroll', 'exempt_media')) NOT NULL DEFAULT 'auto',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    # Seed default behavioral policies for obvious long-form vs short-form platforms.
+    DEFAULT_BEHAVIOR_POLICIES = {
+        'exempt_media': ['youtube.com', 'coursera.org', 'netflix.com', 'vimeo.com', 'spotify.com', 'ted.com'],
+        'enforce_doomscroll': ['tiktok.com', 'instagram.com'],
+    }
+    for policy_type, domains in DEFAULT_BEHAVIOR_POLICIES.items():
+        for d in domains:
+            try:
+                c.execute(
+                    "INSERT OR IGNORE INTO domain_behavior_policies (domain, policy_type) VALUES (?, ?)",
+                    (d, policy_type)
+                )
+            except sqlite3.Error:
+                pass
     # Add doomscroll_exempt column if missing (for older databases)
     try:
         columns = [row[1] for row in c.execute("PRAGMA table_info(network_devices)").fetchall()]
@@ -524,6 +565,68 @@ def init_db():
     conn.close()
 
 db_lock = threading.Lock()
+
+
+def get_domain_behavior_policy(domain: str) -> str:
+    """Return the behavior policy for a domain ('auto', 'enforce_doomscroll',
+    or 'exempt_media'). Defaults to 'auto' when no explicit policy exists."""
+    clean = domain.removeprefix("www.").lower()
+    conn = None
+    try:
+        with db_lock:
+            conn = _connect_db()
+            cursor = conn.execute(
+                "SELECT policy_type FROM domain_behavior_policies WHERE domain = ?", (clean,)
+            )
+            row = cursor.fetchone()
+            return str(row[0]) if row else "auto"
+    except Exception as e:
+        print(f"[VIGILANT] Error loading behavior policy for {domain}: {e}")
+        return "auto"
+    finally:
+        if conn:
+            conn.close()
+
+
+def set_domain_behavior_policy(domain: str, policy_type: str) -> None:
+    """Insert or update the behavior policy for a domain."""
+    clean = domain.removeprefix("www.").lower()
+    if policy_type not in ("auto", "enforce_doomscroll", "exempt_media"):
+        raise ValueError(f"Invalid policy_type: {policy_type}")
+    conn = None
+    try:
+        with db_lock:
+            conn = _connect_db()
+            try:
+                conn.execute(
+                    "INSERT INTO domain_behavior_policies (domain, policy_type, updated_at) "
+                    "VALUES (?, ?, ?) "
+                    "ON CONFLICT(domain) DO UPDATE SET policy_type = excluded.policy_type, "
+                    "updated_at = excluded.updated_at",
+                    (clean, policy_type, time.time())
+                )
+                conn.commit()
+            finally:
+                conn.close()
+    except Exception as e:
+        print(f"[VIGILANT] Error setting behavior policy for {domain}: {e}")
+
+
+def get_all_domain_behavior_policies() -> dict:
+    """Return a mapping of domain -> policy_type for all stored policies."""
+    conn = None
+    try:
+        with db_lock:
+            conn = _connect_db()
+            cursor = conn.execute("SELECT domain, policy_type FROM domain_behavior_policies ORDER BY domain")
+            return {str(row[0]): str(row[1]) for row in cursor.fetchall()}
+    except Exception as e:
+        print(f"[VIGILANT] Error loading domain behavior policies: {e}")
+        return {}
+    finally:
+        if conn:
+            conn.close()
+
 
 def load_proxy_config():
     """Load proxy and behavioral configuration from database"""
@@ -1227,6 +1330,13 @@ def _cleanup_stale_velocity_state():
     for ip in [ip for ip, ts in _engaged_log_times.items() if ts < prune_cutoff]:
         _engaged_log_times.pop(ip, None)
 
+    # Prune the PFR traffic windows to prevent unbounded memory growth.
+    if profiler is not None:
+        try:
+            profiler.cleanup_stale_traffic_windows(now)
+        except Exception as e:
+            print(f"[VIGILANT] PFR cleanup error: {e}")
+
 def should_throttle(client_ip, host, path=""):
     config = load_proxy_config()
     network_velocity_threshold = config['network_velocity_threshold']
@@ -1335,28 +1445,76 @@ def normalize_text_simple(text: str) -> str:
     return re.sub(r'\s+', ' ', collapsed).strip()
 
 
+def normalize_query(text: str) -> str:
+    """Decode percent-encoding, lowercase, strip non-alphanumerics, and extract
+    search-query parameter values (q, search_query, query, p) if present.
+
+    Returns a normalized string combining the extracted query values.
+    """
+    if not text:
+        return ""
+    decoded = urllib.parse.unquote(text)
+    # Split off the query string and pull out recognized search params.
+    query_terms = []
+    try:
+        parts = urllib.parse.urlsplit(decoded)
+        params = urllib.parse.parse_qs(parts.query, keep_blank_values=True)
+        for key in ("q", "search_query", "query", "p"):
+            if key in params:
+                query_terms.extend(params[key])
+    except Exception:
+        query_terms = []
+    extracted = " ".join(query_terms)
+    return normalize_text_simple(extracted)
+
+
 def scan_text_for_keywords(text: str, keywords) -> str:
     """
-    Efficient keyword detection using normalized token intersection.
+    Keyword detection with query normalization + fuzzy matching.
     Returns the first matched keyword or None.
-    
-    This approach is much faster than TF-IDF for explicit blacklist checking
-    since blacklist keywords are exact matches rather than semantic similarity.
+
+    - Keywords with len(keyword) <= 3 require an EXACT word match to prevent
+      catastrophic false positives on short words.
+    - Keywords with len(keyword) > 3 match if the keyword is a substring of a
+      token OR difflib.SequenceMatcher ratio >= 0.82 (catches typos / dropped
+      letters, e.g. "por" vs "porn", "p0rn", "pornn").
     """
     if not text or not keywords:
         return None
-    
+
     normalized_text = normalize_text_simple(text)
-    normalized_tokens = set(normalized_text.split())
-    
+    tokens = normalized_text.split()
+    token_set = set(tokens)
+
     for keyword in keywords:
+        if not keyword:
+            continue
         normalized_keyword = normalize_text_simple(keyword)
-        keyword_tokens = set(normalized_keyword.split())
-        
-        # Check if all keyword tokens are present in the text
-        if keyword_tokens.issubset(normalized_tokens):
-            return keyword
-    
+        if not normalized_keyword:
+            continue
+
+        # Multi-word keyword: exact subset of all tokens (fuzzy multi-word is
+        # noisy; exact presence is the reliable signal).
+        keyword_tokens = normalized_keyword.split()
+        if len(keyword_tokens) > 1:
+            if set(keyword_tokens).issubset(token_set):
+                return keyword
+            continue
+
+        word = normalized_keyword
+        if len(word) <= 3:
+            # Short keyword — exact word match only.
+            if word in token_set:
+                return keyword
+            continue
+
+        # Long keyword — substring or fuzzy ratio.
+        for token in tokens:
+            if word in token:
+                return keyword
+            if difflib.SequenceMatcher(None, token, word).ratio() >= 0.82:
+                return keyword
+
     return None
 
 
@@ -2517,25 +2675,32 @@ class VIGILANTAddon:
 
         # TLS Passthrough: Check if host belongs to pinned SSL certificate domains.
         # Throttle check still runs for pinned domains — only content scanning is skipped.
-        config = load_proxy_config()
-        pinned_domains = config['pinned_domains']
+        clean_host = host.removeprefix("www.").lower()
+        is_pinned = is_pinned_host(host)
 
-        clean_host = host.removeprefix("www.")
-        base_domain = ".".join(clean_host.split(".")[-2:])
-        is_pinned = any(base_domain in d or clean_host == d or clean_host.endswith("." + d) for d in pinned_domains)
+        # ── Dynamic Traffic Profiling (PFR) ──
+        # Only tick the doomscroll engagement timer for INTERACTIVE_FEED sessions.
+        # PASSIVE_MEDIA (long-form video/audio) and STANDARD_WEB skip the timer.
+        if profiler is not None:
+            behavior = profiler.evaluate_session_behavior(client_ip, clean_host)
+        else:
+            # Profiler unavailable — fall back to always tick (legacy behavior).
+            behavior = "INTERACTIVE_FEED"
 
-        # ── Throttle check runs BEFORE pinned-domain skip ──
-        # Browser traffic for social sites must still go through doomscroll detection.
-        # Only content scanning (keyword/category) is skipped for pinned domains.
-        flagged, rpm_now, rpm_base = should_throttle(client_ip, host)
-        if flagged and not is_device_exempt(client_ip):
-            level = escalate_circuit_breaker(client_ip, host, rpm_now, rpm_base)
-            if level >= CB_LEVEL_PAUSE:
-                _mark_client_throttled(client_ip)
-            apply_circuit_breaker_action(client_ip, host, level, rpm_now, rpm_base)
-            if level >= CB_LEVEL_PAUSE:
-                print(f"[VIGILANT] HTTP CB Level {level} ({CB_LEVEL_NAMES[level]}) {client_ip} @ {host} "
-                      f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
+        if behavior == "INTERACTIVE_FEED":
+            flagged, rpm_now, rpm_base = should_throttle(client_ip, host)
+            if flagged and not is_device_exempt(client_ip):
+                level = escalate_circuit_breaker(client_ip, host, rpm_now, rpm_base)
+                if level >= CB_LEVEL_PAUSE:
+                    _mark_client_throttled(client_ip)
+                apply_circuit_breaker_action(client_ip, host, level, rpm_now, rpm_base)
+                if level >= CB_LEVEL_PAUSE:
+                    print(f"[VIGILANT] HTTP CB Level {level} ({CB_LEVEL_NAMES[level]}) {client_ip} @ {host} "
+                          f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
+        elif behavior == "PASSIVE_MEDIA":
+            # Long-form media — pause the engagement timer, no throttle escalation.
+            pass
+        # STANDARD_WEB — normal processing, no doomscroll tick.
 
         if is_pinned:
             print(f"[VIGILANT] TLS PASSTHROUGH: {host} from {client_ip} (pinned domain, content scan skipped)")
@@ -2590,108 +2755,87 @@ class VIGILANTAddon:
         method       = flow.request.method
         content_type = flow.response.headers.get("content-type", "")
 
+        # ── Bypass rules ──
+        # Already blocked by request-side inspection — do not re-scan.
+        if flow.response.status_code == 403:
+            return
+        # SSL-pinned app domains — binary/protobuf bodies, request-side scan is
+        # the enforcement point.
+        if is_pinned_host(host):
+            return
+        # Global whitelist / custom bypass — pass through unmodified.
         if is_whitelisted(host) or is_custom_bypass(host):
             log_request(client_ip, host, path, method, "Educational", False, [], None)
             print(f"[VIGILANT] WHITELIST BYPASS (response): {host} -> {client_ip}")
             return
 
-        config = load_proxy_config()
-        pinned_domains = config['pinned_domains']
+        clean_host = host.removeprefix("www.").lower()
 
-        clean_host = host.removeprefix("www.")
-        base_domain = ".".join(clean_host.split(".")[-2:])
-        is_pinned = any(base_domain in d or clean_host == d or clean_host.endswith("." + d) for d in pinned_domains)
+        # ── Payload profiling (PFR window) ──
+        payload_bytes = len(flow.response.content) if flow.response.content else 0
+        if profiler is not None:
+            profiler.record_response(client_ip, clean_host, payload_bytes)
 
-        if is_pinned:
-            # Response bodies for pinned (cert-pinned social) apps are still skipped -
-            # the request-side blacklist scan is the enforcement point for these, since
-            # response bodies for these apps are frequently binary/protobuf rather than
-            # readable text anyway.
+        # ── Content gate — only text/HTML/JSON/plain gets deep inspection ──
+        TEXT_CONTENT_TYPES = {"text/html", "application/json", "text/plain"}
+        if not any(ct in content_type for ct in TEXT_CONTENT_TYPES):
+            category_hints = load_category_hints()
+            domain_category = None
+            for category, domains in category_hints.items():
+                if any(clean_host == d or clean_host.endswith("." + d) for d in domains):
+                    domain_category = category
+                    break
+            log_request(client_ip, host, path, method, domain_category or "Non-HTML", False, [], None)
             return
 
+        # ── Sample first 20KB of response body (sub-ms execution) ──
+        try:
+            body_text = flow.response.get_text(strict=False)[:20000]
+        except Exception:
+            body_text = ""
+
+        # ── Stage A — Fuzzy keyword scan ──
+        try:
+            keywords = get_blacklisted_keywords()
+            if keywords and body_text:
+                matched = scan_text_for_keywords(body_text, keywords)
+                if matched:
+                    print(f"[VIGILANT] RESPONSE KEYWORD BLOCKED: {matched} in {content_type} response from {host}")
+                    log_request(client_ip, host, path, method, "Harmful", True, [], "KEYWORD_MATCH")
+                    flow.response = http.Response.make(
+                        403,
+                        render_block_page(host, "Harmful"),
+                        {"Content-Type": "text/html"}
+                    )
+                    return
+        except sqlite3.Error as e:
+            print(f"[VIGILANT] Response keyword blacklist check failed: {e}")
+
+        # ── Stage B — TF-IDF vectorizer scan ──
+        config = load_proxy_config()
+        threshold = float(config.get('tfidf_classification_threshold', 0.15))
+        tfidf_category, _tfidf_scores = tfidf_classifier.classify(body_text, threshold=threshold)
+        if tfidf_category == "Harmful":
+            print(f"[VIGILANT] RESPONSE TF-IDF BLOCKED: {host} classified Harmful")
+            log_request(client_ip, host, path, method, "Harmful", True, [], "TFIDF_HARMFUL")
+            flow.response = http.Response.make(
+                403,
+                render_block_page(host, "Harmful"),
+                {"Content-Type": "text/html"}
+            )
+            return
+
+        # ── Normal logging (non-block) ──
         category_hints = load_category_hints()
         domain_category = None
-
         for category, domains in category_hints.items():
             if any(clean_host == d or clean_host.endswith("." + d) for d in domains):
                 domain_category = category
                 break
 
-        TEXT_CONTENT_TYPES = {"text/html", "application/json", "text/plain", "text/javascript", "application/javascript", "text/css", "application/xml", "text/xml"}
-
-        if not any(ct in content_type for ct in TEXT_CONTENT_TYPES):
-            final_category = domain_category if domain_category else "Non-HTML"
-            log_request(client_ip, host, path, method, final_category, False, [], None)
-            return
-
-        # ── Sampled scanning for oversized payloads (see get_scan_text) ──
-        try:
-            body, was_sampled = get_scan_text(flow.response)
-            if was_sampled:
-                print(f"[VIGILANT] Large payload for {host} ({len(flow.response.content)} bytes) - "
-                      f"scanning sampled prefix/suffix instead of skipping analysis entirely")
-
-            if "text/html" in content_type:
-                clean = re.sub(r'<(script|style)[^>]*>.*?</\1>', ' ', body, flags=re.IGNORECASE | re.DOTALL)
-                clean = re.sub(r"<[^>]+>", " ", clean)
-                clean = re.sub(r"\s+", " ", clean).strip()
-            elif "application/json" in content_type:
-                clean = re.sub(r'[{}\[\]",:]', ' ', body)
-                clean = re.sub(r"\s+", " ", clean).strip()
-            else:
-                clean = re.sub(r"\s+", " ", body).strip()
-        except ValueError:
-            print(f"[VIGILANT] Failed to decode text payload for {host}")
-            clean = ""
-        except Exception as e:
-            print(f"[VIGILANT] Error processing response payload for {host}: {e}")
-            clean = ""
-
-        if domain_category:
-            category = domain_category
-            entities = []
-        else:
-            category, entities = categorize_content(clean, host)
-
-        flagged = category == "Harmful"
-
-        # Additional keyword blacklist check on response content, using the lenient
-        # body-context rules (repeat occurrences or stuffed-bypass required - see
-        # FIX #2). Runs for ALL domains — a category hint routes traffic for
-        # behavioral handling but must NOT exempt response bodies from keyword
-        # blocking (e.g. facebook.com search results must still be blocked).
-        if any(ct in content_type for ct in TEXT_CONTENT_TYPES):
-            try:
-                keywords = get_blacklisted_keywords()
-                if keywords:
-                    if clean:
-                        # Use efficient token intersection for keyword detection
-                        matched = scan_text_for_keywords(clean, keywords)
-                    else:
-                        matched = None
-                    if matched:
-                        print(f"[VIGILANT] RESPONSE KEYWORD BLOCKED: {matched} in {content_type} response from {host}")
-                        log_request(client_ip, host, path, method, "Harmful", True, [], "KEYWORD_MATCH")
-                        flow.response = http.Response.make(
-                            403,
-                            render_block_page(host, "Harmful"),
-                            {"Content-Type": "text/html"}
-                        )
-                        return
-            except sqlite3.Error as e:
-                print(f"[VIGILANT] Response keyword blacklist check failed: {e}")
-
-        block_reason = "CATEGORY_BLOCKED" if flagged else None
-        log_request(client_ip, host, path, method, category, flagged, entities[:10], block_reason)
-        print(f"[VIGILANT] {method} {host}{path[:40]} "
-              f"-> [{category}] entities={len(entities)} client={client_ip}")
-
-        if flagged:
-            flow.response = http.Response.make(
-                403,
-                render_block_page(host, category),
-                {"Content-Type": "text/html"}
-            )
+        final_category = domain_category or tfidf_category or "Uncategorized"
+        log_request(client_ip, host, path, method, final_category, False, [], None)
+        print(f"[VIGILANT] {method} {host}{path[:40]} -> [{final_category}] client={client_ip}")
 
 def get_pending_bypasses():
     """Returns all records from pending_bypass_review sorted by last_seen DESC."""
