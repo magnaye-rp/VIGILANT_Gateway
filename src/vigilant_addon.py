@@ -2589,10 +2589,14 @@ class VIGILANTAddon:
         if not error_msg:
             error_msg = str(getattr(data, "error", "")).lower()
 
-        # Check for missing root CA errors (client does not trust the proxy CA)
-        # — these are benign, NOT pinning.
-        ca_errors = ["unknown ca", "bad certificate", "certificate unknown", "sec_error_unknown_issuer", "self signed certificate"]
-        if any(err in error_msg for err in ca_errors):
+        # Errors that unambiguously mean "device does not trust the proxy CA"
+        # are benign (NOT pinning) — the user needs to install the mitmproxy CA.
+        # NOTE: "bad certificate" and "certificate unknown" are intentionally
+        # NOT here — they are also classic SSL-pinning rejection signatures, so
+        # they must be recorded as observations or pinned apps on un-bypassed
+        # domains would fail silently with no review signal.
+        missing_ca_errors = ["unknown ca", "sec_error_unknown_issuer", "self signed certificate"]
+        if any(err in error_msg for err in missing_ca_errors):
             print(f"[VIGILANT] Ignored TLS failure for {server_name} (Missing Root CA)")
             return
 
