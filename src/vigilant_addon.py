@@ -1039,6 +1039,9 @@ session_start     = defaultdict(float)
 social_request_history = defaultdict(lambda: deque())
 social_session_totals  = defaultdict(int)
 social_session_start   = defaultdict(float)
+# client_ip → when social RPM first dropped below the engaged threshold (2 RPM),
+# used to reset stale sessions kept alive by low-rate background pings.
+_social_low_activity_since = defaultdict(float)
 
 throttled_clients = set()
 throttled_clients_lock = threading.Lock()
@@ -1076,13 +1079,14 @@ def _engagement_tracking_loop():
             
             now = time.time()
 
-            # ── Stale-session cleanup (never-flagged devices) ──
-            # Background app pings (1 req / 1-2 min) keep request_history fresh,
-            # so _cleanup_stale_velocity_state never resets a device's social
-            # session — even though it was never flagged. The stale session start
-            # then inflates elapsed engagement minutes, causing an instant
-            # high-level throttle when the user picks the device up again.
-            # Reset any social session whose last request is older than reset_idle.
+            # ── Low-activity session reset (never-flagged devices) ──
+            # Background app pings (TikTok's icube-api.bytedance.net ~1 req/50s)
+            # keep social_session_start alive without ever reaching the engaged
+            # threshold (2 RPM). Complete-idle reset (below) never fires because
+            # the pings are too frequent. Here we reset the session when social
+            # activity stays BELOW 2 RPM for reset_idle seconds — so a stale
+            # session start cannot inflate engagement minutes and cause an instant
+            # L3 throttle when the user finally picks the device up.
             # (Benign unlocked .get() on _engagement_start — GIL-atomic in CPython;
             # taking _engagement_lock here would invert lock order and risk deadlock.)
             with velocity_lock:
@@ -1090,11 +1094,18 @@ def _engagement_tracking_loop():
                     if _engagement_start.get(ip, 0) != 0:
                         continue  # flagged devices are handled by the checks below
                     sdq = social_request_history.get(ip)
-                    last_social = sdq[-1] if sdq else 0
-                    if now - last_social >= reset_idle:
-                        social_session_start.pop(ip, None)
-                        social_session_totals.pop(ip, None)
-                        social_request_history.pop(ip, None)
+                    recent = len([t for t in sdq if now - t <= VELOCITY_WINDOW]) if sdq else 0
+                    if recent < 2:
+                        low_start = _social_low_activity_since.get(ip, 0)
+                        if low_start == 0:
+                            _social_low_activity_since[ip] = now
+                        elif now - low_start >= reset_idle:
+                            social_session_start.pop(ip, None)
+                            social_session_totals.pop(ip, None)
+                            social_request_history.pop(ip, None)
+                            _social_low_activity_since.pop(ip, None)
+                    else:
+                        _social_low_activity_since.pop(ip, None)
 
             with _engagement_lock:
                 for ip in list(_engagement_start.keys()):
@@ -1324,6 +1335,7 @@ def _cleanup_stale_velocity_state():
             social_request_history.pop(ip, None)
             social_session_totals.pop(ip, None)
             social_session_start.pop(ip, None)
+            _social_low_activity_since.pop(ip, None)
 
     # Prune rate-limit timestamps for devices idle > 10 minutes
     prune_cutoff = now - 600
