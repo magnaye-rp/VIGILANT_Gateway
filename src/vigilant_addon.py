@@ -209,6 +209,28 @@ def is_pinned_host(host: str) -> bool:
     )
 
 
+# Two-label public suffixes that require 3 labels to form a registrable domain
+# (e.g. "api.seabank.com.ph" -> "seabank.com.ph", not "com.ph").
+_MULTI_LABEL_TLDS = {
+    "com.ph", "net.ph", "org.ph", "co.uk", "org.uk", "ac.uk", "gov.uk",
+    "com.au", "net.au", "org.au", "co.jp", "ne.jp", "or.jp", "co.kr", "or.kr",
+    "com.br", "com.mx", "com.sg", "com.hk", "com.tw", "co.in", "net.in", "org.in",
+}
+
+
+def _base_domain(host: str) -> str:
+    """Extract the registrable domain from a hostname (drops subdomains).
+    E.g. tnc0-normal-alisg.tiktokv.com -> tiktokv.com;
+         api.seabank.com.ph -> seabank.com.ph."""
+    clean = host.removeprefix("www.").lower().strip().rstrip(".")
+    labels = clean.split(".")
+    if len(labels) <= 2:
+        return clean
+    if ".".join(labels[-2:]) in _MULTI_LABEL_TLDS:
+        return ".".join(labels[-3:])
+    return ".".join(labels[-2:])
+
+
 # Default social domains for doomscroll detection
 DEFAULT_SOCIAL_DOMAINS = {
     "facebook.com", "www.facebook.com",
@@ -547,6 +569,19 @@ def init_db():
                 )
             except sqlite3.Error:
                 pass
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS pinning_observations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_ip TEXT NOT NULL,
+            base_domain TEXT NOT NULL,
+            exact_domain TEXT NOT NULL,
+            first_seen REAL,
+            last_seen REAL,
+            count INTEGER DEFAULT 1,
+            UNIQUE(client_ip, exact_domain)
+        )
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_pinning_base ON pinning_observations(base_domain)")
     # Add doomscroll_exempt column if missing (for older databases)
     try:
         columns = [row[1] for row in c.execute("PRAGMA table_info(network_devices)").fetchall()]
@@ -2539,8 +2574,13 @@ class VIGILANTAddon:
             print(f"[VIGILANT] TLS ClientHello error: {e}")
 
     def tls_failed_client(self, data: tls.TlsData):
-        """Automatically catch TLS pinning rejections and register for admin review.
-        Saves the domain to mitmproxy's runtime ignore_hosts only and adds to pending DB."""
+        """Detect SSL-pinning rejections and record them as observations.
+
+        Records every pinning-symptom failure into pinning_observations,
+        grouped under the registrable base domain. NEVER auto-bypasses — a
+        domain only becomes a review candidate once it reaches the configured
+        occurrence threshold (pinning_min_occurrences, default 3).
+        """
         server_name = getattr(data.conn, "sni", None)
         if not server_name:
             return
@@ -2549,33 +2589,35 @@ class VIGILANTAddon:
         if not error_msg:
             error_msg = str(getattr(data, "error", "")).lower()
 
-        # Check for missing root CA errors
+        # Check for missing root CA errors (client does not trust the proxy CA)
+        # — these are benign, NOT pinning.
         ca_errors = ["unknown ca", "bad certificate", "certificate unknown", "sec_error_unknown_issuer", "self signed certificate"]
         if any(err in error_msg for err in ca_errors):
             print(f"[VIGILANT] Ignored TLS failure for {server_name} (Missing Root CA)")
             return
 
-        # Handle True SSL Pinning Failures (FAIL-CLOSED)
-        # We do NOT add to self.pinned_hosts or ctx.options.ignore_hosts so the connection stays blocked.
+        # Genuine pinning signature (e.g. "the client disconnected during the handshake").
         client_ip = self._extract_client_ip_from_tls(data)
-        print(f"[VIGILANT] SSL Pinning detected on {server_name}. Connection remains blocked. Queued for admin review.")
-
+        base = _base_domain(server_name)
         try:
             with db_lock:
                 conn = _connect_db()
-                now = time.time()
-                conn.execute(
-                    "INSERT INTO pending_bypass_review (domain, client_ip, error_msg, first_seen, last_seen, occurrence_count) "
-                    "VALUES (?, ?, ?, ?, ?, 1) "
-                    "ON CONFLICT(domain) DO UPDATE SET "
-                    "last_seen = excluded.last_seen, "
-                    "occurrence_count = occurrence_count + 1",
-                    (server_name, client_ip, error_msg, now, now)
-                )
-                conn.commit()
-                conn.close()
+                try:
+                    now = time.time()
+                    conn.execute(
+                        "INSERT INTO pinning_observations "
+                        "(client_ip, base_domain, exact_domain, first_seen, last_seen, count) "
+                        "VALUES (?, ?, ?, ?, ?, 1) "
+                        "ON CONFLICT(client_ip, exact_domain) DO UPDATE SET "
+                        "last_seen = excluded.last_seen, count = count + 1",
+                        (client_ip, base, server_name, now, now)
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+            print(f"[VIGILANT] Pinning observation recorded: {server_name} (base {base}) by {client_ip} — queued for review")
         except Exception as e:
-            print(f"[VIGILANT] Error queuing pending bypass for {server_name}: {e}")
+            print(f"[VIGILANT] Error recording pinning observation for {server_name}: {e}")
 
     def _persist_bypass_domain(self, domain: str):
         """Add exact domain to custom_bypass_domains in DB without broad base-domain wildcards."""
@@ -2849,97 +2891,158 @@ class VIGILANTAddon:
         log_request(client_ip, host, path, method, final_category, False, [], None)
         print(f"[VIGILANT] {method} {host}{path[:40]} -> [{final_category}] client={client_ip}")
 
-def get_pending_bypasses():
-    """Returns all records from pending_bypass_review sorted by last_seen DESC."""
-    try:
-        with db_lock:
-            conn = _connect_db()
-            cursor = conn.execute("SELECT domain, client_ip, error_msg, first_seen, last_seen, occurrence_count FROM pending_bypass_review ORDER BY last_seen DESC")
-            results = [
-                {
-                    "domain": row[0],
-                    "client_ip": row[1],
-                    "error_msg": row[2],
-                    "first_seen": row[3],
-                    "last_seen": row[4],
-                    "occurrence_count": row[5]
-                }
-                for row in cursor.fetchall()
-            ]
-            conn.close()
-            return results
-    except Exception as e:
-        print(f"[VIGILANT] Error fetching pending bypasses: {e}")
-        return []
-
-def approve_pending_bypass(domain: str):
-    """Approve a pending bypass domain and persist it.
-
-    The domain is persisted EXACTLY as seen in the SNI (lowercased, www
-    preserved).  Stripping "www." here would expand a single approved host
-    (e.g. www.facebook.com) into the bare registrable root (facebook.com),
-    which the suffix-match in is_custom_bypass() then applies to EVERY
-    subdomain — silently disabling inspection for the entire platform,
-    web version included.
-    """
-    clean = domain.strip().lower()
+def get_pending_bypasses(min_occurrences: int = 3):
+    """Return pinning clusters that reached the occurrence threshold, grouped
+    by registrable base domain. Each cluster lists the exact pinning-failing
+    domains observed (display shows pinning-failing exact domains only)."""
     conn = None
     try:
         with db_lock:
             conn = _connect_db()
             try:
+                cursor = conn.execute(
+                    """SELECT base_domain, SUM(count), COUNT(DISTINCT exact_domain), MAX(last_seen)
+                       FROM pinning_observations
+                       GROUP BY base_domain
+                       HAVING SUM(count) >= ?
+                       ORDER BY MAX(last_seen) DESC""",
+                    (int(min_occurrences),)
+                )
+                results = []
+                for base, total, sub_count, last_seen in cursor.fetchall():
+                    obs = conn.execute(
+                        "SELECT exact_domain, count, last_seen FROM pinning_observations "
+                        "WHERE base_domain = ? ORDER BY count DESC, last_seen DESC",
+                        (base,)
+                    ).fetchall()
+                    results.append({
+                        "base_domain": base,
+                        "total_occurrences": int(total or 0),
+                        "subdomain_count": int(sub_count or 0),
+                        "last_seen": last_seen,
+                        "observed_domains": [
+                            {"domain": o[0], "count": int(o[1]), "last_seen": o[2]} for o in obs
+                        ],
+                    })
+                return results
+            finally:
+                conn.close()
+    except Exception as e:
+        print(f"[VIGILANT] Error fetching pending bypasses: {e}")
+        return []
+
+
+def approve_pending_bypass(base_domain: str, scope: str = "exact"):
+    """Approve a pinning cluster and persist it.
+
+    scope='exact' persists each exact pinning-failing SNI domain only — web
+    versions sharing the parent domain remain inspectable.
+    scope='all' persists the registrable base domain — fully bypasses the app,
+    but also covers any web traffic on that base domain.
+    """
+    base_domain = base_domain.strip().lower()
+    conn = None
+    try:
+        with db_lock:
+            conn = _connect_db()
+            try:
+                rows = conn.execute(
+                    "SELECT DISTINCT exact_domain FROM pinning_observations WHERE base_domain = ?",
+                    (base_domain,)
+                ).fetchall()
+                exact_domains = [str(r[0]).strip().lower() for r in rows if r[0]]
+
+                if scope == "all":
+                    domains_to_add = [base_domain]
+                else:
+                    domains_to_add = exact_domains
+
                 cursor = conn.execute("SELECT value FROM config_settings WHERE key = 'custom_bypass_domains'")
                 row = cursor.fetchone()
                 existing = set()
                 if row and row[0]:
                     existing = set(d.strip() for d in row[0].split(",") if d.strip())
-
-                if clean not in existing:
-                    existing.add(clean)
-                    new_value = ",".join(sorted(existing))
-                    conn.execute(
-                        "INSERT OR REPLACE INTO config_settings (key, value, updated_at) VALUES (?, ?, ?)",
-                        ("custom_bypass_domains", new_value, time.time())
-                    )
-
-                # Remove from pending queue
-                conn.execute("DELETE FROM pending_bypass_review WHERE domain = ?", (domain,))
+                existing.update(d for d in domains_to_add if d)
+                new_value = ",".join(sorted(existing))
+                conn.execute(
+                    "INSERT OR REPLACE INTO config_settings (key, value, updated_at) VALUES (?, ?, ?)",
+                    ("custom_bypass_domains", new_value, time.time())
+                )
+                # Remove observations for this cluster
+                conn.execute("DELETE FROM pinning_observations WHERE base_domain = ?", (base_domain,))
                 conn.commit()
             finally:
                 conn.close()
 
         _refresh_bypass_cache()
-        return True
+        print(f"[VIGILANT] Approved pinning cluster {base_domain} (scope={scope}, {len(domains_to_add)} domains persisted)")
+        return True, len(domains_to_add)
     except Exception as e:
-        print(f"[VIGILANT] Error approving bypass for {domain}: {e}")
-        return False
+        print(f"[VIGILANT] Error approving bypass for {base_domain}: {e}")
+        return False, 0
 
-def reject_pending_bypass(domain: str):
-    """Reject a pending bypass and remove it from memory if present."""
+
+def reject_pending_bypass(base_domain: str):
+    """Reject a pinning cluster: drop its observations. Nothing is bypassed."""
+    base_domain = base_domain.strip().lower()
     conn = None
     try:
         with db_lock:
             conn = _connect_db()
             try:
-                conn.execute("DELETE FROM pending_bypass_review WHERE domain = ?", (domain,))
+                conn.execute("DELETE FROM pinning_observations WHERE base_domain = ?", (base_domain,))
                 conn.commit()
             finally:
                 conn.close()
-            
-        if _active_addon and domain in _active_addon.pinned_hosts:
-            _active_addon.pinned_hosts.remove(domain)
-            
-            # Also remove from current ignore_hosts if possible
-            if ctx and ctx.options:
-                current_ignores = list(ctx.options.ignore_hosts)
-                pattern = f"^{re.escape(domain)}:443$"
-                if pattern in current_ignores:
-                    current_ignores.remove(pattern)
-                    ctx.options.ignore_hosts = current_ignores
-                    
         return True
     except Exception as e:
-        print(f"[VIGILANT] Error rejecting bypass for {domain}: {e}")
+        print(f"[VIGILANT] Error rejecting bypass for {base_domain}: {e}")
         return False
+
+
+def clear_pending_bypasses():
+    """Delete ALL pinning observations (the full review waitlist)."""
+    conn = None
+    try:
+        with db_lock:
+            conn = _connect_db()
+            try:
+                deleted = conn.execute("DELETE FROM pinning_observations").rowcount or 0
+                conn.commit()
+                return deleted
+            finally:
+                conn.close()
+    except Exception as e:
+        print(f"[VIGILANT] Error clearing pinning observations: {e}")
+        return 0
+
+
+def export_pending_bypasses():
+    """Return the FULL pinning observations detail (all exact subdomains) for export."""
+    conn = None
+    try:
+        with db_lock:
+            conn = _connect_db()
+            try:
+                rows = conn.execute(
+                    "SELECT base_domain, exact_domain, client_ip, count, first_seen, last_seen "
+                    "FROM pinning_observations ORDER BY base_domain, exact_domain"
+                ).fetchall()
+                return [
+                    {
+                        "base_domain": r[0],
+                        "exact_domain": r[1],
+                        "client_ip": r[2],
+                        "count": int(r[3]),
+                        "first_seen": r[4],
+                        "last_seen": r[5],
+                    }
+                    for r in rows
+                ]
+            finally:
+                conn.close()
+    except Exception as e:
+        print(f"[VIGILANT] Error exporting pinning observations: {e}")
+        return []
 
 addons = [VIGILANTAddon()]

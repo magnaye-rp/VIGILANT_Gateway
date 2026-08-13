@@ -144,14 +144,14 @@ CONFIG_DEFAULTS = DEFAULT_CONFIG
 
 ALLOWED_CONFIG_KEYS = set(CONFIG_DEFAULTS) | {
     "block_harmful", "block_distracting", "enable_https", "log_retention",
-    "custom_bypass_domains", "proxy_pinned_domains", "proxy_throttle_rate",
+    "custom_bypass_domains", "proxy_pinned_domains", "proxy_throttle_rate", "pinning_min_occurrences",
     "engagement_l1_minutes", "engagement_l2_minutes", "engagement_l3_minutes", "engagement_reset_idle",
     "engagement_l1_rate", "engagement_l2_rate", "engagement_l3_rate",
     "engagement_check_interval", "engagement_min_requests"
 }
 BOOLEAN_CONFIG_KEYS = {"block_harmful", "block_distracting", "nlp_enabled", "throttle_enabled", "enable_https", "sni_filtering_enabled"}
 FLOAT_CONFIG_KEYS = {"network_velocity_threshold", "tfidf_classification_threshold", "tfidf_url_threshold", "tfidf_body_threshold"}
-INTEGER_CONFIG_KEYS = {"physical_scroll_threshold", "throttle_rate", "throttle_duration", "log_retention", "network_velocity_custom", "physical_scroll_custom", "request_threshold", "deescalation_l1", "deescalation_l2", "deescalation_l3", "sustained_activity_minutes", "engagement_l1_minutes", "engagement_l2_minutes", "engagement_l3_minutes", "engagement_reset_idle", "engagement_check_interval", "engagement_min_requests"}
+INTEGER_CONFIG_KEYS = {"physical_scroll_threshold", "throttle_rate", "throttle_duration", "log_retention", "network_velocity_custom", "physical_scroll_custom", "request_threshold", "deescalation_l1", "deescalation_l2", "deescalation_l3", "sustained_activity_minutes", "engagement_l1_minutes", "engagement_l2_minutes", "engagement_l3_minutes", "engagement_reset_idle", "engagement_check_interval", "engagement_min_requests", "pinning_min_occurrences"}
 STRING_CONFIG_KEYS = {"upstream_interface", "distribution_interface", "gateway_ip", "dhcp_start", "dhcp_end", "upstream_dns", "nlp_accuracy", "ui_theme", "network_velocity_preset", "physical_scroll_preset", "proxy_throttle_rate", "proxy_pinned_domains", "custom_bypass_domains", "engagement_l1_rate", "engagement_l2_rate", "engagement_l3_rate"}
 TRAFFIC_CATEGORIES = ("Educational", "Productive", "Distracting", "Harmful")
 L4_TRAFFIC_CATEGORIES = ("DNS_TRACKED", "SNI_PASSTHROUGH")
@@ -392,6 +392,14 @@ def init_db() -> None:
                 "policy_type TEXT CHECK(policy_type IN ('auto', 'enforce_doomscroll', 'exempt_media')) NOT NULL DEFAULT 'auto', "
                 "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
             )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS pinning_observations ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, client_ip TEXT NOT NULL, "
+                "base_domain TEXT NOT NULL, exact_domain TEXT NOT NULL, "
+                "first_seen REAL, last_seen REAL, count INTEGER DEFAULT 1, "
+                "UNIQUE(client_ip, exact_domain))"
+            )
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_pinning_base ON pinning_observations(base_domain)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_timestamp ON traffic_log(timestamp DESC)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_category ON traffic_log(category)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_flagged ON traffic_log(flagged)")
@@ -3540,37 +3548,21 @@ def _discover_network_devices() -> list:
 @app.route('/api/pending-bypasses', methods=["GET"])
 @require_auth
 def api_get_pending_bypasses():
-    """Return pending SSL-pinning bypass domains with pagination."""
+    """Return pinning clusters (grouped by registrable base domain) that reached
+    the occurrence threshold, with their observed pinning-failing exact domains."""
     try:
-        page = max(1, request.args.get("page", 1, type=int))
-        per_page = max(10, min(request.args.get("per_page", 25, type=int), 100))
-        offset = (page - 1) * per_page
-
-        rows = []
-        total = 0
-        if DB_PATH.exists():
-            with _open_db() as conn:
-                if _table_exists(conn, "pending_bypass_review"):
-                    total = conn.execute("SELECT COUNT(*) FROM pending_bypass_review").fetchone()[0] or 0
-                    rows = conn.execute(
-                        "SELECT domain, client_ip, error_msg, first_seen, last_seen, occurrence_count "
-                        "FROM pending_bypass_review ORDER BY last_seen DESC LIMIT ? OFFSET ?",
-                        (per_page, offset)
-                    ).fetchall()
-
-        bypasses = [
-            {"domain": r[0], "client_ip": r[1], "error_msg": r[2],
-             "first_seen": r[3], "last_seen": r[4], "occurrence_count": r[5]}
-            for r in rows
-        ]
+        from vigilant_addon import get_pending_bypasses
+        config = load_config()
+        min_occ = int(config.get("pinning_min_occurrences", 3))
+        min_occ = max(2, min(min_occ, 7))  # tunable 2-7
+        clusters = get_pending_bypasses(min_occurrences=min_occ)
         return jsonify({
             "status": "success",
-            "pending": bypasses,
-            "page": page,
-            "per_page": per_page,
-            "total": total,
-            "total_pages": max(1, (total + per_page - 1) // per_page),
+            "pending": clusters,
+            "threshold": min_occ,
         })
+    except ImportError:
+        return jsonify({"status": "error", "error": "mitmproxy addon not loaded"}), 503
     except Exception as exc:
         return jsonify({"status": "error", "error": str(exc)}), 500
 
@@ -3578,20 +3570,32 @@ def api_get_pending_bypasses():
 @app.route('/api/pending-bypasses/<path:domain>/approve', methods=["POST"])
 @require_auth
 def api_approve_pending_bypass(domain):
-    """Approve a pending SSL-pinning bypass domain and persist it."""
+    """Approve a pinning cluster. Query/body scope: 'exact' (default, persists only
+    the exact failing SNI domains) or 'all' (persists the registrable base domain
+    — also bypasses web traffic on that domain)."""
     try:
+        data = request.get_json(silent=True) or {}
+        scope = (data.get("scope") or request.args.get("scope") or "exact").strip().lower()
+        if scope not in ("exact", "all"):
+            scope = "exact"
+
         from vigilant_addon import approve_pending_bypass
-        if approve_pending_bypass(domain):
-            return jsonify({"status": "success", "message": f"{domain} approved and added to bypass list"})
+        ok, count = approve_pending_bypass(domain, scope=scope)
+        if ok:
+            _signal_rule_cache_reload()
+            label = "registrable domain" if scope == "all" else f"{count} exact domain(s)"
+            return jsonify({"status": "success", "message": f"{domain} approved ({label}) and added to bypass list"})
         return jsonify({"status": "error", "error": "Failed to approve bypass"}), 500
     except ImportError:
         return jsonify({"status": "error", "error": "mitmproxy addon not loaded"}), 503
+    except Exception as exc:
+        return jsonify({"status": "error", "error": str(exc)}), 500
 
 
 @app.route('/api/pending-bypasses/<path:domain>/reject', methods=["POST"])
 @require_auth
 def api_reject_pending_bypass(domain):
-    """Reject a pending SSL-pinning bypass domain and remove it from the queue."""
+    """Reject a pinning cluster: drop its observations. Nothing is bypassed."""
     try:
         from vigilant_addon import reject_pending_bypass
         if reject_pending_bypass(domain):
@@ -3599,20 +3603,45 @@ def api_reject_pending_bypass(domain):
         return jsonify({"status": "error", "error": "Failed to reject bypass"}), 500
     except ImportError:
         return jsonify({"status": "error", "error": "mitmproxy addon not loaded"}), 503
+    except Exception as exc:
+        return jsonify({"status": "error", "error": str(exc)}), 500
 
 
 @app.route('/api/pending-bypasses/clear', methods=["POST"])
 @require_auth
 def api_clear_pending_bypasses():
-    """Delete ALL pending SSL-pinning bypass review entries."""
+    """Delete ALL pinning observations (the full review waitlist)."""
     try:
-        deleted = 0
-        if DB_PATH.exists():
-            with _open_db() as conn:
-                if _table_exists(conn, "pending_bypass_review"):
-                    deleted = conn.execute("DELETE FROM pending_bypass_review").rowcount or 0
-                    conn.commit()
-        return jsonify({"status": "success", "message": f"Cleared {deleted} pending bypass entries"})
+        from vigilant_addon import clear_pending_bypasses
+        deleted = clear_pending_bypasses()
+        return jsonify({"status": "success", "message": f"Cleared {deleted} pinning observations"})
+    except ImportError:
+        return jsonify({"status": "error", "error": "mitmproxy addon not loaded"}), 503
+    except Exception as exc:
+        return jsonify({"status": "error", "error": str(exc)}), 500
+
+
+@app.route('/api/pending-bypasses/export', methods=["GET"])
+@require_auth
+def api_export_pending_bypasses():
+    """Export the FULL pinning waitlist including all observed exact subdomains
+    (CSV). Use for further refinement of the bypass policy."""
+    try:
+        from vigilant_addon import export_pending_bypasses
+        rows = export_pending_bypasses()
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(["base_domain", "exact_domain", "client_ip", "count", "first_seen", "last_seen"])
+        for r in rows:
+            first = datetime.datetime.fromtimestamp(r["first_seen"]).strftime("%Y-%m-%d %H:%M:%S") if r.get("first_seen") else ""
+            last = datetime.datetime.fromtimestamp(r["last_seen"]).strftime("%Y-%m-%d %H:%M:%S") if r.get("last_seen") else ""
+            writer.writerow([r["base_domain"], r["exact_domain"], r.get("client_ip", ""), r["count"], first, last])
+        response = make_response(buffer.getvalue())
+        response.headers["Content-Disposition"] = "attachment; filename=pinning_waitlist_export.csv"
+        response.headers["Content-Type"] = "text/csv"
+        return response
+    except ImportError:
+        return jsonify({"status": "error", "error": "mitmproxy addon not loaded"}), 503
     except Exception as exc:
         return jsonify({"status": "error", "error": str(exc)}), 500
 

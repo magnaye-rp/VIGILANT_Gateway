@@ -1210,14 +1210,22 @@ async function loadPendingBypasses() {
   }
 }
 
-async function approvePendingBypass(domain) {
-  if (!confirm("Approve " + domain + " for bypass? This will add it to the permanent bypass list.")) return;
+async function approvePendingBypass(domain, scope) {
+  scope = scope || "exact";
+  const warning = scope === "all"
+    ? "\n\nWARNING: Approving the whole registrable domain also bypasses WEB versions and any other service on " + domain + ". Continue?"
+    : "";
+  if (!confirm("Approve " + domain + (scope === "all" ? " (whole domain)" : " (exact failing domains)") + "?" + warning)) return;
   try {
-    const resp = await fetch("/api/pending-bypasses/" + encodeURIComponent(domain) + "/approve", { method: "POST" });
+    const resp = await fetch("/api/pending-bypasses/" + encodeURIComponent(domain) + "/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: scope })
+    });
     const data = await resp.json();
     if (resp.ok) {
-      showToast(domain + " approved and added to bypass list", "success");
-      loadTPPending(tpPendingPage);
+      showToast(domain + " approved", "success");
+      loadTPPending();
       loadTPBypass(tpBypassPage);
     } else {
       showToast(data.error || "Failed to approve", "danger");
@@ -1228,13 +1236,13 @@ async function approvePendingBypass(domain) {
 }
 
 async function rejectPendingBypass(domain) {
-  if (!confirm("Reject " + domain + "? It will be removed from the waitlist.")) return;
+  if (!confirm("Reject " + domain + "? Its observations will be removed and nothing will be bypassed.")) return;
   try {
     const resp = await fetch("/api/pending-bypasses/" + encodeURIComponent(domain) + "/reject", { method: "POST" });
     const data = await resp.json();
     if (resp.ok) {
       showToast(domain + " rejected", "success");
-      loadTPPending(tpPendingPage);
+      loadTPPending();
     } else {
       showToast(data.error || "Failed to reject", "danger");
     }
@@ -1339,7 +1347,7 @@ async function clearPendingBypasses() {
     const d = await r.json();
     if (r.ok) {
       showToast(d.message || "Pending list cleared", "success");
-      loadTPPending(1);
+      loadTPPending();
     } else {
       showToast(d.error || "Failed to clear", "danger");
     }
@@ -1430,31 +1438,76 @@ async function loadTPBypass(page = 1) {
 
 // ── Traffic Policy — Pending Bypass Waitlist ──
 
-async function loadTPPending(page = 1) {
-  tpPendingPage = page;
+async function loadTPPending() {
   const tbody = document.getElementById("pending-bypass-table-body");
   const badge = document.getElementById("pending-bypass-count");
   if (!tbody) return;
   try {
-    const r = await fetch(`/api/pending-bypasses?page=${page}&per_page=${TP_PER_PAGE}`);
+    const r = await fetch(`/api/pending-bypasses`);
     const d = await r.json();
-    const bypasses = d.pending || [];
+    const clusters = d.pending || [];
+    const threshold = d.threshold || 3;
+    const thresholdLabel = document.getElementById("pb-threshold-label");
+    const thresholdSelect = document.getElementById("pb-threshold");
+    if (thresholdLabel) thresholdLabel.textContent = threshold;
+    if (thresholdSelect && String(thresholdSelect.value) !== String(threshold)) thresholdSelect.value = String(threshold);
     if (badge) {
-      badge.textContent = (d.total || 0) + " pending";
-      badge.style.display = (d.total || 0) > 0 ? "inline-block" : "none";
+      badge.textContent = clusters.length + " pending";
+      badge.style.display = clusters.length > 0 ? "inline-block" : "none";
     }
-    if (bypasses.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-secondary);padding:2rem;">No pending bypass requests</td></tr>';
+    if (clusters.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-secondary);padding:2rem;">No pinning clusters above the detection threshold</td></tr>';
     } else {
-      tbody.innerHTML = bypasses.map(b => {
+      tbody.innerHTML = clusters.map(b => {
         const seen = b.last_seen ? new Date(b.last_seen * 1000).toLocaleString() : "—";
-        const errShort = (b.error_msg || "").substring(0, 35);
-        return `<tr><td style="font-family:monospace;">${b.domain}</td><td>${b.client_ip||"—"}</td><td style="font-size:0.8rem;color:var(--text-secondary);">${errShort}</td><td style="font-size:0.8rem;">${seen}</td><td>${b.occurrence_count}</td><td style="text-align:right;white-space:nowrap;"><button class="btn-primary" style="padding:0.2rem 0.5rem;font-size:0.8rem;" onclick="approvePendingBypass('${b.domain}')">Approve</button><button class="btn-secondary" style="padding:0.2rem 0.5rem;font-size:0.8rem;margin-left:0.2rem;" onclick="rejectPendingBypass('${b.domain}')">Reject</button></td></tr>`;
+        const observed = (b.observed_domains || []).map(o =>
+          `<span style="display:inline-block;background:var(--surface);padding:0.1rem 0.4rem;margin:0.1rem;border-radius:4px;font-family:monospace;font-size:0.72rem;">${o.domain} <span style="color:var(--text-secondary);">x${o.count}</span></span>`
+        ).join('');
+        return `<tr>
+          <td style="font-family:monospace;font-weight:600;">${b.base_domain}</td>
+          <td>${b.total_occurrences}</td>
+          <td style="max-width:420px;">${observed || "—"}</td>
+          <td style="font-size:0.8rem;">${seen}</td>
+          <td style="text-align:right;white-space:nowrap;">
+            <button class="btn-primary" style="padding:0.2rem 0.5rem;font-size:0.78rem;" title="Persists only the exact failing SNI domains (web versions stay inspectable)" onclick="approvePendingBypass('${b.base_domain}','exact')">Approve Exact</button>
+            <button class="btn-secondary" style="padding:0.2rem 0.5rem;font-size:0.78rem;margin-left:0.2rem;" title="Persists the whole registrable domain — also bypasses web traffic on it" onclick="approvePendingBypass('${b.base_domain}','all')">Approve All</button>
+            <button class="btn-secondary" style="padding:0.2rem 0.5rem;font-size:0.78rem;margin-left:0.2rem;color:var(--danger);" onclick="rejectPendingBypass('${b.base_domain}')">Reject</button>
+          </td>
+        </tr>`;
       }).join('');
     }
-    renderPagination("pb-pagination", page, d.total_pages || 1, "loadTPPending");
+    renderPagination("pb-pagination", 1, 1, "loadTPPending");
   } catch (_) {
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-secondary);">Error</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-secondary);">Error</td></tr>';
+  }
+}
+
+async function setPinningThreshold(value) {
+  const v = parseInt(value, 10);
+  if (!v || v < 2 || v > 7) { showToast("Threshold must be 2-7", "danger"); loadTPPending(); return; }
+  try {
+    const r = await fetch("/api/config/setup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pinning_min_occurrences: String(v) }) });
+    if (r.ok) { showToast("Threshold set to " + v, "success"); loadTPPending(); }
+    else { showToast("Failed to save threshold", "danger"); loadTPPending(); }
+  } catch (_) { showToast("Error saving threshold", "danger"); loadTPPending(); }
+}
+
+async function exportPendingBypasses() {
+  try {
+    const r = await fetch("/api/pending-bypasses/export");
+    if (!r.ok) { showToast("Export failed", "danger"); return; }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "pinning_waitlist_export.csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showToast("Export downloaded", "success");
+  } catch (_) {
+    showToast("Error exporting", "danger");
   }
 }
 
@@ -2595,11 +2648,11 @@ function startDashboardPolling() {
       loadPinnedDisplay().catch(() => {});
       // 5. Update pending bypass count badge (lightweight — only badge text)
       try {
-        const pbResp = await fetch("/api/pending-bypasses?page=1&per_page=1");
+        const pbResp = await fetch("/api/pending-bypasses");
         const pbData = await pbResp.json();
         const badge = document.getElementById("pending-bypass-count");
         if (badge) {
-          const total = pbData.total || (pbData.pending ? pbData.pending.length : 0);
+          const total = pbData.pending ? pbData.pending.length : 0;
           badge.textContent = total + " pending";
           badge.style.display = total > 0 ? "inline-block" : "none";
         }

@@ -64,9 +64,23 @@
     <div class="card-header">
       <div>
         <div class="card-title"><i class="fa-solid fa-clock" style="margin-right: 0.5rem;"></i> SSL Pinning Bypass Waitlist</div>
-        <div class="card-subtitle">Domains detected with certificate pinning — awaiting admin review</div>
+        <div class="card-subtitle">Pinning-symptom failures grouped by registrable domain (threshold: <span id="pb-threshold-label">3</span> detections)</div>
       </div>
       <span id="pending-bypass-count" class="category-badge" style="display:none; background: var(--warning);">0 pending</span>
+      <div style="display:flex; align-items:center; gap:0.4rem;">
+        <label style="font-size:0.8rem; color:var(--text-secondary);">Threshold</label>
+        <select id="pb-threshold" style="padding:0.25rem; border-radius:6px; font-size:0.8rem;" onchange="setPinningThreshold(this.value)">
+          <option value="2">2</option>
+          <option value="3" selected>3</option>
+          <option value="4">4</option>
+          <option value="5">5</option>
+          <option value="6">6</option>
+          <option value="7">7</option>
+        </select>
+      </div>
+      <button class="btn-secondary" onclick="exportPendingBypasses()" style="padding: 0.3rem 0.6rem; font-size: 0.8rem; white-space: nowrap;">
+        <i class="fa-solid fa-download"></i> Export
+      </button>
       <button class="btn-secondary" onclick="clearPendingBypasses()" style="padding: 0.3rem 0.6rem; font-size: 0.8rem; white-space: nowrap;">
         <i class="fa-solid fa-trash"></i> Clear Pending
       </button>
@@ -75,20 +89,18 @@
       <table class="traffic-table" id="pending-bypass-table">
         <thead>
           <tr>
-            <th>Domain</th>
-            <th>Client IP</th>
-            <th>Error</th>
-            <th>Seen</th>
-            <th>Count</th>
+            <th>Base Domain</th>
+            <th>Detections</th>
+            <th>Observed (pinning-failing) Subdomains</th>
+            <th>Last Seen</th>
             <th style="text-align: right;">Actions</th>
           </tr>
         </thead>
         <tbody id="pending-bypass-table-body">
-              <tr><td colspan="6" style="text-align: center; color: var(--text-secondary);">Loading...</td></tr>
+              <tr><td colspan="5" style="text-align: center; color: var(--text-secondary);">Loading...</td></tr>
         </tbody>
       </table>
     </div>
-    <div class="pagination-row" id="pb-pagination" style="display: flex; justify-content: center; align-items: center; gap: 0.5rem; margin-top: 0.75rem; font-size: 0.85rem; color: var(--text-secondary);"></div>
     <div id="pending-bypass-empty" style="text-align: center; color: var(--text-secondary); padding: 2rem; display: none;">
       <i class="fa-solid fa-circle-check" style="font-size: 2rem; color: var(--success); margin-bottom: 0.5rem;"></i>
       <div>No pending bypass requests — all clear</div>
