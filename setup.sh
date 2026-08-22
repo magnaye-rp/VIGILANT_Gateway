@@ -353,22 +353,35 @@ EOF
         echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
     fi
     
-    # Flush existing NAT rules to prevent duplicates
+    # Flush existing rules across tables to ensure a clean slate
     iptables -F
     iptables -t nat -F
+    iptables -t mangle -F
     
-    log_info "Applying NAT Masquerade rules for downstream 172.20.10.0/24..."
+    log_info "Applying NAT Masquerade rules for downstream LAN traffic..."
     iptables -t nat -A POSTROUTING -o "$WAN_INTERFACE" -j MASQUERADE
 
-    # Intercept DNS and redirect transparently
+    # Ignore loopback traffic
+    iptables -t nat -A PREROUTING -i lo -j ACCEPT
+
+    # CRITICAL: Exclude mitmproxy service user outbound traffic from loopback redirection
+    # This prevents outbound proxied connections from causing infinite redirection loops/timeouts
+    if id "$VIGILANT_USER" &>/dev/null; then
+        log_info "Exempting service user '$VIGILANT_USER' from PREROUTING redirection..."
+        iptables -t nat -A PREROUTING -m owner --uid-owner "$VIGILANT_USER" -j ACCEPT
+    fi
+
+    # Transparently intercept DNS queries
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p udp --dport 53 -j REDIRECT --to-ports 53
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 53 -j REDIRECT --to-ports 53
 
-    # Redirect Web traffic into mitmproxy (Port 8080)
+    # Transparently intercept HTTP (80) and HTTPS (443) into mitmproxy (Port 8080)
+    log_info "Configuring transparent interception rules for ports 80 & 443..."
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 80 -j REDIRECT --to-ports 8080
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 443 -j REDIRECT --to-ports 8080
     
-    # Drop QUIC and encrypted DNS to force HTTPS/TLS fallback through proxy
+    # Drop QUIC (HTTP/3 over UDP) and DoT (DNS-over-TLS) to force TCP HTTP/HTTPS through proxy
+    log_info "Blocking QUIC and DoT to enforce HTTP/TLS fallback..."
     iptables -A FORWARD -i "$LAN_INTERFACE" -p udp --dport 443 -j DROP
     iptables -A FORWARD -i "$LAN_INTERFACE" -p udp --dport 80 -j DROP
     iptables -A FORWARD -i "$LAN_INTERFACE" -p tcp --dport 853 -j REJECT
@@ -378,12 +391,13 @@ EOF
     ip6tables -P FORWARD DROP 2>/dev/null || true
 
     # Forwarding state rules
-    iptables -A FORWARD -i "$LAN_INTERFACE" -o "$WAN_INTERFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
+    iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
     iptables -A FORWARD -i "$LAN_INTERFACE" -o "$WAN_INTERFACE" -j ACCEPT
 
     if command -v netfilter-persistent &>/dev/null; then
         netfilter-persistent save > /dev/null
     else
+        mkdir -p /etc/iptables
         iptables-save > /etc/iptables/rules.v4
     fi
     log_success "NAT routing rules persistently applied"
