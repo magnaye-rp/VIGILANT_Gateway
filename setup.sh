@@ -364,11 +364,10 @@ EOF
     # Ignore loopback traffic
     iptables -t nat -A PREROUTING -i lo -j ACCEPT
 
-    # CRITICAL: Exclude mitmproxy service user outbound traffic from loopback redirection
-    # This prevents outbound proxied connections from causing infinite redirection loops/timeouts
+    # Prevent loopbacks: Exempt local process traffic in the OUTPUT chain (where uid-owner is valid)
     if id "$VIGILANT_USER" &>/dev/null; then
-        log_info "Exempting service user '$VIGILANT_USER' from PREROUTING redirection..."
-        iptables -t nat -A PREROUTING -m owner --uid-owner "$VIGILANT_USER" -j ACCEPT
+        log_info "Exempting service user '$VIGILANT_USER' from NAT OUTPUT loops..."
+        iptables -t nat -A OUTPUT -m owner --uid-owner "$VIGILANT_USER" -j ACCEPT
     fi
 
     # Transparently intercept DNS queries
