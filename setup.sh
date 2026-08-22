@@ -506,7 +506,7 @@ ExecStart=$VIGILANT_HOME/venv/bin/mitmdump \
     --showhost \
     --set block_global=false \
     --set connection_strategy=eager \
-    --set connection_timeout_upstream=5 \
+    --set connection_timeout_upstream=15 \
     -s $VIGILANT_HOME/src/vigilant_addon.py
 Restart=always
 RestartSec=5
