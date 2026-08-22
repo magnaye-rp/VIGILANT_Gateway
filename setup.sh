@@ -372,7 +372,9 @@ EOF
     iptables -F
     iptables -t nat -F
     iptables -t mangle -F
-    
+    iptables -X
+    iptables -t nat -X
+
     log_info "Applying NAT Masquerade rules for downstream LAN traffic..."
     iptables -t nat -A POSTROUTING -o "$WAN_INTERFACE" -j MASQUERADE
 
@@ -384,6 +386,15 @@ EOF
         log_info "Exempting service user '$VIGILANT_USER' from NAT OUTPUT loops..."
         iptables -t nat -A OUTPUT -m owner --uid-owner "$VIGILANT_USER" -j ACCEPT
     fi
+
+    # Accept traffic bound for local gateway IP on port 8080/8081 directly
+    iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 8080 -j ACCEPT
+    iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 8081 -j ACCEPT
+
+    # Bypass Apple 17.0.0.0/8 traffic to prevent SSL pinning breakage on Apple devices
+    log_info "Configuring SSL pinning exceptions (Apple range 17.0.0.0/8)..."
+    iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -d 17.0.0.0/8 -p tcp --dport 80 -j ACCEPT
+    iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -d 17.0.0.0/8 -p tcp --dport 443 -j ACCEPT
 
     # Transparently intercept DNS queries
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p udp --dport 53 -j REDIRECT --to-ports 53
@@ -408,6 +419,7 @@ EOF
     iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
     iptables -A FORWARD -i "$LAN_INTERFACE" -o "$WAN_INTERFACE" -j ACCEPT
 
+    # Persist rules to disk
     if command -v netfilter-persistent &>/dev/null; then
         netfilter-persistent save > /dev/null
     else
