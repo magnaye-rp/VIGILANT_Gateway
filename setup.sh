@@ -501,15 +501,19 @@ Environment=PYTHONUNBUFFERED=1
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 ExecStart=$VIGILANT_HOME/venv/bin/mitmdump \
-    --mode transparent@8080 \
-    --mode transparent@8081 \
-    --showhost \
-    --set block_global=false \
-    --set connection_strategy=eager \
-    --set connection_timeout_upstream=15 \
-    -s $VIGILANT_HOME/src/vigilant_addon.py
+  --mode transparent@8080 \
+  --mode transparent@8081 \
+  --showhost \
+  --listen-host 0.0.0.0 \
+  --set block_global=false \
+  --set connection_strategy=eager \
+  --set connection_timeout_upstream=30 \
+  --set stream_large_bodies=1m \
+  -s $VIGILANT_HOME/src/vigilant_addon.py
 Restart=always
 RestartSec=5
+StandardOutput=append:$VIGILANT_HOME/logs/proxy.log
+StandardError=append:$VIGILANT_HOME/logs/proxy.log
 
 [Install]
 WantedBy=multi-user.target
@@ -531,6 +535,26 @@ RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
+EOF
+
+# Apply persistent Linux networking and socket backlogs for high concurrency
+    cat << 'EOF' | sudo tee /etc/sysctl.d/99-vigilant-tuning.conf
+net.core.somaxconn = 65535
+net.ipv4.tcp_max_syn_backlog = 65535
+fs.file-max = 2097152
+net.ipv4.tcp_tw_reuse = 1
+net.ipv4.tcp_fin_timeout = 15
+net.netfilter.nf_conntrack_max = 131072
+EOF
+
+sudo sysctl --system
+
+# Set open file limits for mitmdump socket handling
+    cat << 'EOF' | sudo tee /etc/security/limits.d/99-vigilant-limits.conf
+* soft nofile 65536
+* hard nofile 65536
+root soft nofile 65536
+root hard nofile 65536
 EOF
 
     mkdir -p /home/$VIGILANT_USER/.mitmproxy

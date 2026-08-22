@@ -7,18 +7,21 @@ Wants=dnsmasq.service
 Type=simple
 User=vigilant-admin
 WorkingDirectory=/home/vigilant-admin/vigilant_gateway
-ExecStart=/home/vigilant-admin/vigilant_gateway/venv/bin/mitmdump \
-  --mode transparent \
-  --showhost \
-  --listen-host 0.0.0.0 \
-  --listen-port 8080 \
-  --set block_global=false \
-  --set ignore_hosts='^(.*\.)?(facebook|twitter|x|tiktok|instagram|reddit|youtube)\.com$' \
-  -s /home/vigilant-admin/vigilant_gateway/src/vigilant_addon.py
-Restart=on-failure
-RestartSec=5
+Environment=PYTHONUNBUFFERED=1
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+ExecStart=/home/vigilant-admin/vigilant_gateway/venv/bin/mitmdump \
+  --mode transparent@8080 \
+  --mode transparent@8081 \
+  --showhost \
+  --listen-host 0.0.0.0 \
+  --set block_global=false \
+  --set connection_strategy=eager \
+  --set connection_timeout_upstream=30 \
+  --set stream_large_bodies=1m \
+  -s /home/vigilant-admin/vigilant_gateway/src/vigilant_addon.py
+Restart=always
+RestartSec=5
 StandardOutput=append:/home/vigilant-admin/vigilant_gateway/logs/proxy.log
 StandardError=append:/home/vigilant-admin/vigilant_gateway/logs/proxy.log
 

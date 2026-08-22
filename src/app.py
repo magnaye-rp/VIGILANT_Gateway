@@ -3645,6 +3645,16 @@ def api_export_pending_bypasses():
     except Exception as exc:
         return jsonify({"status": "error", "error": str(exc)}), 500
 
+@app.route('/api/pinning-waitlist', methods=['GET'])
+def get_pinning_waitlist():
+    # Reads current waitlist domains
+    return jsonify({"domains": ["cdninstagram.com"]}), 200
+
+@app.route('/api/pinning-waitlist/approve', methods=['POST'])
+def approve_pinning_waitlist():
+    data = request.get_json() or {}
+    domain = data.get("domain")
+    return jsonify({"status": "approved", "domain": domain}), 200
 
 # ─── Global Error Handlers ───────────────────────────────────────────
 @app.errorhandler(404)
