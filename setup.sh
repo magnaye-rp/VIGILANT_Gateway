@@ -374,9 +374,8 @@ EOF
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p udp --dport 53 -j REDIRECT --to-ports 53
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 53 -j REDIRECT --to-ports 53
 
-    # Transparently intercept HTTP (80) and HTTPS (443) into mitmproxy (Port 8080)
+    # Transparently intercept HTTP (80) -> 8080 and HTTPS (443) -> 8081
     log_info "Configuring transparent interception rules for ports 80 & 443..."
-    iptables -t nat -A PREROUTING -m owner --uid-owner vigilant-admin -j ACCEPT
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 80 -j REDIRECT --to-ports 8080
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 443 -j REDIRECT --to-ports 8081
     
