@@ -377,7 +377,7 @@ EOF
     # Transparently intercept HTTP (80) and HTTPS (443) into mitmproxy (Port 8080)
     log_info "Configuring transparent interception rules for ports 80 & 443..."
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 80 -j REDIRECT --to-ports 8080
-    iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 443 -j REDIRECT --to-ports 8080
+    iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 443 -j REDIRECT --to-ports 8081
     
     # Drop QUIC (HTTP/3 over UDP) and DoT (DNS-over-TLS) to force TCP HTTP/HTTPS through proxy
     log_info "Blocking QUIC and DoT to enforce HTTP/TLS fallback..."
@@ -474,10 +474,9 @@ Environment=PYTHONUNBUFFERED=1
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 ExecStart=$VIGILANT_HOME/venv/bin/mitmdump \
-    --mode transparent \
+    --mode transparent@8080 \
+    --mode transparent@8081 \
     --showhost \
-    --listen-host 0.0.0.0 \
-    --listen-port 8080 \
     --set block_global=false \
     --set connection_strategy=lazy \
     -s $VIGILANT_HOME/src/vigilant_addon.py
