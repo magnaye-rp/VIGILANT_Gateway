@@ -347,18 +347,28 @@ LAN_INTERFACE=$LAN_INTERFACE
 EOF
     chown "$VIGILANT_USER:$VIGILANT_USER" "$VIGILANT_HOME/.env"
 
-    log_info "Enabling IPv4 packet forwarding..."
+    log_info "Enabling IPv4 packet forwarding & disabling IPv6..."
     sysctl -w net.ipv4.ip_forward=1 > /dev/null
+    sysctl -w net.ipv6.conf.all.disable_ipv6=1 > /dev/null
+    sysctl -w net.ipv6.conf.default.disable_ipv6=1 > /dev/null
+    sysctl -w net.ipv6.conf.lo.disable_ipv6=1 > /dev/null
+
+    # Persist sysctl parameters
     if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
         echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
     fi
+    if ! grep -q "net.ipv6.conf.all.disable_ipv6=1" /etc/sysctl.conf; then
+        echo "net.ipv6.conf.all.disable_ipv6=1" >> /etc/sysctl.conf
+        echo "net.ipv6.conf.default.disable_ipv6=1" >> /etc/sysctl.conf
+        echo "net.ipv6.conf.lo.disable_ipv6=1" >> /etc/sysctl.conf
+    fi
     
-    # Set default policies to ACCEPT before flushing to prevent dropping active packets
+    # Set default policies to ACCEPT before flushing to prevent dropping active traffic
     iptables -P INPUT ACCEPT
     iptables -P FORWARD ACCEPT
     iptables -P OUTPUT ACCEPT
 
-    # Flush existing rules across tables
+    # Flush all rules across tables
     iptables -F
     iptables -t nat -F
     iptables -t mangle -F
@@ -369,7 +379,7 @@ EOF
     # Ignore loopback traffic in PREROUTING
     iptables -t nat -A PREROUTING -i lo -j ACCEPT
 
-    # Prevent local process loops in OUTPUT chain (valid for -m owner)
+    # Prevent local process loops for service user
     if id "$VIGILANT_USER" &>/dev/null; then
         log_info "Exempting service user '$VIGILANT_USER' from NAT OUTPUT loops..."
         iptables -t nat -A OUTPUT -m owner --uid-owner "$VIGILANT_USER" -j ACCEPT
@@ -380,7 +390,7 @@ EOF
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 53 -j REDIRECT --to-ports 53
 
     # Transparently intercept HTTP (80) -> 8080 and HTTPS (443) -> 8081 from LAN
-    log_info "Configuring transparent interception rules for ports 80 & 443..."
+    log_info "Configuring transparent interception rules for ports 80 -> 8080 & 443 -> 8081..."
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 80 -j REDIRECT --to-ports 8080
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 443 -j REDIRECT --to-ports 8081
     
@@ -451,7 +461,7 @@ stage_9_systemd_services() {
     log_info "STAGE 9: SYSTEMD SERVICES"
     log_info "═══════════════════════════════════════════"
 
-cat << EOF > /etc/systemd/system/vigilant-firewall.service
+    cat << EOF > /etc/systemd/system/vigilant-firewall.service
 [Unit]
 Description=VIGILANT Firewall Rules
 After=network.target
@@ -483,7 +493,8 @@ ExecStart=$VIGILANT_HOME/venv/bin/mitmdump \
     --mode transparent@8081 \
     --showhost \
     --set block_global=false \
-    --set connection_strategy=lazy \
+    --set connection_strategy=eager \
+    --set connection_timeout_upstream=5 \
     -s $VIGILANT_HOME/src/vigilant_addon.py
 Restart=always
 RestartSec=5
