@@ -353,7 +353,12 @@ EOF
         echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
     fi
     
-    # Flush existing rules across tables to ensure a clean slate
+    # Set default policies to ACCEPT before flushing to prevent dropping active packets
+    iptables -P INPUT ACCEPT
+    iptables -P FORWARD ACCEPT
+    iptables -P OUTPUT ACCEPT
+
+    # Flush existing rules across tables
     iptables -F
     iptables -t nat -F
     iptables -t mangle -F
@@ -361,10 +366,10 @@ EOF
     log_info "Applying NAT Masquerade rules for downstream LAN traffic..."
     iptables -t nat -A POSTROUTING -o "$WAN_INTERFACE" -j MASQUERADE
 
-    # Ignore loopback traffic
+    # Ignore loopback traffic in PREROUTING
     iptables -t nat -A PREROUTING -i lo -j ACCEPT
 
-    # Prevent loopbacks: Exempt local process traffic in the OUTPUT chain (where uid-owner is valid)
+    # Prevent local process loops in OUTPUT chain (valid for -m owner)
     if id "$VIGILANT_USER" &>/dev/null; then
         log_info "Exempting service user '$VIGILANT_USER' from NAT OUTPUT loops..."
         iptables -t nat -A OUTPUT -m owner --uid-owner "$VIGILANT_USER" -j ACCEPT
@@ -374,7 +379,7 @@ EOF
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p udp --dport 53 -j REDIRECT --to-ports 53
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 53 -j REDIRECT --to-ports 53
 
-    # Transparently intercept HTTP (80) -> 8080 and HTTPS (443) -> 8081
+    # Transparently intercept HTTP (80) -> 8080 and HTTPS (443) -> 8081 from LAN
     log_info "Configuring transparent interception rules for ports 80 & 443..."
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 80 -j REDIRECT --to-ports 8080
     iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -p tcp --dport 443 -j REDIRECT --to-ports 8081
