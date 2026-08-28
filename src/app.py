@@ -3364,7 +3364,8 @@ def get_nerve_center_metrics():
             "throttled_count": throttled_count,
             "nlp_status": nlp_status,
             "upstream_interface": upstream_interface,
-            "distribution_interface": distribution_interface
+            "distribution_interface": distribution_interface,
+            "uptime": _format_uptime()
         })
     except Exception as exc:
         app.logger.error("Failed to get nerve center metrics: %s", exc)
@@ -3373,7 +3374,8 @@ def get_nerve_center_metrics():
             "throttled_count": 0,
             "nlp_status": "Unknown",
             "upstream_interface": "Unknown",
-            "distribution_interface": "Unknown"
+            "distribution_interface": "Unknown",
+            "uptime": "0h 0m"
         })
 
 

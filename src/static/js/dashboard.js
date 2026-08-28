@@ -2579,10 +2579,10 @@ function startDashboardPolling() {
           if (nlpStatus && nerveData.nlp_status) {
             nlpStatus.textContent = nerveData.nlp_status;
           }
-          // Use auto-detected system interfaces for the interface mode display
-          const interfaceMode = document.getElementById('nerve-interface-mode');
-          if (interfaceMode && nerveData.upstream_interface && nerveData.distribution_interface) {
-            interfaceMode.textContent = `${nerveData.upstream_interface} → ${nerveData.distribution_interface}`;
+          // Use server uptime display instead of interface mode
+          const serverUptime = document.getElementById('nerve-uptime');
+          if (serverUptime && nerveData.uptime) {
+            serverUptime.textContent = nerveData.uptime;
           }
         }
       } catch (error) {
