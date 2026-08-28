@@ -2873,6 +2873,14 @@ class VIGILANTAddon:
         config = load_proxy_config()
         threshold = float(config.get('tfidf_classification_threshold', 0.15))
         tfidf_category, _tfidf_scores = tfidf_classifier.classify(body_text, threshold=threshold)
+
+        # Apply utility context guard to prevent false positives on search/utility domains
+        if tfidf_category == "Harmful":
+            utility_terms = {"git", "code", "dev", "assets", "static", "github", "google", "microsoft", "apple"}
+            text_lower = body_text.lower()
+            if any(term in text_lower for term in utility_terms) or "google" in clean_host:
+                tfidf_category = "Educational"
+
         if tfidf_category == "Harmful":
             print(f"[VIGILANT] RESPONSE TF-IDF BLOCKED: {host} classified Harmful")
             log_request(client_ip, host, path, method, "Harmful", True, [], "TFIDF_HARMFUL")
