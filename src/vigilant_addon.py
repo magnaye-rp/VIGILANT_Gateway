@@ -1628,7 +1628,7 @@ def categorize_content(text, host=""):
 
     # Utility context guard for Harmful classification
     if category == "Harmful":
-        utility_terms = {"git", "code", "dev", "assets", "static", "github", "google", "microsoft", "apple"}
+        utility_terms = {"git", "code", "dev", "assets", "static", "github", "microsoft", "apple"}
         text_lower = text.lower()
         has_utility_context = any(term in text_lower for term in utility_terms)
         if has_utility_context:
@@ -2870,16 +2870,17 @@ class VIGILANTAddon:
             print(f"[VIGILANT] Response keyword blacklist check failed: {e}")
 
         # ── Stage B — TF-IDF vectorizer scan ──
+        # Strip HTML boilerplate tags (footer, nav, header) before classification
+        # to prevent false positives from incidental words like "Report abuse" in
+        # Google's footer or legal/navigation boilerplate on utility sites.
+        clean_body = re.sub(
+            r'<(footer|nav|header)\b[^>]*>.*?</\1>',
+            '', body_text, flags=re.DOTALL | re.IGNORECASE
+        )
+
         config = load_proxy_config()
         threshold = float(config.get('tfidf_classification_threshold', 0.15))
-        tfidf_category, _tfidf_scores = tfidf_classifier.classify(body_text, threshold=threshold)
-
-        # Apply utility context guard to prevent false positives on search/utility domains
-        if tfidf_category == "Harmful":
-            utility_terms = {"git", "code", "dev", "assets", "static", "github", "google", "microsoft", "apple"}
-            text_lower = body_text.lower()
-            if any(term in text_lower for term in utility_terms) or "google" in clean_host:
-                tfidf_category = "Educational"
+        tfidf_category, _tfidf_scores = tfidf_classifier.classify(clean_body, threshold=threshold)
 
         if tfidf_category == "Harmful":
             print(f"[VIGILANT] RESPONSE TF-IDF BLOCKED: {host} classified Harmful")
