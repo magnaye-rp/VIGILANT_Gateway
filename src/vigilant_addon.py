@@ -2291,17 +2291,32 @@ _BLOCK_PAGE_TEMPLATE = """<!DOCTYPE html>
 </html>"""
 
 
-def render_block_page(host: str, category: str = "Harmful") -> bytes:
+def render_block_page(host: str, category: str = "Harmful", debug_info: str = "") -> bytes:
     """
     Builds the styled block/flagged page shown to the user. Returns
     UTF-8 encoded bytes ready to hand to http.Response.make().
     """
     explanation = _CATEGORY_EXPLANATIONS.get(category, _DEFAULT_EXPLANATION)
+    debug_html = ""
+    if debug_info:
+        # Escape HTML special chars to safely embed raw text
+        import html as _html
+        safe = _html.escape(debug_info)
+        debug_html = (
+            '<details style="margin-top:1.25rem;text-align:left;border-top:1px solid rgba(255,255,255,0.15);padding-top:1rem;">'
+            '<summary style="cursor:pointer;font-size:12px;color:#43B3AE;font-weight:600;">DEBUG: TF-IDF Input</summary>'
+            '<pre style="font-size:11px;color:#c7cacd;white-space:pre-wrap;word-break:break-all;'
+            'max-height:300px;overflow:auto;margin-top:.5rem;background:rgba(0,0,0,0.25);padding:8px;border-radius:6px;">'
+            f'{safe}</pre></details>'
+        )
     html = _BLOCK_PAGE_TEMPLATE.format(
         host=host or "this page",
         category=category or "Flagged",
         explanation=explanation,
     )
+    # Inject debug section before closing </div></body>
+    if debug_html:
+        html = html.replace("</div>\n</body>", f"{debug_html}\n</div>\n</body>")
     return html.encode("utf-8")
 
 
@@ -2886,16 +2901,26 @@ class VIGILANTAddon:
             '', body_text, flags=re.DOTALL | re.IGNORECASE
         )
 
+        # Strip known search-engine boilerplate phrases
+        for pat in BOILERPLATE_PATTERNS:
+            clean_body = re.sub(pat, ' ', clean_body, flags=re.IGNORECASE)
+
+        # ── TEMPORARY DEBUG: Log what the classifier actually sees ──
+        tfidf_input_snippet = clean_body[:500]
+        print("--- TF-IDF INPUT START ---")
+        print(tfidf_input_snippet)
+        print("--- TF-IDF INPUT END ---")
+
         config = load_proxy_config()
         threshold = float(config.get('tfidf_classification_threshold', 0.15))
         tfidf_category, _tfidf_scores = tfidf_classifier.classify(clean_body, threshold=threshold)
 
         if tfidf_category == "Harmful":
-            print(f"[VIGILANT] RESPONSE TF-IDF BLOCKED: {host} classified Harmful")
+            print(f"[VIGILANT] RESPONSE TF-IDF BLOCKED: {host} classified Harmful  scores={_tfidf_scores}")
             log_request(client_ip, host, path, method, "Harmful", True, [], "TFIDF_HARMFUL")
             flow.response = http.Response.make(
                 403,
-                render_block_page(host, "Harmful"),
+                render_block_page(host, "Harmful", debug_info=tfidf_input_snippet),
                 {"Content-Type": "text/html"}
             )
             return
