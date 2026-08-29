@@ -1500,41 +1500,40 @@ def normalize_text_simple(text: str) -> str:
     return re.sub(r'\s+', ' ', collapsed).strip()
 
 
-# Pre-compiled regexes for fast_extract_text (compiled once at import time)
-_RE_STRIP_BLOCKS = re.compile(
-    r'<(script|style|head|footer|nav|header|noscript)\b[^>]*>.*?</\1>',
-    re.DOTALL | re.IGNORECASE
-)
-_RE_STRIP_META = re.compile(r'<meta\b[^>]*/?>',  re.IGNORECASE)
-_RE_STRIP_TAGS = re.compile(r'<[^>]+>')
-_RE_COLLAPSE_WS = re.compile(r'\s+')
+# Pre-compiled regexes with re.DOTALL (re.S) and flexible attribute matching
+# .*? coupled with re.DOTALL forces the engine to match every character
+# between the opening and closing tag, including newlines.
+# \b[^>]* ensures tags are matched regardless of attributes like nonce="...".
+RE_SCRIPT = re.compile(r'<script\b[^>]*>.*?</script>', re.IGNORECASE | re.DOTALL)
+RE_STYLE  = re.compile(r'<style\b[^>]*>.*?</style>',   re.IGNORECASE | re.DOTALL)
+RE_HEAD   = re.compile(r'<head\b[^>]*>.*?</head>',     re.IGNORECASE | re.DOTALL)
+RE_GENERIC_TAGS = re.compile(r'<[^>]+>')
+RE_EXTRA_SPACES = re.compile(r'\s+')
 
 
-def fast_extract_text(raw_html: str) -> str:
+def fast_extract_text(html_text: str) -> str:
     """Extract visible text from an HTML string.
 
-    Strips <script>, <style>, <head>, <footer>, <nav>, <header>,
-    <noscript>, and <meta> blocks first, then removes all remaining
-    HTML tags and collapses whitespace.  Also strips boilerplate
-    phrases defined in BOILERPLATE_PATTERNS.
+    1. Strips full <script>, <style>, and <head> blocks (including
+       contents that span multiple lines) — these carry no visible
+       user content and pollute the TF-IDF feature vector.
+    2. Strips all remaining HTML tags.
+    3. Collapses multiple spaces / newlines into a single clean space.
 
     This is intentionally regex-based (no external parser) to keep
     latency under 1 ms on a 20 KB input.
     """
-    if not raw_html:
+    if not html_text:
         return ""
-    # 1. Remove entire block-level tags and their contents
-    text = _RE_STRIP_BLOCKS.sub(' ', raw_html)
-    # 2. Remove self-closing <meta .../> tags
-    text = _RE_STRIP_META.sub(' ', text)
-    # 3. Remove all remaining HTML tags
-    text = _RE_STRIP_TAGS.sub(' ', text)
-    # 4. Strip known boilerplate phrases
-    for pat in BOILERPLATE_PATTERNS:
-        text = re.sub(pat, ' ', text, flags=re.IGNORECASE)
-    # 5. Collapse whitespace
-    text = _RE_COLLAPSE_WS.sub(' ', text).strip()
-    return text
+    # 1. Strip full script, style, and head blocks (including contents across newlines)
+    text = RE_SCRIPT.sub(' ', html_text)
+    text = RE_STYLE.sub(' ', text)
+    text = RE_HEAD.sub(' ', text)
+    # 2. Strip all remaining HTML tags
+    text = RE_GENERIC_TAGS.sub(' ', text)
+    # 3. Collapse multiple spaces/newlines into a single clean space
+    clean_text = RE_EXTRA_SPACES.sub(' ', text).strip()
+    return clean_text
 
 
 def normalize_query(text: str) -> str:
