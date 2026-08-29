@@ -91,6 +91,7 @@ _engagement_lock = threading.Lock()
 _previous_rate = {}
 _engagement_low_activity_since = defaultdict(float)  # client_ip → when RPM first dropped below baseline
 _engaged_log_times = {}  # client_ip → last "Engaged:" log timestamp (rate-limited)
+_throttle_mutation_lock = threading.RLock()  # Prevents concurrent evaluation, cleanup, and TC mutations
 
 # Level → tc rate
 ENGAGEMENT_LEVEL_RATE = {
@@ -1116,6 +1117,121 @@ def _mark_client_throttled(client_ip):
         return True
 
 
+def _reset_client_session(client_ip: str):
+    """Atomically reset all session timestamps, counters, and engagement levels for a client.
+    Ensures that when a throttle is released or cleared (due to idle timeout, low activity,
+    or manual release), session start_time, last_seen/last_request, accumulated minutes, and
+    level are simultaneously reset to zero/None."""
+    with _engagement_lock:
+        _engagement_start[client_ip] = 0.0
+        _engagement_minutes[client_ip] = 0.0
+        _engagement_last_request[client_ip] = 0.0
+        _engagement_current_level[client_ip] = CB_LEVEL_NONE
+        _engagement_low_activity_since.pop(client_ip, None)
+        _engaged_log_times.pop(client_ip, None)
+
+    _previous_rate.pop(client_ip, None)
+
+    with velocity_lock:
+        social_session_start[client_ip] = 0.0
+        social_session_totals[client_ip] = 0
+        social_request_history.pop(client_ip, None)
+        _social_low_activity_since.pop(client_ip, None)
+        session_start[client_ip] = 0.0
+        session_totals[client_ip] = 0
+        request_history.pop(client_ip, None)
+
+
+def _cleanup_throttle(client_ip: str, reason: str = "idle"):
+    """Safely and atomically remove throttle and reset all session timestamps and state.
+    Protected by _throttle_mutation_lock to prevent collisions with engagement evaluation."""
+    with _throttle_mutation_lock:
+        with _engagement_lock:
+            old_level = _engagement_current_level.get(client_ip, 0)
+
+        if old_level > 0:
+            print(f"[VIGILANT] ENGAGEMENT RESET ({reason}): {client_ip}, releasing")
+            log_throttle(client_ip, "engagement", 0, 0, f"ENGAGEMENT_RESET_{reason.upper().replace(' ', '_')}", f"{reason} reset, releasing")
+            remove_throttle_cycle(client_ip)
+        else:
+            remove_throttle_cycle(client_ip)
+
+        _reset_client_session(client_ip)
+
+
+def _evaluate_engagement(client_ip: str, config: dict, now: float):
+    """Evaluate engagement for a single client IP and apply throttle escalations or resets.
+    Protected by _throttle_mutation_lock to prevent concurrent execution with cleanup."""
+    with _throttle_mutation_lock:
+        with _engagement_lock:
+            started = _engagement_start.get(client_ip, 0.0)
+            if started == 0.0:
+                return
+            last_req = _engagement_last_request.get(client_ip, 0.0)
+            old_level = _engagement_current_level.get(client_ip, 0)
+            mins_accum = _engagement_minutes.get(client_ip, 0.0)
+
+        reset_idle = int(config.get('engagement_reset_idle', ENGAGEMENT_RESET_IDLE))
+        l1_min = int(config.get('engagement_l1_minutes', ENGAGEMENT_L1_MINUTES))
+        l2_min = int(config.get('engagement_l2_minutes', ENGAGEMENT_L2_MINUTES))
+        l3_min = int(config.get('engagement_l3_minutes', ENGAGEMENT_L3_MINUTES))
+        l1_rate = config.get('engagement_l1_rate', ENGAGEMENT_LEVEL_RATE.get(1, '128kbit'))
+        l2_rate = config.get('engagement_l2_rate', ENGAGEMENT_LEVEL_RATE.get(2, '32kbit'))
+        l3_rate = config.get('engagement_l3_rate', ENGAGEMENT_LEVEL_RATE.get(3, '4kbit'))
+
+        idle = (now - last_req) if last_req > 0 else (now - started)
+
+        # ── Check 1: Zero requests for reset_idle ──
+        if last_req > 0 and idle >= reset_idle:
+            _cleanup_throttle(client_ip, reason="idle")
+            return
+
+        # ── Check 2: Low activity for reset_idle ──
+        with velocity_lock:
+            sdq = social_request_history.get(client_ip)
+            recent_req_count = len(sdq) if sdq else 0
+
+        if recent_req_count < 3:
+            with _engagement_lock:
+                low_start = _engagement_low_activity_since.get(client_ip, 0.0)
+                if low_start == 0.0:
+                    _engagement_low_activity_since[client_ip] = now
+                    low_start = now
+            if now - low_start >= reset_idle:
+                _cleanup_throttle(client_ip, reason="low activity")
+                return
+        else:
+            with _engagement_lock:
+                _engagement_low_activity_since.pop(client_ip, None)
+
+        elapsed = (now - started) / 60.0
+        if elapsed > mins_accum:
+            if elapsed >= l3_min:
+                new_level = CB_LEVEL_CIRCUIT_BREAK
+            elif elapsed >= l2_min:
+                new_level = CB_LEVEL_FRICTION
+            elif elapsed >= l1_min:
+                new_level = CB_LEVEL_PAUSE
+            else:
+                new_level = CB_LEVEL_NONE
+
+            with _engagement_lock:
+                _engagement_minutes[client_ip] = elapsed
+                if new_level != old_level:
+                    _engagement_current_level[client_ip] = new_level
+
+            if new_level != old_level and new_level > 0:
+                _engagement_rates = {0: None, 1: l1_rate, 2: l2_rate, 3: l3_rate}
+                rate = _engagement_rates.get(new_level)
+                if rate and _previous_rate.get(client_ip) != rate:
+                    apply_throttle(client_ip, rate=rate)
+                    _previous_rate[client_ip] = rate
+                    save_throttle_state(client_ip, is_throttled=True, recovery_at=0)
+                    _mark_client_throttled(client_ip)
+                    log_throttle(client_ip, "engagement", elapsed, 0, f"ENGAGEMENT_L{new_level}", f"{elapsed:.1f}min → L{new_level} @ {rate}")
+                    print(f"[VIGILANT] ENGAGEMENT {client_ip}: {elapsed:.1f}min → L{new_level} @ {rate}")
+
+
 def _engagement_tracking_loop():
     """Background thread: every 30s, check which devices are engaged in
     social media and update their cumulative engagement minutes.
@@ -1124,33 +1240,16 @@ def _engagement_tracking_loop():
     Thresholds are read from DB config so the dashboard can tune them."""
     while True:
         try:
-            # Read all behavioral params from DB (allows dashboard tuning)
             config = load_proxy_config()
-            l1_min = int(config.get('engagement_l1_minutes', ENGAGEMENT_L1_MINUTES))
-            l2_min = int(config.get('engagement_l2_minutes', ENGAGEMENT_L2_MINUTES))
-            l3_min = int(config.get('engagement_l3_minutes', ENGAGEMENT_L3_MINUTES))
-            reset_idle = int(config.get('engagement_reset_idle', ENGAGEMENT_RESET_IDLE))
-            l1_rate = config.get('engagement_l1_rate', ENGAGEMENT_LEVEL_RATE.get(1, '128kbit'))
-            l2_rate = config.get('engagement_l2_rate', ENGAGEMENT_LEVEL_RATE.get(2, '32kbit'))
-            l3_rate = config.get('engagement_l3_rate', ENGAGEMENT_LEVEL_RATE.get(3, '4kbit'))
             check_interval = int(config.get('engagement_check_interval', 30))
-            
+            reset_idle = int(config.get('engagement_reset_idle', ENGAGEMENT_RESET_IDLE))
             now = time.time()
 
             # ── Low-activity session reset (never-flagged devices) ──
-            # Background app pings (TikTok's icube-api.bytedance.net ~1 req/50s)
-            # keep social_session_start alive without ever reaching the engaged
-            # threshold (2 RPM). Complete-idle reset (below) never fires because
-            # the pings are too frequent. Here we reset the session when social
-            # activity stays BELOW 2 RPM for reset_idle seconds — so a stale
-            # session start cannot inflate engagement minutes and cause an instant
-            # L3 throttle when the user finally picks the device up.
-            # (Benign unlocked .get() on _engagement_start — GIL-atomic in CPython;
-            # taking _engagement_lock here would invert lock order and risk deadlock.)
             with velocity_lock:
                 for ip in list(social_session_start.keys()):
                     if _engagement_start.get(ip, 0) != 0:
-                        continue  # flagged devices are handled by the checks below
+                        continue  # flagged devices are handled by _evaluate_engagement
                     sdq = social_request_history.get(ip)
                     recent = len([t for t in sdq if now - t <= VELOCITY_WINDOW]) if sdq else 0
                     if recent < 2:
@@ -1165,91 +1264,13 @@ def _engagement_tracking_loop():
                     else:
                         _social_low_activity_since.pop(ip, None)
 
+            # Evaluate each active client IP
             with _engagement_lock:
-                for ip in list(_engagement_start.keys()):
-                    started = _engagement_start[ip]
-                    if started == 0:
-                        continue
-                    last_req = _engagement_last_request.get(ip, 0)
-                    idle = now - last_req
+                active_ips = [ip for ip, started in _engagement_start.items() if started != 0]
 
-                    # ── Check 1: Zero requests for reset_idle ──
-                    if idle >= reset_idle:
-                        old_level = _engagement_current_level.get(ip, 0)
-                        if old_level > 0:
-                            print(f"[VIGILANT] ENGAGEMENT RESET (idle): {ip} idle {idle:.0f}s, releasing")
-                            log_throttle(ip, "engagement", 0, 0, "ENGAGEMENT_RESET_IDLE", f"idle {idle:.0f}s, releasing")
-                            _previous_rate.pop(ip, None)
-                            remove_throttle_cycle(ip)
-                        _engagement_start[ip] = 0
-                        _engagement_minutes[ip] = 0
-                        _engagement_current_level[ip] = 0
-                        _engagement_low_activity_since.pop(ip, None)
-                        # Reset social session counters so engagement_min_requests
-                        # threshold applies to each new scrolling session
-                        with velocity_lock:
-                            social_session_totals.pop(ip, None)
-                            social_session_start.pop(ip, None)
-                        continue
+            for ip in active_ips:
+                _evaluate_engagement(ip, config, now)
 
-                    # ── Check 2: Low activity for reset_idle ──
-                    # Background pings (1 RPM) keep _engagement_last_request fresh,
-                    # so the idle check above never fires. We also check the social
-                    # request deque (60s window): if the user has fewer than 3
-                    # requests/min for the entire reset_idle period, they've stopped
-                    # doomscrolling and we should release the throttle.
-                    sdq = social_request_history.get(ip)
-                    recent_req_count = len(sdq) if sdq else 0
-                    if recent_req_count < 3:
-                        low_start = _engagement_low_activity_since.get(ip, 0)
-                        if low_start == 0:
-                            _engagement_low_activity_since[ip] = now
-                        elif now - low_start >= reset_idle:
-                            old_level = _engagement_current_level.get(ip, 0)
-                            if old_level > 0:
-                                print(f"[VIGILANT] ENGAGEMENT RESET (low activity): {ip} {recent_req_count} reqs/min for {(now - low_start):.0f}s, releasing")
-                                log_throttle(ip, "engagement", 0, 0, "ENGAGEMENT_RESET_LOW", f"{recent_req_count} reqs/min for {(now - low_start):.0f}s")
-                                _previous_rate.pop(ip, None)
-                                remove_throttle_cycle(ip)
-                            _engagement_start[ip] = 0
-                            _engagement_minutes[ip] = 0
-                            _engagement_current_level[ip] = 0
-                            _engagement_low_activity_since.pop(ip, None)
-                            # Reset social session counters so engagement_min_requests
-                            # threshold applies to each new scrolling session
-                            with velocity_lock:
-                                social_session_totals.pop(ip, None)
-                                social_session_start.pop(ip, None)
-                            continue
-                    else:
-                        # Activity picked up → clear low-activity tracker
-                        _engagement_low_activity_since.pop(ip, None)
-                    
-                    elapsed = (now - started) / 60.0
-                    if elapsed > _engagement_minutes.get(ip, 0):
-                        _engagement_minutes[ip] = elapsed
-                        if elapsed >= l3_min:
-                            new_level = CB_LEVEL_CIRCUIT_BREAK
-                        elif elapsed >= l2_min:
-                            new_level = CB_LEVEL_FRICTION
-                        elif elapsed >= l1_min:
-                            new_level = CB_LEVEL_PAUSE
-                        else:
-                            new_level = CB_LEVEL_NONE
-                        old_level = _engagement_current_level.get(ip, 0)
-                        if new_level != old_level:
-                            _engagement_current_level[ip] = new_level
-                            if new_level > 0:
-                                # Build dynamic rate lookup from config
-                                _engagement_rates = {0: None, 1: l1_rate, 2: l2_rate, 3: l3_rate}
-                                rate = _engagement_rates.get(new_level)
-                                if rate and _previous_rate.get(ip) != rate:
-                                    apply_throttle(ip, rate=rate)
-                                    _previous_rate[ip] = rate
-                                    save_throttle_state(ip, is_throttled=True, recovery_at=0)
-                                    _mark_client_throttled(ip)
-                                    log_throttle(ip, "engagement", elapsed, 0, f"ENGAGEMENT_L{new_level}", f"{elapsed:.1f}min → L{new_level} @ {rate}")
-                                    print(f"[VIGILANT] ENGAGEMENT {ip}: {elapsed:.1f}min → L{new_level} @ {rate}")
         except Exception as e:
             print(f"[VIGILANT] Engagement loop error: {e}")
             check_interval = 5  # Fast retry on error
@@ -1299,38 +1320,31 @@ def apply_circuit_breaker_action(client_ip, domain, level, rpm_current=0, rpm_ba
     rate = _engagement_rates.get(level)
     if not rate:
         return False
-    prev = _previous_rate.get(client_ip)
-    if prev == rate:
-        return True
-    success = apply_throttle(client_ip, rate=rate)
-    if success:
-        _previous_rate[client_ip] = rate
-        save_throttle_state(client_ip, is_throttled=True, recovery_at=0)
-        mins = _engagement_minutes.get(client_ip, 0)
-        log_throttle(client_ip, domain, rpm_current, rpm_baseline, f"CB_L{level}", f"{mins:.1f}min → L{level} @ {rate}")
-        print(f"[VIGILANT] ENGAGEMENT {client_ip}: {mins:.1f}min → L{level} @ {rate}")
-    return success
+    with _throttle_mutation_lock:
+        prev = _previous_rate.get(client_ip)
+        if prev == rate:
+            return True
+        success = apply_throttle(client_ip, rate=rate)
+        if success:
+            _previous_rate[client_ip] = rate
+            save_throttle_state(client_ip, is_throttled=True, recovery_at=0)
+            mins = _engagement_minutes.get(client_ip, 0)
+            log_throttle(client_ip, domain, rpm_current, rpm_baseline, f"CB_L{level}", f"{mins:.1f}min → L{level} @ {rate}")
+            print(f"[VIGILANT] ENGAGEMENT {client_ip}: {mins:.1f}min → L{level} @ {rate}")
+        return success
 
 
 def release_circuit_breaker(client_ip):
     """Manual release: reset engagement, remove throttle."""
-    with _engagement_lock:
-        _engagement_start[client_ip] = 0
-        _engagement_minutes[client_ip] = 0
-        _engagement_current_level[client_ip] = 0
-        _engagement_low_activity_since.pop(client_ip, None)
-    _previous_rate.pop(client_ip, None)
-    success = remove_throttle_cycle(client_ip)
-    # Reset social session counters so next session starts fresh
-    with velocity_lock:
-        social_session_totals.pop(client_ip, None)
-        social_session_start.pop(client_ip, None)
-    if success:
-        log_throttle(client_ip, "manual_release", 0, 0, "ENGAGEMENT_RESET_MANUAL", "Manual release from dashboard")
-        print(f"[VIGILANT] Manual release: {client_ip} engagement reset")
-    else:
-        print(f"[VIGILANT] Manual release failed tc cleanup for {client_ip}")
-    return success
+    with _throttle_mutation_lock:
+        _reset_client_session(client_ip)
+        success = remove_throttle_cycle(client_ip)
+        if success:
+            log_throttle(client_ip, "manual_release", 0, 0, "ENGAGEMENT_RESET_MANUAL", "Manual release from dashboard")
+            print(f"[VIGILANT] Manual release: {client_ip} engagement reset")
+        else:
+            print(f"[VIGILANT] Manual release failed tc cleanup for {client_ip}")
+        return success
 
 
 def get_all_circuit_breaker_states():
@@ -1805,87 +1819,88 @@ def apply_throttle(client_ip, rate=None):
     Returns:
         bool: True if throttle applied successfully, False otherwise
     """
-    config = load_proxy_config()
-    # Use the explicit rate if provided (e.g. from circuit breaker),
-    # otherwise fall back to the configured default from the database.
-    # NOTE: we check `rate is not None` rather than `rate or ...` because
-    # an empty string "" is falsy but should be treated as a valid rate.
-    if rate is not None:
-        throttle_rate = str(rate)
-    else:
-        throttle_rate = config['throttle_rate']
-    interface = get_distribution_interface()
-    
-    # Derive a unique, deterministic classId from the client IP
-    class_id, prio = _ip_to_class_id(client_ip)
+    with _throttle_mutation_lock:
+        config = load_proxy_config()
+        # Use the explicit rate if provided (e.g. from circuit breaker),
+        # otherwise fall back to the configured default from the database.
+        # NOTE: we check `rate is not None` rather than `rate or ...` because
+        # an empty string "" is falsy but should be treated as a valid rate.
+        if rate is not None:
+            throttle_rate = str(rate)
+        else:
+            throttle_rate = config['throttle_rate']
+        interface = get_distribution_interface()
+        
+        # Derive a unique, deterministic classId from the client IP
+        class_id, prio = _ip_to_class_id(client_ip)
 
-    try:
-        # Ensure root qdisc exists. Using 'replace' is idempotent and avoids
-        # RTNETLINK "File exists" errors from bare 'add' on pre-existing qdiscs.
-        subprocess.run(
-            ["tc", "qdisc", "replace", "dev", interface, "root", "handle", "1:", "htb", "default", "1"],
-            check=False, capture_output=True, text=True
-        )
+        try:
+            # Ensure root qdisc exists. Using 'replace' is idempotent and avoids
+            # RTNETLINK "File exists" errors from bare 'add' on pre-existing qdiscs.
+            subprocess.run(
+                ["tc", "qdisc", "replace", "dev", interface, "root", "handle", "1:", "htb", "default", "1"],
+                check=False, capture_output=True, text=True
+            )
 
-        # Remove any stale class + filter for this client first (clean re-apply).
-        # This is critical: without it, tc class add fails with "File exists"
-        # when circuit breaker escalates to a higher throttle level, meaning
-        # the user would be stuck at the old rate indefinitely.
-        remove_throttle(client_ip)
+            # Remove any stale class + filter for this client first (clean re-apply).
+            # This is critical: without it, tc class add fails with "File exists"
+            # when circuit breaker escalates to a higher throttle level, meaning
+            # the user would be stuck at the old rate indefinitely.
+            remove_throttle(client_ip)
 
-        # Add a dedicated class for this client IP.
-        # burst=2k allows only ~2KB at line rate before the throttle kicks in.
-        # This means the TCP handshake completes but the very first data packet
-        # gets shaped, making throttling immediately noticeable.
-        #
-        # First try 'add'; if the class survived remove_throttle (e.g. due to
-        # a prio mismatch from a previous process), fall back to 'replace'.
-        result = subprocess.run(
-            ["tc", "class", "add", "dev", interface, "parent", "1:", "classid", class_id,
-             "htb", "rate", throttle_rate, "ceil", throttle_rate,
-             "burst", "2k", "cburst", "2k"],
-            check=False, capture_output=True, text=True
-        )
-        if result.returncode != 0:
-            if "RTNETLINK answers: File exists" in result.stderr:
-                result = subprocess.run(
-                    ["tc", "class", "replace", "dev", interface, "parent", "1:",
-                     "classid", class_id, "htb", "rate", throttle_rate,
-                     "ceil", throttle_rate, "burst", "2k", "cburst", "2k"],
-                    check=False, capture_output=True, text=True
-                )
+            # Add a dedicated class for this client IP.
+            # burst=2k allows only ~2KB at line rate before the throttle kicks in.
+            # This means the TCP handshake completes but the very first data packet
+            # gets shaped, making throttling immediately noticeable.
+            #
+            # First try 'add'; if the class survived remove_throttle (e.g. due to
+            # a prio mismatch from a previous process), fall back to 'replace'.
+            result = subprocess.run(
+                ["tc", "class", "add", "dev", interface, "parent", "1:", "classid", class_id,
+                 "htb", "rate", throttle_rate, "ceil", throttle_rate,
+                 "burst", "2k", "cburst", "2k"],
+                check=False, capture_output=True, text=True
+            )
             if result.returncode != 0:
-                print(f"[VIGILANT] tc class add/replace failed for {client_ip} on {interface}: {result.stderr.strip()}")
+                if "RTNETLINK answers: File exists" in result.stderr:
+                    result = subprocess.run(
+                        ["tc", "class", "replace", "dev", interface, "parent", "1:",
+                         "classid", class_id, "htb", "rate", throttle_rate,
+                         "ceil", throttle_rate, "burst", "2k", "cburst", "2k"],
+                        check=False, capture_output=True, text=True
+                    )
+                if result.returncode != 0:
+                    print(f"[VIGILANT] tc class add/replace failed for {client_ip} on {interface}: {result.stderr.strip()}")
+                    return False
+
+            # Match traffic sent TO the client (downloads)
+            result = subprocess.run(
+                ["tc", "filter", "add", "dev", interface, "protocol", "ip", "parent", "1:0",
+                 "prio", str(prio), "u32", "match", "ip", "dst", client_ip, "flowid", class_id],
+                check=False, capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                print(f"[VIGILANT] tc filter dst failed for {client_ip} on {interface}: {result.stderr.strip()}")
                 return False
 
-        # Match traffic sent TO the client (downloads)
-        result = subprocess.run(
-            ["tc", "filter", "add", "dev", interface, "protocol", "ip", "parent", "1:0",
-             "prio", str(prio), "u32", "match", "ip", "dst", client_ip, "flowid", class_id],
-            check=False, capture_output=True, text=True
-        )
-        if result.returncode != 0:
-            print(f"[VIGILANT] tc filter dst failed for {client_ip} on {interface}: {result.stderr.strip()}")
+            # Match traffic FROM the client (uploads)
+            result = subprocess.run(
+                ["tc", "filter", "add", "dev", interface, "protocol", "ip", "parent", "1:0",
+                 "prio", str(prio), "u32", "match", "ip", "src", client_ip, "flowid", class_id],
+                check=False, capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                print(f"[VIGILANT] tc filter src failed for {client_ip} on {interface}: {result.stderr.strip()}")
+                return False
+            
+            # Store mapping for later removal
+            _throttle_map[client_ip] = class_id
+            
+            print(f"[VIGILANT] Throttling applied to {client_ip} on {interface} at {throttle_rate} burst=2k (classId={class_id})")
+            return True
+        except Exception as e:
+            print(f"[VIGILANT] Throttling FAILED for {client_ip} on {interface}: {e}")
             return False
-
-        # Match traffic FROM the client (uploads)
-        result = subprocess.run(
-            ["tc", "filter", "add", "dev", interface, "protocol", "ip", "parent", "1:0",
-             "prio", str(prio), "u32", "match", "ip", "src", client_ip, "flowid", class_id],
-            check=False, capture_output=True, text=True
-        )
-        if result.returncode != 0:
-            print(f"[VIGILANT] tc filter src failed for {client_ip} on {interface}: {result.stderr.strip()}")
-            return False
-        
-        # Store mapping for later removal
-        _throttle_map[client_ip] = class_id
-        
-        print(f"[VIGILANT] Throttling applied to {client_ip} on {interface} at {throttle_rate} burst=2k (classId={class_id})")
-        return True
-    except Exception as e:
-        print(f"[VIGILANT] Throttling FAILED for {client_ip} on {interface}: {e}")
-        return False
 
 def remove_throttle(client_ip, client_ip_only=False):
     """
@@ -1899,70 +1914,71 @@ def remove_throttle(client_ip, client_ip_only=False):
     Returns:
         bool: True if throttle removed successfully, False otherwise
     """
-    interface = get_distribution_interface()
-    
-    # Get the deterministic classId for this client
-    class_id, prio = _ip_to_class_id(client_ip)
-    
-    # Also try stored mapping if available (in-process cache)
-    stored_class = _throttle_map.get(client_ip)
-    if stored_class:
-        class_id = stored_class
-        del _throttle_map[client_ip]
-    
-    errors = []
-    try:
-        # Remove dst filter for this specific client
-        r = subprocess.run(
-            ["tc", "filter", "del", "dev", interface, "protocol", "ip", "parent", "1:0",
-             "prio", str(prio), "u32", "match", "ip", "dst", client_ip, "flowid", class_id],
-            check=False, capture_output=True, text=True
-        )
-        if r.returncode != 0:
-            errors.append(f"dst filter: {r.stderr.strip()}")
+    with _throttle_mutation_lock:
+        interface = get_distribution_interface()
         
-        # Remove src filter for this specific client
-        r = subprocess.run(
-            ["tc", "filter", "del", "dev", interface, "protocol", "ip", "parent", "1:0",
-             "prio", str(prio), "u32", "match", "ip", "src", client_ip, "flowid", class_id],
-            check=False, capture_output=True, text=True
-        )
-        if r.returncode != 0:
-            errors.append(f"src filter: {r.stderr.strip()}")
+        # Get the deterministic classId for this client
+        class_id, prio = _ip_to_class_id(client_ip)
         
-        if not client_ip_only:
-            # Remove the dedicated class for this client ONLY
+        # Also try stored mapping if available (in-process cache)
+        stored_class = _throttle_map.get(client_ip)
+        if stored_class:
+            class_id = stored_class
+            del _throttle_map[client_ip]
+        
+        errors = []
+        try:
+            # Remove dst filter for this specific client
             r = subprocess.run(
-                ["tc", "class", "del", "dev", interface, "parent", "1:", "classid", class_id],
+                ["tc", "filter", "del", "dev", interface, "protocol", "ip", "parent", "1:0",
+                 "prio", str(prio), "u32", "match", "ip", "dst", client_ip, "flowid", class_id],
                 check=False, capture_output=True, text=True
             )
-            if r.returncode != 0:
-                # Some tc builds reject the parent-qualified form for deletes.
-                retry = subprocess.run(
-                    ["tc", "class", "del", "dev", interface, "classid", class_id],
+            if r.returncode != 0 and "Cannot find specified filter chain" not in r.stderr and "No such file or directory" not in r.stderr:
+                errors.append(f"dst filter: {r.stderr.strip()}")
+            
+            # Remove src filter for this specific client
+            r = subprocess.run(
+                ["tc", "filter", "del", "dev", interface, "protocol", "ip", "parent", "1:0",
+                 "prio", str(prio), "u32", "match", "ip", "src", client_ip, "flowid", class_id],
+                check=False, capture_output=True, text=True
+            )
+            if r.returncode != 0 and "Cannot find specified filter chain" not in r.stderr and "No such file or directory" not in r.stderr:
+                errors.append(f"src filter: {r.stderr.strip()}")
+            
+            if not client_ip_only:
+                # Remove the dedicated class for this client ONLY
+                r = subprocess.run(
+                    ["tc", "class", "del", "dev", interface, "parent", "1:", "classid", class_id],
                     check=False, capture_output=True, text=True
                 )
-                if retry.returncode != 0:
-                    errors.append(
-                        f"class delete: {r.stderr.strip() or retry.stderr.strip()}"
+                if r.returncode != 0:
+                    # Some tc builds reject the parent-qualified form for deletes.
+                    retry = subprocess.run(
+                        ["tc", "class", "del", "dev", interface, "classid", class_id],
+                        check=False, capture_output=True, text=True
                     )
-        
-        if errors:
-            print(f"[VIGILANT] Throttle removal for {client_ip} on {interface} had errors: {'; '.join(errors)}")
-            # Even with filter errors, the class may have been deleted. Check if it still exists.
-            r = subprocess.run(
-                ["tc", "class", "show", "dev", interface],
-                check=False, capture_output=True, text=True
-            )
-            if class_id in r.stdout:
-                print(f"[VIGILANT] WARNING: Class {class_id} still exists on {interface} after removal attempt!")
-                return False
-        
-        print(f"[VIGILANT] Throttle cleanup completed for {client_ip} on {interface} (class={class_id})")
-        return True
-    except Exception as e:
-        print(f"[VIGILANT] Throttle cleanup failed for {client_ip}: {e}")
-        return False
+                    if retry.returncode != 0 and "No such file or directory" not in retry.stderr and "Cannot find" not in retry.stderr:
+                        errors.append(
+                            f"class delete: {r.stderr.strip() or retry.stderr.strip()}"
+                        )
+            
+            if errors:
+                print(f"[VIGILANT] Throttle removal for {client_ip} on {interface} had errors: {'; '.join(errors)}")
+                # Even with filter errors, the class may have been deleted. Check if it still exists.
+                r = subprocess.run(
+                    ["tc", "class", "show", "dev", interface],
+                    check=False, capture_output=True, text=True
+                )
+                if class_id in r.stdout:
+                    print(f"[VIGILANT] WARNING: Class {class_id} still exists on {interface} after removal attempt!")
+                    return False
+            
+            print(f"[VIGILANT] Throttle cleanup completed for {client_ip} on {interface} (class={class_id})")
+            return True
+        except Exception as e:
+            print(f"[VIGILANT] Throttle cleanup failed for {client_ip}: {e}")
+            return False
 
 # Throttle cycle tracking
 throttle_timers = {}  # client_ip -> Timer object
@@ -1991,75 +2007,77 @@ def apply_throttle_cycle(client_ip):
     Returns:
         bool: True if throttle cycle started successfully, False otherwise
     """
-    # Cancel any existing timer for this client
-    with throttle_timers_lock:
-        old_timer = throttle_timers.pop(client_ip, None)
-        if old_timer is not None:
-            try:
-                old_timer.cancel()
-                print(f"[VIGILANT] Cancelled existing throttle timer for {client_ip}")
-            except Exception as e:
-                print(f"[VIGILANT] Error cancelling timer for {client_ip}: {e}")
-
-    # Drop to a strict rate immediately when doomscrolling detected.
-    # 32kbit = 4 KB/s.  Enough for plain-text and a trickle of header metadata
-    # so pages partially load, but images/video stall hard.  Combined with the
-    # 16k burst in apply_throttle, the initial TCP handshake + HTTP request
-    # complete quickly, then the client hits the wall.
-    success = apply_throttle(client_ip, rate="32kbit")
-
-    if success:
-        # Save throttle state to database
-        save_throttle_state(client_ip, is_throttled=True, recovery_at=time.time() + THROTTLE_CYCLE_DURATION)
-
-        # Schedule automatic recovery after 2 minutes
-        recovery_timer = threading.Timer(
-            THROTTLE_CYCLE_DURATION,
-            remove_throttle_cycle,
-            args=[client_ip]
-        )
-
+    with _throttle_mutation_lock:
+        # Cancel any existing timer for this client
         with throttle_timers_lock:
-            throttle_timers[client_ip] = recovery_timer
+            old_timer = throttle_timers.pop(client_ip, None)
+            if old_timer is not None:
+                try:
+                    old_timer.cancel()
+                    print(f"[VIGILANT] Cancelled existing throttle timer for {client_ip}")
+                except Exception as e:
+                    print(f"[VIGILANT] Error cancelling timer for {client_ip}: {e}")
 
-        recovery_timer.start()
+        # Drop to a strict rate immediately when doomscrolling detected.
+        # 32kbit = 4 KB/s.  Enough for plain-text and a trickle of header metadata
+        # so pages partially load, but images/video stall hard.  Combined with the
+        # 16k burst in apply_throttle, the initial TCP handshake + HTTP request
+        # complete quickly, then the client hits the wall.
+        success = apply_throttle(client_ip, rate="32kbit")
 
-        # Log to behavioral throttling table (separate from content filtering)
-        log_throttle(client_ip, "throttle_cycle", 0, 0, "THROTTLE_CYCLE_APPLIED", "Doomscrolling detected - 10-minute throttle cycle")
+        if success:
+            # Save throttle state to database
+            save_throttle_state(client_ip, is_throttled=True, recovery_at=time.time() + THROTTLE_CYCLE_DURATION)
 
-        print(f"[VIGILANT] Throttle cycle started for {client_ip} - will recover in {THROTTLE_CYCLE_DURATION}s")
+            # Schedule automatic recovery after duration
+            recovery_timer = threading.Timer(
+                THROTTLE_CYCLE_DURATION,
+                remove_throttle_cycle,
+                args=[client_ip]
+            )
 
-    return success
+            with throttle_timers_lock:
+                throttle_timers[client_ip] = recovery_timer
+
+            recovery_timer.start()
+
+            # Log to behavioral throttling table (separate from content filtering)
+            log_throttle(client_ip, "throttle_cycle", 0, 0, "THROTTLE_CYCLE_APPLIED", "Doomscrolling detected - 10-minute throttle cycle")
+
+            print(f"[VIGILANT] Throttle cycle started for {client_ip} - will recover in {THROTTLE_CYCLE_DURATION}s")
+
+        return success
 
 
 def remove_throttle_cycle(client_ip):
     """
-    Remove tc throttle rules and clean up timer/throttled set.
-    Does NOT touch circuit_breaker_state — that's managed by
-    escalate_circuit_breaker / release_circuit_breaker so cooldowns work.
+    Remove tc throttle rules, cancel timers, discard throttled status,
+    and reset session timestamps.
     """
-    # Remove TC rules
-    success = remove_throttle(client_ip)
+    with _throttle_mutation_lock:
+        # Remove TC rules
+        success = remove_throttle(client_ip)
 
-    # Cancel any pending recovery timer for this client so a stale timer
-    # cannot race with a manual release.
-    with throttle_timers_lock:
-        _cancel_timer(client_ip)
+        # Cancel any pending recovery timer for this client so a stale timer
+        # cannot race with a manual release.
+        with throttle_timers_lock:
+            _cancel_timer(client_ip)
 
-    # Clean up from active throttled_clients set
-    with throttled_clients_lock:
-        throttled_clients.discard(client_ip)
+        # Clean up from active throttled_clients set
+        with throttled_clients_lock:
+            throttled_clients.discard(client_ip)
 
-    # Only update DB state if tc removal actually succeeded.
-    # This prevents the state mismatch where DB says "not throttled"
-    # but tc rules are still active on the interface.
-    if success:
-        save_throttle_state(client_ip, is_throttled=False, recovery_at=0)
-        log_throttle(client_ip, "throttle_cycle", 0, 0, "THROTTLE_CYCLE_REMOVED", "Throttle cycle completed - bandwidth restored")
-        print(f"[VIGILANT] Throttle cycle completed for {client_ip} - bandwidth restored")
-    else:
-        print(f"[VIGILANT] WARNING: Throttle removal failed for {client_ip} - DB not updated")
-    return success
+        # Simultaneously reset session timestamps, level, and request tracking
+        _reset_client_session(client_ip)
+
+        # Only update DB state if tc removal actually succeeded.
+        if success:
+            save_throttle_state(client_ip, is_throttled=False, recovery_at=0)
+            log_throttle(client_ip, "throttle_cycle", 0, 0, "THROTTLE_CYCLE_REMOVED", "Throttle cycle completed - bandwidth restored")
+            print(f"[VIGILANT] Throttle cycle completed for {client_ip} - bandwidth restored")
+        else:
+            print(f"[VIGILANT] WARNING: Throttle removal failed for {client_ip} - DB not updated")
+        return success
 
 
 def save_throttle_state(client_ip, is_throttled, recovery_at):
@@ -2483,24 +2501,38 @@ class VIGILANTAddon:
                         if ip == '__RESET_ALL__':
                             print("[VIGILANT] Processing RESET_ALL from release queue")
                             iface = get_distribution_interface()
-                            # Atomically replace the root qdisc — avoids the race window
-                            # between 'del' and 'add' where no qdisc exists.
-                            subprocess.run(["tc", "qdisc", "replace", "dev", iface, "root",
-                                            "handle", "1:", "htb", "default", "1"],
-                                           capture_output=True, check=False)
-                            with _engagement_lock:
-                                _engagement_start.clear()
-                                _engagement_minutes.clear()
-                                _engagement_last_request.clear()
-                                _engagement_current_level.clear()
-                                _engagement_low_activity_since.clear()
-                            _previous_rate.clear()
-                            with throttled_clients_lock:
-                                throttled_clients.clear()
-                            with velocity_lock:
-                                social_request_history.clear()
-                                social_session_totals.clear()
-                                social_session_start.clear()
+                            with _throttle_mutation_lock:
+                                # Atomically replace the root qdisc — avoids the race window
+                                # between 'del' and 'add' where no qdisc exists.
+                                subprocess.run(["tc", "qdisc", "replace", "dev", iface, "root",
+                                                "handle", "1:", "htb", "default", "1"],
+                                               capture_output=True, check=False)
+                                with _engagement_lock:
+                                    _engagement_start.clear()
+                                    _engagement_minutes.clear()
+                                    _engagement_last_request.clear()
+                                    _engagement_current_level.clear()
+                                    _engagement_low_activity_since.clear()
+                                    _engaged_log_times.clear()
+                                _previous_rate.clear()
+                                with throttled_clients_lock:
+                                    throttled_clients.clear()
+                                with throttle_timers_lock:
+                                    for t in list(throttle_timers.values()):
+                                        try:
+                                            t.cancel()
+                                        except Exception:
+                                            pass
+                                    throttle_timers.clear()
+                                    _throttle_map.clear()
+                                with velocity_lock:
+                                    social_request_history.clear()
+                                    social_session_totals.clear()
+                                    social_session_start.clear()
+                                    _social_low_activity_since.clear()
+                                    session_start.clear()
+                                    session_totals.clear()
+                                    request_history.clear()
                             print("[VIGILANT] RESET_ALL complete")
                         else:
                             print(f"[VIGILANT] Processing release queue: {ip}")

@@ -137,7 +137,16 @@ DEFAULT_CONFIG = {
     "tfidf_classification_threshold": "0.05",
     "tfidf_url_threshold": "0.3",
     "tfidf_body_threshold": "0.15",
-    "sni_filtering_enabled": "true"
+    "sni_filtering_enabled": "true",
+    "engagement_l1_minutes": "3",
+    "engagement_l2_minutes": "6",
+    "engagement_l3_minutes": "12",
+    "engagement_reset_idle": "120",
+    "engagement_l1_rate": "128kbit",
+    "engagement_l2_rate": "32kbit",
+    "engagement_l3_rate": "4kbit",
+    "engagement_check_interval": "30",
+    "engagement_min_requests": "10"
 }
 
 CONFIG_DEFAULTS = DEFAULT_CONFIG
