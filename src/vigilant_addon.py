@@ -257,6 +257,14 @@ CATEGORY_KEYWORDS = {
     "Harmful":      {"hate", "violence", "abuse", "threat", "illegal",
                      "exploit", "self-harm", "dangerous", "extremist"},
 }
+# Boilerplate phrases that often appear in search engine footers or legal sections.
+# These are stripped before TF-IDF classification to avoid false positives.
+BOILERPLATE_PATTERNS = [
+    r"report\s+abuse",
+    r"terms\s+of\s+service",
+    r"privacy\s+policy",
+    r"search\s+settings",
+]
 
 # ─── NLP Setup ────────────────────────────────────────────────────
 nlp = None
