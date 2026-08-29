@@ -242,20 +242,35 @@ DEFAULT_SOCIAL_DOMAINS = {
 }
 
 CATEGORY_KEYWORDS = {
-    "Educational":  {"learn", "study", "research", "science", "history",
-                     "tutorial", "course", "university", "education",
-                     "academic", "journal", "lecture", "textbook",
-                     "theory", "experiment", "analysis", "hypothesis"},
-    "Productive":   {"work", "project", "report", "deadline", "meeting",
-                     "productivity", "business", "office", "task",
-                     "professional", "career", "finance", "budget",
-                     "code", "development", "deploy", "repository"},
-    "Distracting":  {"viral", "trending", "meme", "gossip", "celebrity",
-                     "shocking", "unbelievable", "scroll", "feed",
-                     "reels", "shorts", "tiktok", "influencer",
-                     "entertainment", "funny", "lol", "wtf"},
-    "Harmful":      {"hate", "violence", "abuse", "threat", "illegal",
-                     "exploit", "self-harm", "dangerous", "extremist"},
+    "Educational": {
+        "calculus", "derivative", "integral", "algebra", "math", "course", "lecture", 
+        "notes", "exam", "assignment", "physics", "syllabus", "university", "textbook", 
+        "academy", "curriculum", "homework", "tutorial", "reference", "article", 
+        "research", "paper", "science", "study", "documentation", "history", "learning", "quiz"
+    },
+    "Productive": {
+        "git", "commit", "push", "pull", "request", "repository", "code", "review", 
+        "bug", "fix", "issue", "tracker", "documentation", "api", "reference", 
+        "function", "class", "method", "module", "library", "developer", "sprint", 
+        "backlog", "ticket", "task", "workflow", "project", "management", "status", 
+        "stack", "overflow", "debug", "syntax", "error", "compiler", "implementation", 
+        "solution", "workspace", "notes", "kanban", "board"
+    },
+    "Distracting": {
+        "viral", "dance", "video", "reel", "short", "clip", "trending", "scroll", 
+        "music", "meme", "feed", "funny", "comedy", "gossip", "entertainment", 
+        "social", "media", "post", "comment", "instagram", "photo", "story", 
+        "follower", "like", "share", "tweet", "timeline", "notification", "gaming", 
+        "stream", "influencer"
+    },
+    "Harmful": {
+        "malware", "virus", "trojan", "payload", "bypass", "backdoor", "crack", 
+        "keygen", "execute", "download", "phishing", "phish", "credentials", "password", 
+        "reset", "urgent", "security", "alert", "verify", "suspended", "account", 
+        "unauthorized", "login", "identity", "casino", "slot", "bet", "gamble", 
+        "gambling", "jackpot", "payout", "bonus", "win", "spin", "darknet", 
+        "marketplace", "illicit", "contraband", "dump", "leak", "exploit", "vulnerability"
+    }
 }
 # Boilerplate phrases that often appear in search engine footers or legal sections.
 # These are stripped before TF-IDF classification to avoid false positives.
