@@ -1500,6 +1500,43 @@ def normalize_text_simple(text: str) -> str:
     return re.sub(r'\s+', ' ', collapsed).strip()
 
 
+# Pre-compiled regexes for fast_extract_text (compiled once at import time)
+_RE_STRIP_BLOCKS = re.compile(
+    r'<(script|style|head|footer|nav|header|noscript)\b[^>]*>.*?</\1>',
+    re.DOTALL | re.IGNORECASE
+)
+_RE_STRIP_META = re.compile(r'<meta\b[^>]*/?>',  re.IGNORECASE)
+_RE_STRIP_TAGS = re.compile(r'<[^>]+>')
+_RE_COLLAPSE_WS = re.compile(r'\s+')
+
+
+def fast_extract_text(raw_html: str) -> str:
+    """Extract visible text from an HTML string.
+
+    Strips <script>, <style>, <head>, <footer>, <nav>, <header>,
+    <noscript>, and <meta> blocks first, then removes all remaining
+    HTML tags and collapses whitespace.  Also strips boilerplate
+    phrases defined in BOILERPLATE_PATTERNS.
+
+    This is intentionally regex-based (no external parser) to keep
+    latency under 1 ms on a 20 KB input.
+    """
+    if not raw_html:
+        return ""
+    # 1. Remove entire block-level tags and their contents
+    text = _RE_STRIP_BLOCKS.sub(' ', raw_html)
+    # 2. Remove self-closing <meta .../> tags
+    text = _RE_STRIP_META.sub(' ', text)
+    # 3. Remove all remaining HTML tags
+    text = _RE_STRIP_TAGS.sub(' ', text)
+    # 4. Strip known boilerplate phrases
+    for pat in BOILERPLATE_PATTERNS:
+        text = re.sub(pat, ' ', text, flags=re.IGNORECASE)
+    # 5. Collapse whitespace
+    text = _RE_COLLAPSE_WS.sub(' ', text).strip()
+    return text
+
+
 def normalize_query(text: str) -> str:
     """Decode percent-encoding, lowercase, strip non-alphanumerics, and extract
     search-query parameter values (q, search_query, query, p) if present.
@@ -2857,9 +2894,9 @@ class VIGILANTAddon:
         if profiler is not None:
             profiler.record_response(client_ip, clean_host, payload_bytes)
 
-        # ── Content gate — only text/HTML/JSON/plain gets deep inspection ──
-        TEXT_CONTENT_TYPES = {"text/html", "application/json", "text/plain"}
-        if not any(ct in content_type for ct in TEXT_CONTENT_TYPES):
+        # ── Content gate — skip non-HTML entirely for TF-IDF ──
+        # Images, JSON, CSS, JS, fonts, etc. never need content classification.
+        if "text/html" not in content_type:
             category_hints = load_category_hints()
             domain_category = None
             for category, domains in category_hints.items():
@@ -2869,13 +2906,14 @@ class VIGILANTAddon:
             log_request(client_ip, host, path, method, domain_category or "Non-HTML", False, [], None)
             return
 
-        # ── Sample first 20KB of response body (sub-ms execution) ──
+        # ── Truncate raw bytes FIRST (20 KB cap) to save memory and CPU ──
         try:
-            body_text = flow.response.get_text(strict=False)[:20000]
+            prefix_bytes = flow.response.content[:20000] if flow.response.content else b""
+            body_text = prefix_bytes.decode("utf-8", errors="replace")
         except Exception:
             body_text = ""
 
-        # ── Stage A — Fuzzy keyword scan ──
+        # ── Stage A — Fuzzy keyword scan (runs on raw decoded text) ──
         try:
             keywords = get_blacklisted_keywords()
             if keywords and body_text:
@@ -2893,27 +2931,21 @@ class VIGILANTAddon:
             print(f"[VIGILANT] Response keyword blacklist check failed: {e}")
 
         # ── Stage B — TF-IDF vectorizer scan ──
-        # Strip HTML boilerplate tags (footer, nav, header) before classification
-        # to prevent false positives from incidental words like "Report abuse" in
-        # Google's footer or legal/navigation boilerplate on utility sites.
-        clean_body = re.sub(
-            r'<(footer|nav|header)\b[^>]*>.*?</\1>',
-            '', body_text, flags=re.DOTALL | re.IGNORECASE
-        )
-
-        # Strip known search-engine boilerplate phrases
-        for pat in BOILERPLATE_PATTERNS:
-            clean_body = re.sub(pat, ' ', clean_body, flags=re.IGNORECASE)
+        # Extract clean visible text: strips <script>, <style>, <head>,
+        # <footer>, <nav>, <header>, <noscript>, <meta>, all remaining
+        # HTML tags, and boilerplate phrases — leaving only what the user
+        # would actually read on the page.
+        clean_text = fast_extract_text(body_text)
 
         # ── TEMPORARY DEBUG: Log what the classifier actually sees ──
-        tfidf_input_snippet = clean_body[:500]
+        tfidf_input_snippet = clean_text[:500]
         print("--- TF-IDF INPUT START ---")
         print(tfidf_input_snippet)
         print("--- TF-IDF INPUT END ---")
 
         config = load_proxy_config()
         threshold = float(config.get('tfidf_classification_threshold', 0.15))
-        tfidf_category, _tfidf_scores = tfidf_classifier.classify(clean_body, threshold=threshold)
+        tfidf_category, _tfidf_scores = tfidf_classifier.classify(clean_text, threshold=threshold)
 
         if tfidf_category == "Harmful":
             print(f"[VIGILANT] RESPONSE TF-IDF BLOCKED: {host} classified Harmful  scores={_tfidf_scores}")
