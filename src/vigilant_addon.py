@@ -1500,40 +1500,49 @@ def normalize_text_simple(text: str) -> str:
     return re.sub(r'\s+', ' ', collapsed).strip()
 
 
-# Pre-compiled regexes with re.DOTALL (re.S) and flexible attribute matching
-# .*? coupled with re.DOTALL forces the engine to match every character
-# between the opening and closing tag, including newlines.
-# \b[^>]* ensures tags are matched regardless of attributes like nonce="...".
+# 1. Block tags (crosses newlines)
 RE_SCRIPT = re.compile(r'<script\b[^>]*>.*?</script>', re.IGNORECASE | re.DOTALL)
 RE_STYLE  = re.compile(r'<style\b[^>]*>.*?</style>',   re.IGNORECASE | re.DOTALL)
 RE_HEAD   = re.compile(r'<head\b[^>]*>.*?</head>',     re.IGNORECASE | re.DOTALL)
-RE_GENERIC_TAGS = re.compile(r'<[^>]+>')
+
+# 2. Catch orphaned/unclosed scripts or raw JS inside attributes
+RE_JS_FUNCTIONS   = re.compile(r'\(function\(\)\{.*?\}\)\(\);', re.DOTALL)
+RE_INLINE_JS_VARS = re.compile(r'var\s+_[a-zA-Z0-9_]+\s*=\s*\{.*?\};', re.DOTALL)
+
+# 3. Strip all tags along with ALL their internal attributes
+RE_ALL_TAGS = re.compile(r'<[^>]+>', re.DOTALL)
+
+# 4. Cleanup extra whitespace
 RE_EXTRA_SPACES = re.compile(r'\s+')
 
 
 def fast_extract_text(html_text: str) -> str:
     """Extract visible text from an HTML string.
 
-    1. Strips full <script>, <style>, and <head> blocks (including
-       contents that span multiple lines) — these carry no visible
-       user content and pollute the TF-IDF feature vector.
-    2. Strips all remaining HTML tags.
-    3. Collapses multiple spaces / newlines into a single clean space.
+    Step A — Strip explicit <script>, <style>, <head> blocks
+             (including contents that span multiple lines).
+    Step B — Strip orphaned inline JS execution blocks that
+             Google embeds as attribute payloads, e.g.
+             (function(){var _g=...})(); and var _nnnn = {...};
+    Step C — Strip all remaining HTML tags and their attributes.
+    Step D — Collapse whitespace.
 
     This is intentionally regex-based (no external parser) to keep
     latency under 1 ms on a 20 KB input.
     """
     if not html_text:
         return ""
-    # 1. Strip full script, style, and head blocks (including contents across newlines)
+    # Step A: Strip explicit blocks
     text = RE_SCRIPT.sub(' ', html_text)
     text = RE_STYLE.sub(' ', text)
     text = RE_HEAD.sub(' ', text)
-    # 2. Strip all remaining HTML tags
-    text = RE_GENERIC_TAGS.sub(' ', text)
-    # 3. Collapse multiple spaces/newlines into a single clean space
-    clean_text = RE_EXTRA_SPACES.sub(' ', text).strip()
-    return clean_text
+    # Step B: Strip orphaned inline JS execution blocks (Google's attribute payloads)
+    text = RE_JS_FUNCTIONS.sub(' ', text)
+    text = RE_INLINE_JS_VARS.sub(' ', text)
+    # Step C: Strip all remaining HTML tags and attributes
+    text = RE_ALL_TAGS.sub(' ', text)
+    # Step D: Collapse whitespace
+    return RE_EXTRA_SPACES.sub(' ', text).strip()
 
 
 def normalize_query(text: str) -> str:
@@ -2895,6 +2904,7 @@ class VIGILANTAddon:
 
         # ── Content gate — skip non-HTML entirely for TF-IDF ──
         # Images, JSON, CSS, JS, fonts, etc. never need content classification.
+        print(f"DEBUG Content-Type: {content_type} from {host}")
         if "text/html" not in content_type:
             category_hints = load_category_hints()
             domain_category = None
