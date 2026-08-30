@@ -265,9 +265,7 @@ CATEGORY_KEYWORDS = {
         "stream", "influencer"
     },
     "Harmful": {
-        "porn", "xxx", "gangbang", "milf", "big tits", "big boobs", "suicide", "x-bet", 
-        "nigga", "baterbonia", "rape", "INCtsu", "sluts", "nigger", "kupal", "BDSM", "scat",
-        "giga nigga", "ninjacool", "GW"
+
     }
 }
 # Boilerplate phrases that often appear in search engine footers or legal sections.
