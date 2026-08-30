@@ -3419,15 +3419,15 @@ def _read_dnsmasq_leases() -> list:
     return leases
 
 
-def _read_arp_table() -> dict:
-    """Read ARP table to get MAC addresses for IPs"""
+def _read_arp_table(interface: str = "enp1s0") -> dict:
+    """Read ARP table to get MAC addresses for IPs on the specified interface"""
     arp = {}
     try:
         with open('/proc/net/arp', 'r') as f:
             lines = f.readlines()[1:]  # Skip header
             for line in lines:
                 parts = line.strip().split()
-                if len(parts) >= 6 and parts[3] != "00:00:00:00:00:00":
+                if len(parts) >= 6 and parts[3] != "00:00:00:00:00:00" and parts[5] == interface:
                     arp[parts[0]] = {
                         'mac_address': parts[3],
                         'device': parts[5]
