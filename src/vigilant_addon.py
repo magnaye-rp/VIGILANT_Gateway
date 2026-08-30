@@ -265,12 +265,9 @@ CATEGORY_KEYWORDS = {
         "stream", "influencer"
     },
     "Harmful": {
-        "malware", "virus", "trojan", "payload", "bypass", "backdoor", "crack", 
-        "keygen", "execute", "download", "phishing", "phish", "credentials", "password", 
-        "reset", "urgent", "security", "alert", "verify", "suspended", "account", 
-        "unauthorized", "login", "identity", "casino", "slot", "bet", "gamble", 
-        "gambling", "jackpot", "payout", "bonus", "win", "spin", "darknet", 
-        "marketplace", "illicit", "contraband", "dump", "leak", "exploit", "vulnerability"
+        "porn", "xxx", "gangbang", "milf", "big tits", "big boobs", "suicide", "x-bet", 
+        "nigga", "baterbonia", "rape", "INCtsu", "sluts", "nigger", "kupal", "BDSM", "scat",
+        "giga nigga", "ninjacool", "GW"
     }
 }
 # Boilerplate phrases that often appear in search engine footers or legal sections.
