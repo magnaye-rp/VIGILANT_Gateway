@@ -3468,11 +3468,17 @@ def _discover_network_devices() -> list:
     now = time.time()
     discovered_devices = {}
     
+    config = load_config()
+    dist_iface = config.get("distribution_interface") or _get_network_config().get("distribution_interface") or "enp1s0"
+    managed_prefix = _managed_ip_prefix(config)
+    
     dnsmasq_leases_list = _read_dnsmasq_leases()
-    arp_table = _read_arp_table()
+    arp_table = _read_arp_table(interface=dist_iface)
     
     for lease in dnsmasq_leases_list:
         ip = lease['ip_address']
+        if not _matches_managed_prefix(ip, managed_prefix=managed_prefix):
+            continue
         discovered_devices[ip] = {
             'ip_address': ip,
             'mac_address': lease['mac_address'],
@@ -3485,6 +3491,8 @@ def _discover_network_devices() -> list:
         }
     
     for ip, arp_data in arp_table.items():
+        if not _matches_managed_prefix(ip, managed_prefix=managed_prefix):
+            continue
         if ip in discovered_devices:
             discovered_devices[ip]['mac_address'] = arp_data['mac_address']
             discovered_devices[ip]['device'] = arp_data['device']
@@ -3508,6 +3516,8 @@ def _discover_network_devices() -> list:
             
             for row in rows:
                 ip = row[0]
+                if not _matches_managed_prefix(ip, managed_prefix=managed_prefix):
+                    continue
                 if ip in discovered_devices:
                     discovered_devices[ip].update({'custom_name': row[3], 'policy': row[4], 'first_seen': row[5], 'doomscroll_exempt': bool(row[7])})
                 else:
