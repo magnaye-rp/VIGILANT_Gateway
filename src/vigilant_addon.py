@@ -265,7 +265,11 @@ CATEGORY_KEYWORDS = {
         "stream", "influencer"
     },
     "Harmful": {
-
+        "pornography", "sex", "adult", "erotic", "nude", "naked", "erotic", "naked", "hentai",
+        "gambling", "bet", "casino", "poker", "blackjack", "slot", "slot-machine", "slot machine",
+        "drugs", "alcohol", "marijuana", "weed", "cannabis", "cocaine", "heroin", "meth", "lsd", "ecstasy", 
+        "nigga", "nigger", "rape", "murder", "kill", "suicide", "violence", "war", "terror", "terrorist",
+        "baterbonia", "butterbonia", 
     }
 }
 # Boilerplate phrases that often appear in search engine footers or legal sections.
