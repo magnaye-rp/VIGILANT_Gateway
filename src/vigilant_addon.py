@@ -269,7 +269,9 @@ CATEGORY_KEYWORDS = {
         "gambling", "bet", "casino", "poker", "blackjack", "slot", "slot-machine", "slot machine",
         "drugs", "alcohol", "marijuana", "weed", "cannabis", "cocaine", "heroin", "meth", "lsd", "ecstasy", 
         "nigga", "nigger", "rape", "murder", "kill", "suicide", "violence", "war", "terror", "terrorist",
-        "baterbonia", "butterbonia", "phishing", "hacking", "scam", "malware", "rnicrosoft", "darknet", "darkweb"
+        "baterbonia", "butterbonia", "phishing", "hacking", "scam", "malware", "rnicrosoft", "darknet", "darkweb",
+        "pornhub", "rene baterbonia", "bisaya", "bisakol", "bisayad", "kupal", "burat", "betlog", "kumag",
+        "philippines", "philippine", "phil", "ph", "bobo", "pakyu", "tarantado", "fucker", "panot", "putangina",
     }
 }
 # Boilerplate phrases that often appear in search engine footers or legal sections.
