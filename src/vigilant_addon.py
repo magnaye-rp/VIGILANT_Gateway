@@ -712,6 +712,16 @@ def load_proxy_config():
         sni_filtering_enabled_str = row[0] if row else "true"
         sni_filtering_enabled = sni_filtering_enabled_str.lower() in ["true", "1", "yes"]
 
+        cursor.execute("SELECT value FROM config_settings WHERE key = 'block_harmful'")
+        row = cursor.fetchone()
+        block_harmful_str = row[0] if row else "true"
+        block_harmful = block_harmful_str.lower() in ["true", "1", "yes"]
+
+        cursor.execute("SELECT value FROM config_settings WHERE key = 'block_distracting'")
+        row = cursor.fetchone()
+        block_distracting_str = row[0] if row else "false"
+        block_distracting = block_distracting_str.lower() in ["true", "1", "yes"]
+
         cursor.execute("SELECT value FROM config_settings WHERE key = 'proxy_throttle_rate'")
         row = cursor.fetchone()
         throttle_rate = row[0] if row else DEFAULT_THROTTLE_RATE
@@ -758,6 +768,8 @@ def load_proxy_config():
             'physical_scroll_threshold': physical_scroll_threshold,
             'nlp_enabled': nlp_enabled,
             'sni_filtering_enabled': sni_filtering_enabled,
+            'block_harmful': block_harmful,
+            'block_distracting': block_distracting,
             'throttle_rate': throttle_rate,
             'pinned_domains': pinned_domains,
             'engagement_l1_minutes': eng_l1,
@@ -777,6 +789,8 @@ def load_proxy_config():
             'physical_scroll_threshold': 30,
             'nlp_enabled': True,
             'sni_filtering_enabled': True,
+            'block_harmful': True,
+            'block_distracting': False,
             'throttle_rate': DEFAULT_THROTTLE_RATE,
             'pinned_domains': set(DEFAULT_PINNED_DOMAINS.split(',')),
             'engagement_l1_minutes': ENGAGEMENT_L1_MINUTES,
@@ -2834,14 +2848,16 @@ class VIGILANTAddon:
 
                 matched = scan_text_for_keywords(combined_search_text, keywords)
                 if matched:
-                    print(f"[VIGILANT] KEYWORD BLOCKED (request): {matched} from {client_ip} @ {host}")
-                    log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "KEYWORD_MATCH")
-                    flow.response = http.Response.make(
-                        403,
-                        render_block_page(host, "Harmful"),
-                        {"Content-Type": "text/html"}
-                    )
-                    return
+                    config = load_proxy_config()
+                    if config.get('block_harmful', True):
+                        print(f"[VIGILANT] KEYWORD BLOCKED (request): {matched} from {client_ip} @ {host}")
+                        log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "KEYWORD_MATCH")
+                        flow.response = http.Response.make(
+                            403,
+                            render_block_page(host, "Harmful"),
+                            {"Content-Type": "text/html"}
+                        )
+                        return
         except sqlite3.Error as e:
             print(f"[VIGILANT] Database error during keyword blacklist check: {e}")
         except Exception as e:
@@ -2890,6 +2906,26 @@ class VIGILANTAddon:
                 print(f"[VIGILANT] DOMAIN OVERRIDE: {host} -> {category} (category hint match)")
                 break
 
+        config = load_proxy_config()
+        if domain_category == "Harmful" and config.get('block_harmful', True):
+            print(f"[VIGILANT] CATEGORY BLOCKED (request domain hint): {host} [Harmful]")
+            log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "CATEGORY_BLOCKED")
+            flow.response = http.Response.make(
+                403,
+                render_block_page(host, "Harmful"),
+                {"Content-Type": "text/html"}
+            )
+            return
+        elif domain_category == "Distracting" and config.get('block_distracting', False):
+            print(f"[VIGILANT] CATEGORY BLOCKED (request domain hint): {host} [Distracting]")
+            log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Distracting", True, [], "CATEGORY_BLOCKED")
+            flow.response = http.Response.make(
+                403,
+                render_block_page(host, "Distracting"),
+                {"Content-Type": "text/html"}
+            )
+            return
+
         # Optional secondary check: scan request BODY (POST payloads) with the more
         # lenient body-context rules, since body text is closer to passive content
         # than a deliberately-typed URL. Runs for ALL domains — a category hint
@@ -2905,14 +2941,15 @@ class VIGILANTAddon:
                 # Use efficient token intersection for keyword detection (unified approach for all domains)
                 matched = scan_text_for_keywords(request_body, keywords)
                 if matched:
-                    print(f"[VIGILANT] REQUEST KEYWORD BLOCKED: {matched} in request body from {host}")
-                    log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "KEYWORD_MATCH")
-                    flow.response = http.Response.make(
-                        403,
-                        render_block_page(host, "Harmful"),
-                        {"Content-Type": "text/html"}
-                    )
-                    return
+                    if config.get('block_harmful', True):
+                        print(f"[VIGILANT] REQUEST KEYWORD BLOCKED: {matched} in request body from {host}")
+                        log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "KEYWORD_MATCH")
+                        flow.response = http.Response.make(
+                            403,
+                            render_block_page(host, "Harmful"),
+                            {"Content-Type": "text/html"}
+                        )
+                        return
         except sqlite3.Error as e:
             print(f"[VIGILANT] Request body keyword blacklist check failed: {e}")
 
@@ -2976,14 +3013,16 @@ class VIGILANTAddon:
             if keywords and body_text:
                 matched = scan_text_for_keywords(body_text, keywords)
                 if matched:
-                    print(f"[VIGILANT] RESPONSE KEYWORD BLOCKED: {matched} in {content_type} response from {host}")
-                    log_request(client_ip, host, path, method, "Harmful", True, [], "KEYWORD_MATCH")
-                    flow.response = http.Response.make(
-                        403,
-                        render_block_page(host, "Harmful"),
-                        {"Content-Type": "text/html"}
-                    )
-                    return
+                    config = load_proxy_config()
+                    if config.get('block_harmful', True):
+                        print(f"[VIGILANT] RESPONSE KEYWORD BLOCKED: {matched} in {content_type} response from {host}")
+                        log_request(client_ip, host, path, method, "Harmful", True, [], "KEYWORD_MATCH")
+                        flow.response = http.Response.make(
+                            403,
+                            render_block_page(host, "Harmful"),
+                            {"Content-Type": "text/html"}
+                        )
+                        return
         except sqlite3.Error as e:
             print(f"[VIGILANT] Response keyword blacklist check failed: {e}")
 
@@ -3004,12 +3043,21 @@ class VIGILANTAddon:
         threshold = float(config.get('tfidf_classification_threshold', 0.15))
         tfidf_category, _tfidf_scores = tfidf_classifier.classify(clean_text, threshold=threshold)
 
-        if tfidf_category == "Harmful":
+        if tfidf_category == "Harmful" and config.get('block_harmful', True):
             print(f"[VIGILANT] RESPONSE TF-IDF BLOCKED: {host} classified Harmful  scores={_tfidf_scores}")
             log_request(client_ip, host, path, method, "Harmful", True, [], "TFIDF_HARMFUL")
             flow.response = http.Response.make(
                 403,
                 render_block_page(host, "Harmful", debug_info=tfidf_input_snippet),
+                {"Content-Type": "text/html"}
+            )
+            return
+        elif tfidf_category == "Distracting" and config.get('block_distracting', False):
+            print(f"[VIGILANT] RESPONSE TF-IDF BLOCKED: {host} classified Distracting  scores={_tfidf_scores}")
+            log_request(client_ip, host, path, method, "Distracting", True, [], "TFIDF_DISTRACTING")
+            flow.response = http.Response.make(
+                403,
+                render_block_page(host, "Distracting", debug_info=tfidf_input_snippet),
                 {"Content-Type": "text/html"}
             )
             return

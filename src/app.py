@@ -138,6 +138,8 @@ DEFAULT_CONFIG = {
     "tfidf_url_threshold": "0.3",
     "tfidf_body_threshold": "0.15",
     "sni_filtering_enabled": "true",
+    "block_harmful": "true",
+    "block_distracting": "false",
     "engagement_l1_minutes": "3",
     "engagement_l2_minutes": "6",
     "engagement_l3_minutes": "12",
