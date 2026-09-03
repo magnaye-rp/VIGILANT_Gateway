@@ -33,10 +33,10 @@ function showHelpToolkit() {
   const toolkitModal = document.getElementById('toolkitModal');
   const toolkitTitle = document.getElementById('toolkitTitle');
   const toolkitContent = document.getElementById('toolkitContent');
-  
+
   toolkitModal.classList.add('active');
-  
-  switch(currentTab) {
+
+  switch (currentTab) {
     case 'system':
       toolkitTitle.innerText = "System Help";
       toolkitContent.innerHTML = "Here you can view <strong>hardware diagnostics</strong> (CPU/RAM out of 8GB, storage), <strong>interface throughput</strong>, and <strong>service states</strong>.";
@@ -74,15 +74,15 @@ function showHelpToolkit() {
 function switchTab(tabId, triggerElement = null) {
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-  
+
   document.getElementById(`tab-${tabId}`)?.classList.add('active');
   const navItem = triggerElement
     || window.event?.currentTarget
     || Array.from(document.querySelectorAll('.nav-item')).find(el => el.getAttribute('onclick')?.includes(`'${tabId}'`));
   navItem?.classList.add('active');
-  
+
   currentTab = tabId;
-  
+
   if (tabId === 'system') {
     loadPinnedDisplay();
     loadCircuitBreakerState();
@@ -118,7 +118,7 @@ function switchTab(tabId, triggerElement = null) {
 }
 
 // ─── Device Management ───
-window.loadThrottledDevices = async function() {
+window.loadThrottledDevices = async function () {
   const tableBody = document.getElementById('throttled-tbody');
 
   try {
@@ -136,7 +136,7 @@ window.loadThrottledDevices = async function() {
       const ip = device.client_ip || device.ip_address || '—';
       const throttleState = device.throttle_state || 'unknown';
       const throttleStateClass = getThrottleStateClass(throttleState);
-      
+
       return `
         <tr>
           <td style="font-weight: 500;">${hostname}</td>
@@ -188,7 +188,7 @@ async function releaseThrottle(ipAddress) {
   }
 }
 
-window.loadActiveDevices = async function() {
+window.loadActiveDevices = async function () {
   const tableBody = document.getElementById('active-tbody');
 
   try {
@@ -204,7 +204,7 @@ window.loadActiveDevices = async function() {
     tableBody.innerHTML = devices.map(device => {
       const hostname = device.hostname || 'Unknown Device';
       const ip = device.ip_address || '—';
-      
+
       return `
         <tr>
           <td style="font-weight: 500;">${hostname}</td>
@@ -218,7 +218,7 @@ window.loadActiveDevices = async function() {
   }
 };
 
-window.loadLeasedDevices = async function() {
+window.loadLeasedDevices = async function () {
   const tableBody = document.getElementById('leased-tbody');
 
   try {
@@ -241,7 +241,7 @@ window.loadLeasedDevices = async function() {
       const policy = device.policy || 'none';
       const stateClass = policy === 'blacklist' ? 'danger' : (policy === 'whitelist' ? 'success' : 'secondary');
       const stateLabel = policy === 'blacklist' ? 'Blacklisted' : (policy === 'whitelist' ? 'Whitelisted' : 'Default');
-      
+
       return `
         <tr>
           <td style="font-weight: 500;">${device.hostname || device.custom_name || 'Unknown Device'}</td>
@@ -264,32 +264,32 @@ window.loadLeasedDevices = async function() {
   }
 };
 
-window.setDeviceFilter = async function(macAddress, action, buttonElement) {
+window.setDeviceFilter = async function (macAddress, action, buttonElement) {
   try {
     const response = await fetch('/api/devices/policy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mac_address: macAddress, policy: action })
     });
-    
+
     if (response.ok) {
       const data = await response.json();
       if (data.status === 'success') {
         showToast(`Device ${action === 'whitelist' ? 'whitelisted' : action === 'blacklist' ? 'blacklisted' : 'reset to default'} successfully`, 'success');
-        
+
         // Update UI to reflect the new state
         const row = buttonElement.closest('tr');
         const pills = row.querySelectorAll('.filter-pill');
         pills.forEach(pill => pill.classList.remove('active'));
         buttonElement.classList.add('active');
-        
+
         // Update status badge
         const statusBadge = row.querySelector('.category-badge');
         if (statusBadge) {
           statusBadge.className = `category-badge ${action === 'blacklist' ? 'danger' : action === 'whitelist' ? 'success' : 'secondary'}`;
           statusBadge.textContent = action === 'blacklist' ? 'Blacklisted' : action === 'whitelist' ? 'Whitelisted' : 'Default';
         }
-        
+
         loadLeasedDevices(); // Refresh to ensure consistency
       } else {
         showToast('Failed to update device filter: ' + (data.message || 'Unknown error'), 'danger');
@@ -305,17 +305,17 @@ window.setDeviceFilter = async function(macAddress, action, buttonElement) {
 // ─── Active Restraints Registry ───
 async function loadRestraintsRegistry() {
   const tableBody = document.getElementById('restraints-tbody');
-  
+
   try {
     const response = await fetch('/api/restraints/registry');
     const data = await response.json();
     const restraints = Array.isArray(data.restraints) ? data.restraints : [];
-    
+
     if (restraints.length === 0) {
       tableBody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No active restraints</td></tr>';
       return;
     }
-    
+
     tableBody.innerHTML = restraints.map(restraint => {
       return `
         <tr>
@@ -338,14 +338,14 @@ async function releaseRestraint(ipAddress) {
   if (!confirm(`Release restraint for IP ${ipAddress}?`)) {
     return;
   }
-  
+
   try {
     const response = await fetch('/api/restraints/release', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ip_address: ipAddress })
     });
-    
+
     const data = await response.json();
     if (response.ok) {
       showToast(data.message || 'Restraint released successfully', 'success');
@@ -362,7 +362,7 @@ async function releaseRestraint(ipAddress) {
 function toggleAdvancedSettings() {
   const advancedToggle = document.getElementById('advanced-toggle');
   const advancedSettings = document.getElementById('advanced-settings');
-  
+
   if (advancedToggle.checked) {
     advancedSettings.classList.remove('d-none');
   } else {
@@ -467,7 +467,7 @@ async function refreshStats() {
         badge.className = `category-badge ${isActive ? 'success' : 'danger'}`;
       }
     });
-    
+
     // Update network configuration displays if on settings or wizard tab
     if (currentTab === 'settings' || currentTab === 'wizard') {
       syncConfigInputs(['setting-upstream-interface'], networkConfig.upstream_interface);
@@ -475,12 +475,12 @@ async function refreshStats() {
       syncConfigInputs(['setting-gateway-ip', 'wizard-gateway-ip'], networkConfig.gateway_ip);
       syncConfigInputs(['wizard-dhcp-start'], networkConfig.dhcp_start);
       syncConfigInputs(['wizard-dhcp-end'], networkConfig.dhcp_end);
-      
+
       const dnsServersEl = document.getElementById('setting-dns-servers');
       if (dnsServersEl && networkConfig.dns_servers) {
         dnsServersEl.value = networkConfig.dns_servers;
       }
-      
+
       updateInterfaceDropdowns(networkConfig.upstream_interface, networkConfig.distribution_interface);
     }
   } catch (e) {
@@ -521,30 +521,30 @@ async function loadUnifiedConfig() {
     }
 
     const config = await parseJsonResponse(response) || {};
-    
+
     // Populate network interface dropdowns with available interfaces
     if (config.available_interfaces && Array.isArray(config.available_interfaces)) {
       populateInterfaceDropdowns(config.available_interfaces);
     }
-    
+
     // Sync filtering settings
     syncConfigInputs(['block-harmful'], config.block_harmful);
     syncConfigInputs(['block-distracting'], config.block_distracting);
     syncConfigInputs(['throttle-enabled'], config.throttle_enabled);
-    
+
     // Sync network settings
     syncConfigInputs(['upstream-interface'], config.upstream_interface);
     syncConfigInputs(['distribution-interface'], config.distribution_interface);
     syncConfigInputs(['gateway-ip'], config.gateway_ip);
     syncConfigInputs(['dhcp-start'], config.dhcp_start);
     syncConfigInputs(['dhcp-end'], config.dhcp_end);
-    
+
     // Sync DNS servers
     const dnsServersEl = document.getElementById('dns-servers');
     if (dnsServersEl && config.upstream_dns) {
       dnsServersEl.value = config.upstream_dns;
     }
-    
+
     // Sync advanced settings
     syncConfigInputs(['nlp-accuracy'], config.nlp_accuracy);
     syncConfigInputs(['nlp-enabled'], config.nlp_enabled);
@@ -574,12 +574,12 @@ async function loadUnifiedConfig() {
       throttleCheck.checked = enabled;
       throttleLabel.textContent = enabled ? 'Enabled' : 'Disabled';
     }
-    
+
     // Update network interface dropdowns with actual values
     updateInterfaceDropdowns(config.upstream_interface, config.distribution_interface);
 
     // Populate pinned domains editor dropdown in Setup tab
-    loadPinnedEditor().catch(() => {});
+    loadPinnedEditor().catch(() => { });
 
   } catch (error) {
     showToast('Failed to load configuration', 'danger');
@@ -593,27 +593,27 @@ async function loadConfigToUI() {
 function populateInterfaceDropdowns(interfaces) {
   const upstreamSelect = document.getElementById('upstream-interface');
   const distributionSelect = document.getElementById('distribution-interface');
-  
+
   if (!upstreamSelect || !distributionSelect) return;
-  
+
   // Clear existing options
   upstreamSelect.innerHTML = '';
   distributionSelect.innerHTML = '';
-  
+
   // Add default option
   const defaultOption = document.createElement('option');
   defaultOption.value = '';
   defaultOption.textContent = 'Select interface...';
   upstreamSelect.appendChild(defaultOption.cloneNode(true));
   distributionSelect.appendChild(defaultOption);
-  
+
   // Add available interfaces
   interfaces.forEach(iface => {
     const upstreamOption = document.createElement('option');
     upstreamOption.value = iface;
     upstreamOption.textContent = iface;
     upstreamSelect.appendChild(upstreamOption);
-    
+
     const distributionOption = document.createElement('option');
     distributionOption.value = iface;
     distributionOption.textContent = iface;
@@ -641,7 +641,7 @@ function updateInterfaceDropdowns(upstreamIface, distributionIface) {
       upstreamSelect.appendChild(newOption);
     }
   }
-  
+
   // Update distribution interface dropdown
   const distributionSelect = document.getElementById('distribution-interface');
   if (distributionSelect) {
@@ -669,7 +669,7 @@ async function saveUnifiedConfig(e) {
   const blockHarmfulEl = document.getElementById('block-harmful');
   const blockDistractingEl = document.getElementById('block-distracting');
   const throttleEnabledEl = document.getElementById('throttle-enabled');
-  
+
   // Network settings
   const upstreamInterfaceEl = document.getElementById('upstream-interface');
   const distributionInterfaceEl = document.getElementById('distribution-interface');
@@ -677,7 +677,7 @@ async function saveUnifiedConfig(e) {
   const dhcpStartEl = document.getElementById('dhcp-start');
   const dhcpEndEl = document.getElementById('dhcp-end');
   const dnsServersEl = document.getElementById('dns-servers');
-  
+
   // Advanced settings
   const nlpAccuracyEl = document.getElementById('nlp-accuracy');
   const nlpEnabledEl = document.getElementById('nlp-enabled');
@@ -756,8 +756,8 @@ async function loadBehavioralSettings() {
     let mode = 'custom';
     for (const [key, preset] of Object.entries(BEHAVIORAL_PRESETS)) {
       if (preset.l1_minutes == l1 && preset.l2_minutes == l2 &&
-          preset.l3_minutes == l3 && preset.l1_rate == l1Rate &&
-          preset.l2_rate == l2Rate && preset.l3_rate == l3Rate) {
+        preset.l3_minutes == l3 && preset.l1_rate == l1Rate &&
+        preset.l2_rate == l2Rate && preset.l3_rate == l3Rate) {
         mode = key;
         break;
       }
@@ -794,19 +794,19 @@ async function loadBehavioralSettings() {
 
 const BEHAVIORAL_PRESETS = {
   relaxed: {
-    l1_minutes: 5, l2_minutes: 10, l3_minutes: 20, idle_reset: 120,
+    l1_minutes: 30, l2_minutes: 60, l3_minutes: 90, idle_reset: 1200,
     l1_rate: '256kbit', l2_rate: '64kbit', l3_rate: '8kbit',
-    description: 'L1 at 5min (256kbit), L2 at 10min (64kbit), L3 at 20min (8kbit). 2min idle reset.'
+    description: 'L1 at 30min (256kbit), L2 at 60min (64kbit), L3 at 90min (8kbit). 20min idle reset.'
   },
   balanced: {
-    l1_minutes: 3, l2_minutes: 6, l3_minutes: 12, idle_reset: 120,
+    l1_minutes: 15, l2_minutes: 30, l3_minutes: 45, idle_reset: 900,
     l1_rate: '128kbit', l2_rate: '32kbit', l3_rate: '4kbit',
-    description: 'L1 at 3min (128kbit), L2 at 6min (32kbit), L3 at 12min (4kbit). 2min idle reset.'
+    description: 'L1 at 15min (128kbit), L2 at 30min (32kbit), L3 at 45min (4kbit). 15min idle reset.'
   },
   strict: {
-    l1_minutes: 2, l2_minutes: 4, l3_minutes: 8, idle_reset: 120,
+    l1_minutes: 5, l2_minutes: 10, l3_minutes: 15, idle_reset: 300,
     l1_rate: '64kbit', l2_rate: '16kbit', l3_rate: '2kbit',
-    description: 'L1 at 2min (64kbit), L2 at 4min (16kbit), L3 at 8min (2kbit). 2min idle reset.'
+    description: 'L1 at 5min (64kbit), L2 at 10min (16kbit), L3 at 15min (2kbit). 5min idle reset.'
   }
 };
 
@@ -1012,7 +1012,7 @@ async function handlePasswordChange() {
 }
 
 // ─── Keyword Filtering ───
-window.loadKeywords = async function() {
+window.loadKeywords = async function () {
   const tableBody = document.getElementById('keywords-table-body');
   if (!tableBody) return;
 
@@ -1039,7 +1039,7 @@ window.loadKeywords = async function() {
   }
 };
 
-window.deleteKeyword = async function(keywordId) {
+window.deleteKeyword = async function (keywordId) {
   if (!confirm('Are you sure you want to delete this keyword?')) {
     return;
   }
@@ -1095,7 +1095,7 @@ async function loadBypassDomains() {
 async function addBypassDomain() {
   const input = document.getElementById("bypass-domain-input");
   if (!input) return;
-  
+
   const domain = input.value.trim().toLowerCase();
   if (!domain) {
     showToast("Enter a domain to bypass", "danger");
@@ -1107,20 +1107,20 @@ async function addBypassDomain() {
     const config = await resp.json();
     const existing = config.custom_bypass_domains || "";
     const domains = existing ? existing.split(",").map(d => d.trim()).filter(Boolean) : [];
-    
+
     if (domains.includes(domain)) {
       showToast("Domain already in bypass list", "warning");
       return;
     }
-    
+
     domains.push(domain);
-    
+
     const saveResp = await fetch("/api/config/setup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ custom_bypass_domains: domains.join(",") })
     });
-    
+
     if (saveResp.ok) {
       showToast("Domain added to bypass list", "success");
       input.value = "";
@@ -1142,13 +1142,13 @@ async function removeBypassDomain(domain) {
     const existing = config.custom_bypass_domains || "";
     const domains = existing ? existing.split(",").map(d => d.trim()).filter(Boolean) : [];
     const filtered = domains.filter(d => d !== domain);
-    
+
     const saveResp = await fetch("/api/config/setup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ custom_bypass_domains: filtered.join(",") })
     });
-    
+
     if (saveResp.ok) {
       showToast("Domain removed from bypass list", "success");
       loadBypassDomains();
@@ -1360,11 +1360,11 @@ function renderPagination(containerId, page, totalPages, loadFunc) {
   const container = document.getElementById(containerId);
   if (!container || totalPages <= 1) { if (container) container.innerHTML = ''; return; }
   let html = '<button class="btn-secondary" style="padding:0.2rem 0.5rem;font-size:0.8rem;" ';
-  html += page > 1 ? `onclick="${loadFunc}(${page-1})"` : 'disabled';
+  html += page > 1 ? `onclick="${loadFunc}(${page - 1})"` : 'disabled';
   html += '><i class="fa-solid fa-chevron-left"></i></button>';
   html += `<span>Page ${page} of ${totalPages}</span>`;
   html += '<button class="btn-secondary" style="padding:0.2rem 0.5rem;font-size:0.8rem;" ';
-  html += page < totalPages ? `onclick="${loadFunc}(${page+1})"` : 'disabled';
+  html += page < totalPages ? `onclick="${loadFunc}(${page + 1})"` : 'disabled';
   html += '><i class="fa-solid fa-chevron-right"></i></button>';
   container.innerHTML = html;
 }
@@ -1575,7 +1575,7 @@ async function loadCategoryHints() {
 function toggleMetricsToolkit() {
   const content = document.getElementById('metrics-toolkit-content');
   const toggle = document.getElementById('metrics-toolkit-toggle');
-  
+
   if (content.style.display === 'none') {
     content.style.display = 'block';
     toggle.textContent = '▲';
@@ -1589,13 +1589,13 @@ async function updateGlobalThroughput() {
   try {
     const response = await fetch('/api/interface/throughput');
     const data = await response.json();
-    
+
     const rxElement = document.getElementById('global-rx-mbps');
     const txElement = document.getElementById('global-tx-mbps');
-    
+
     if (rxElement) rxElement.textContent = data.rx_mbps.toFixed(2);
     if (txElement) txElement.textContent = data.tx_mbps.toFixed(2);
-    
+
     // Also update nerve center display
     const nerveLoad = document.getElementById('nerve-network-load');
     if (nerveLoad) {
@@ -1664,14 +1664,14 @@ function showToast(message, type = 'info') {
     container.className = 'toast-container';
     document.body.appendChild(container);
   }
-  
+
   const toast = document.createElement('div');
   toast.className = `toast ${type}`;
   toast.textContent = message;
-  
+
   const container = document.querySelector('.toast-container');
   container.appendChild(toast);
-  
+
   // Remove toast after 3 seconds
   setTimeout(() => {
     toast.remove();
@@ -1690,10 +1690,10 @@ async function loadTrafficLogs() {
     const clientFilter = document.getElementById('traffic-filter-client')?.value || '';
     const domainFilter = document.getElementById('traffic-filter-domain')?.value || '';
     const blockReasonFilter = document.getElementById('block-reason-filter')?.value || '';
-    
+
     // Combine search filters (client IP or domain)
     const searchFilter = clientFilter || domainFilter;
-    
+
     // Build URL with filter parameters
     const offset = (currentPage - 1) * perPage;
     let url = `/api/logs/traffic?limit=${perPage}&offset=${offset}`;
@@ -1706,7 +1706,7 @@ async function loadTrafficLogs() {
     if (blockReasonFilter) {
       url += `&block_reason=${encodeURIComponent(blockReasonFilter)}`;
     }
-    
+
     const response = await fetch(url);
     if (!response.ok) {
       const errorPayload = await parseJsonResponse(response);
@@ -1718,7 +1718,7 @@ async function loadTrafficLogs() {
     let trafficHtml = '';
     recentRows.forEach(r => {
       const categoryClass = `category-badge ${String(r.category || 'unclassified').toLowerCase()}`;
-      
+
       // Generate block reason badges
       let blockReasonHtml = '';
       if (r.block_reasons && r.block_reasons.length > 0) {
@@ -1729,7 +1729,7 @@ async function loadTrafficLogs() {
       } else {
         blockReasonHtml = '<span class="text-muted">-</span>';
       }
-      
+
       trafficHtml += `
         <tr>
           <td>${r.formatted_time || r.time || 'N/A'}</td>
@@ -1751,7 +1751,7 @@ async function loadTrafficLogs() {
       setTextIfPresent('current-page', currentPage);
       setTextIfPresent('total-pages', totalPages);
       setTextIfPresent('total-items', totalItems);
-      
+
       // Enable/disable buttons
       const prevButton = document.getElementById('prev-page');
       const nextButton = document.getElementById('next-page');
@@ -1826,56 +1826,56 @@ async function factoryReset() {
 }
 
 function exportConfig() {
-    showToast('Exporting configuration...', 'info');
-    // Direct browser redirect to download the JSON payload attachment cleanly
-    window.location.href = '/api/config/setup/export';
+  showToast('Exporting configuration...', 'info');
+  // Direct browser redirect to download the JSON payload attachment cleanly
+  window.location.href = '/api/config/setup/export';
 }
 
 function importConfig() {
-    // 1. Create a dynamic, hidden file input element
-    const fileInput = document.createElement('input');
-    fileInput.type = 'file';
-    fileInput.accept = '.json';
-    
-    // 2. Listen for when the user selects a file
-    fileInput.onchange = function(e) {
-        const file = e.target.files[0];
-        if (!file) return;
-        
-        showToast('Uploading configuration...', 'info');
-        
-        // 3. Package the file inside FormData
-        const formData = new FormData();
-        formData.append('config_file', file);
-        
-        // 4. Send the multi-part request to our backend API
-        fetch('/api/config/setup/import', {
-            method: 'POST',
-            body: formData
-        })
-        .then(response => {
-            if (response.redirected) {
-                // If Flask redirects with flash messages, follow it
-                window.location.href = response.url;
+  // 1. Create a dynamic, hidden file input element
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.accept = '.json';
+
+  // 2. Listen for when the user selects a file
+  fileInput.onchange = function (e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    showToast('Uploading configuration...', 'info');
+
+    // 3. Package the file inside FormData
+    const formData = new FormData();
+    formData.append('config_file', file);
+
+    // 4. Send the multi-part request to our backend API
+    fetch('/api/config/setup/import', {
+      method: 'POST',
+      body: formData
+    })
+      .then(response => {
+        if (response.redirected) {
+          // If Flask redirects with flash messages, follow it
+          window.location.href = response.url;
+        } else {
+          return response.json().then(data => {
+            if (response.ok) {
+              showToast('Configuration imported successfully!', 'success');
+              setTimeout(() => window.location.reload(), 1500);
             } else {
-                return response.json().then(data => {
-                    if (response.ok) {
-                        showToast('Configuration imported successfully!', 'success');
-                        setTimeout(() => window.location.reload(), 1500);
-                    } else {
-                        showToast(data.error || 'Import failed.', 'danger');
-                    }
-                });
+              showToast(data.error || 'Import failed.', 'danger');
             }
-        })
-        .catch(err => {
-            console.error(err);
-            showToast('Network error during configuration import.', 'danger');
-        });
-    };
-    
-    // 5. Programmatically click it to trigger the OS file selector window
-    fileInput.click();
+          });
+        }
+      })
+      .catch(err => {
+        console.error(err);
+        showToast('Network error during configuration import.', 'danger');
+      });
+  };
+
+  // 5. Programmatically click it to trigger the OS file selector window
+  fileInput.click();
 }
 
 async function executeSystemControl(action, buttonElement) {
@@ -1886,30 +1886,30 @@ async function executeSystemControl(action, buttonElement) {
     'reload_firewall': '🔄 Reloading firewall...',
     'restart_dnsmasq': '🔄 Reloading DNS...'
   };
-  
+
   // Disable button and show loading state
   buttonElement.disabled = true;
   buttonElement.textContent = actionLabels[action] || '🔄 Processing...';
-  
+
   try {
     const response = await fetch('/api/system/control', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action })
     });
-    
+
     const data = await response.json();
-    
+
     if (response.ok && data.status === 'success') {
       showToast(data.message || 'Operation completed successfully', 'success');
-      
+
       // Refresh stats after a short delay to show updated service status
       setTimeout(() => {
         refreshStats();
       }, 1000);
     } else if (response.ok && data.status === 'warning') {
       showToast(data.message || 'Operation completed with warnings', 'warning');
-      
+
       setTimeout(() => {
         refreshStats();
       }, 1000);
@@ -1954,7 +1954,7 @@ async function saveWizardConfig(e) {
   const blockDistractingEl = getConfigInput(['block-distracting']);
   const throttleEnabledEl = getConfigInput(['throttle-enabled']);
   const velocityThresholdEl = getConfigInput(['wizard-throttle-threshold']);
-  
+
   // Network settings
   const upstreamInterfaceEl = document.getElementById('wizard-upstream-interface');
   const distributionInterfaceEl = document.getElementById('wizard-distribution-interface');
@@ -2013,7 +2013,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const keywordForm = document.getElementById('keyword-form');
   if (keywordForm) {
-    keywordForm.addEventListener('submit', async function(e) {
+    keywordForm.addEventListener('submit', async function (e) {
       e.preventDefault();
       const keywordInput = document.getElementById('keyword-input');
       const keyword = keywordInput.value.trim();
@@ -2047,12 +2047,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const categoryHintForm = document.getElementById('category-hint-form');
   if (categoryHintForm) {
-    categoryHintForm.addEventListener('submit', async function(e) {
+    categoryHintForm.addEventListener('submit', async function (e) {
       e.preventDefault();
 
       const categorySelect = document.getElementById('category-hint-category');
       const domainInput = document.getElementById('category-hint-domain');
-      
+
       const category = categorySelect.value;
       const domain = domainInput.value.trim();
 
@@ -2093,7 +2093,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // SNI dashboard event listeners
   const sniTimeWindow = document.getElementById('sni-time-window');
   const sniClientFilter = document.getElementById('sni-client-filter');
-  
+
   if (sniTimeWindow) {
     sniTimeWindow.addEventListener('change', loadSNIDashboard);
   }
@@ -2103,8 +2103,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Behavioral control timeline live update listeners
   const bSelectors = ['adv-engagement-l1', 'adv-engagement-l2', 'adv-engagement-l3',
-                       'adv-engagement-l1-rate', 'adv-engagement-l2-rate', 'adv-engagement-l3-rate',
-                       'adv-engagement-reset'];
+    'adv-engagement-l1-rate', 'adv-engagement-l2-rate', 'adv-engagement-l3-rate',
+    'adv-engagement-reset'];
   bSelectors.forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('change', updateBehavioralTimeline);
@@ -2118,7 +2118,7 @@ document.addEventListener('DOMContentLoaded', () => {
 function toggleTheme(mode) {
   document.documentElement.setAttribute('data-theme', mode);
   localStorage.setItem('ui-theme', mode);
-  
+
   // Background fetch to backend
   fetch('/api/config/ui-theme', {
     method: 'POST',
@@ -2134,7 +2134,7 @@ function initTheme() {
   if (themeSelect) {
     themeSelect.value = savedTheme;
   }
-  
+
   const themeToggleSwitch = document.getElementById('theme-toggle-switch');
   if (themeToggleSwitch) {
     themeToggleSwitch.checked = (savedTheme === 'dark');
@@ -2166,17 +2166,17 @@ async function loadSNIDashboard() {
 
   const timeWindow = timeWindowSelect.value;
   const clientIP = clientFilterSelect.value;
-  
+
   try {
     // Load scroll rates for charts
     const scrollResponse = await fetch(`/api/sni/scroll-rates?time_window=${timeWindow}&client_ip=${clientIP}`);
     const scrollData = await parseJsonResponse(scrollResponse) || {};
     updateSNICharts(scrollResponse.ok && scrollData.status === 'success' ? scrollData.scroll_rates : []);
-    
+
     // Load the first page of SNI logs
     currentSniPage = 1;
     await loadSNILogPage(1);
-    
+
     // Load client filter dropdown
     await loadSNIClientFilter();
   } catch (error) {
@@ -2329,15 +2329,15 @@ function updateSNILogTable(logs) {
     return;
   }
   const safeLogs = Array.isArray(logs) ? logs : [];
-  
+
   if (safeLogs.length === 0) {
     tableBody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-secondary);">No SNI requests found for the selected filters.</td></tr>';
     if (emptyState) emptyState.classList.remove('hidden');
     return;
   }
-  
+
   if (emptyState) emptyState.classList.add('hidden');
-  
+
   tableBody.innerHTML = safeLogs.map(log => `
     <tr>
       <td>${log.formatted_time || 'N/A'}</td>
@@ -2351,20 +2351,20 @@ async function loadSNIClientFilter() {
   try {
     const response = await fetch('/api/sni/requests');
     const data = await parseJsonResponse(response) || {};
-    
+
     if (response.ok && data.status === 'success') {
       const clientIPs = [...new Set(data.logs.map(log => log.client_ip))];
       const select = document.getElementById('sni-client-filter');
       if (!select) {
         return;
       }
-      
+
       // Keep current selection
       const currentValue = select.value;
-      
-      select.innerHTML = '<option value="">All Clients</option>' + 
+
+      select.innerHTML = '<option value="">All Clients</option>' +
         clientIPs.map(ip => `<option value="${ip}">${ip}</option>`).join('');
-      
+
       select.value = currentValue;
     }
   } catch (error) {
@@ -2408,7 +2408,7 @@ async function clearSNILogs() {
   try {
     const resp = await fetch("/api/sni/clear", { method: "POST" });
     const data = await resp.json();
-    
+
     if (resp.ok) {
       showToast(data.message || "SNI logs cleared", "success");
       currentSniPage = 1;
@@ -2478,7 +2478,7 @@ async function loadPinnedEditor() {
     const domains = raw ? raw.split(",").map(d => d.trim()).filter(Boolean) : [];
     select.innerHTML = '<option value="">Select to remove...</option>' +
       domains.map(d => `<option value="${d}">${d}</option>`).join('');
-  } catch (_) {}
+  } catch (_) { }
 }
 
 async function addPinnedDomain() {
@@ -2524,17 +2524,17 @@ let dashboardPollInterval = null;
 
 function startDashboardPolling() {
   if (dashboardPollInterval) clearInterval(dashboardPollInterval);
-  
+
   const fetchSummary = async () => {
     try {
       const response = await fetch('/api/dashboard/summary');
       if (!response.ok) return;
       const data = await response.json();
-      
+
       // 1. Update Nerve Center (Quick View)
       const healthIcon = document.getElementById('nerve-health-icon');
       const healthText = document.getElementById('nerve-health-text');
-      
+
       const isOptimal = data.system.cpu_usage < 80 && data.system.ram_usage_gb < (data.system.ram_total_gb * 0.9);
       if (healthIcon && healthText) {
         healthIcon.style.color = isOptimal ? '#1A938A' : 'var(--danger)';
@@ -2552,12 +2552,12 @@ function startDashboardPolling() {
       if (sysThroughput) {
         sysThroughput.textContent = `${data.system.throughput_rx_mbps} / ${data.system.throughput_tx_mbps}`;
       }
-      
+
       const networkLoad = document.getElementById('nerve-network-load');
       if (networkLoad) {
         networkLoad.textContent = 'Network Active';
       }
-      
+
       const shieldIntegrity = document.getElementById('nerve-shield-integrity');
       if (shieldIntegrity) {
         shieldIntegrity.textContent = `${data.devices.total_connected} Active / ${data.devices.throttled_count} Throttled`;
@@ -2603,7 +2603,7 @@ function startDashboardPolling() {
       if (sysDisk) {
         sysDisk.textContent = `${data.system.disk_usage}%`;
       }
-      
+
       ['mitmproxy', 'dnsmasq'].forEach(svc => {
         const badge = document.getElementById(`status-${svc}`);
         if (badge) {
@@ -2621,7 +2621,7 @@ function startDashboardPolling() {
             const policy = device.policy || 'none';
             const stateClass = policy === 'blacklist' ? 'danger' : (policy === 'whitelist' ? 'success' : 'secondary');
             const stateLabel = policy === 'blacklist' ? 'Blacklisted' : (policy === 'whitelist' ? 'Whitelisted' : 'Default');
-            
+
             return `
               <tr>
                 <td style="font-weight: 500;">${device.hostname || device.custom_name || 'Unknown Device'}</td>
@@ -2645,7 +2645,7 @@ function startDashboardPolling() {
         await loadCircuitBreakerState();
       } catch (e) { }
       // 5. Update pinned domains display on System tab
-      loadPinnedDisplay().catch(() => {});
+      loadPinnedDisplay().catch(() => { });
       // 5. Update pending bypass count badge (lightweight — only badge text)
       try {
         const pbResp = await fetch("/api/pending-bypasses");
@@ -2659,12 +2659,12 @@ function startDashboardPolling() {
       } catch (e) {
         // Non-critical
       }
-      
+
     } catch (error) {
       console.error('Polling error:', error);
     }
   };
-  
+
   fetchSummary();
 
   // Reduce polling frequency when tab is not visible
@@ -2691,24 +2691,24 @@ async function loadCircuitBreakerState() {
   try {
     const response = await fetch('/api/circuit-breaker/state');
     const data = await response.json();
-    
+
     const panel = document.getElementById('circuit-breaker-panel');
     const subtitle = document.getElementById('cb-subtitle');
     const badge = document.getElementById('cb-status-badge');
     const interventions = document.getElementById('cb-interventions');
     const empty = document.getElementById('cb-empty');
-    
+
     if (!panel) return;
-    
+
     const cbData = data.states || [];
-    
+
     if (cbData.length === 0) {
       panel.style.display = 'none';
       return;
     }
-    
+
     panel.style.display = 'block';
-    
+
     // Update badge (3-level system: 1=Pause, 2=Friction, 3=Circuit Break)
     const highestLevel = Math.max(...cbData.map(s => s.level));
     if (highestLevel >= 3) {
@@ -2721,12 +2721,12 @@ async function loadCircuitBreakerState() {
       badge.textContent = 'Pause';
       badge.style.background = '#1A938A';
     }
-    
+
     subtitle.textContent = `${cbData.length} device(s) under intervention`;
-    
+
     // Build intervention list — use actual engagement data from backend
-    const levelColors = {0: '#666', 1: '#1A938A', 2: '#ffa500', 3: '#ff3860'};
-    const levelIcons = {0: 'fa-circle', 1: 'fa-pause-circle', 2: 'fa-gauge-high', 3: 'fa-bolt'};
+    const levelColors = { 0: '#666', 1: '#1A938A', 2: '#ffa500', 3: '#ff3860' };
+    const levelIcons = { 0: 'fa-circle', 1: 'fa-pause-circle', 2: 'fa-gauge-high', 3: 'fa-bolt' };
 
     interventions.innerHTML = cbData.map(s => `
       <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 1rem; background: var(--surface); border-radius: 8px; margin-bottom: 0.5rem; border-left: 4px solid ${levelColors[s.level] || '#1A938A'};">
@@ -2743,7 +2743,7 @@ async function loadCircuitBreakerState() {
         </div>
       </div>
     `).join('');
-    
+
     if (empty) empty.style.display = 'none';
   } catch (error) {
     console.error('Error loading circuit breaker state:', error);
@@ -2752,14 +2752,14 @@ async function loadCircuitBreakerState() {
 
 async function releaseCircuitBreaker(clientIp) {
   if (!confirm(`Release circuit breaker for ${clientIp}?`)) return;
-  
+
   try {
     const response = await fetch('/api/circuit-breaker/release', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ client_ip: clientIp })
     });
-    
+
     if (response.ok) {
       showToast(`Circuit breaker released for ${clientIp}`, 'success');
       loadCircuitBreakerState();
@@ -2775,7 +2775,7 @@ async function releaseCircuitBreaker(clientIp) {
 // ─── Logout Handler ───
 async function handleLogout() {
   if (!confirm('Sign out of the VIGILANT dashboard?')) return;
-  
+
   try {
     const response = await fetch('/api/logout', { method: 'POST' });
     if (response.ok) {
