@@ -826,9 +826,13 @@ def load_category_hints():
 
         category_hints = {}
         for category, domain in rows:
-            if category not in category_hints:
-                category_hints[category] = set()
-            category_hints[category].add(domain)
+            if not domain:
+                continue
+            cat = str(category).strip()
+            dom = str(domain).strip().lower()
+            if cat not in category_hints:
+                category_hints[cat] = set()
+            category_hints[cat].add(dom)
 
         return category_hints
     except Exception as e:
@@ -1663,10 +1667,12 @@ def scan_text_for_keywords(text: str, keywords) -> str:
 
 
 def get_domain_hint(host):
+    if not host:
+        return None, 0
     category_hints = load_category_hints()
-    clean = host.removeprefix("www.")
+    clean = host.split(":")[0].removeprefix("www.").lower()
     for category, domains in category_hints.items():
-        if any(clean == d or clean.endswith("." + d) for d in domains):
+        if any(clean == d.strip().lower().removeprefix("www.") or clean.endswith("." + d.strip().lower().removeprefix("www.")) for d in domains if d):
             return category, 3
     return None, 0
 
@@ -2462,7 +2468,8 @@ class VIGILANTAddon:
             if cursor.fetchone():
                 cursor = conn.execute("SELECT category, domain FROM category_hints")
                 for category, domain in cursor.fetchall():
-                    hints.setdefault(category, set()).add(domain)
+                    if domain:
+                        hints.setdefault(str(category).strip(), set()).add(str(domain).strip().lower())
                     
             # Load exempt devices
             try:
@@ -2835,73 +2842,18 @@ class VIGILANTAddon:
             print(f"[VIGILANT] WHITELIST BYPASS (request): {host} -> {client_ip}")
             return
 
-        try:
-            keywords = get_blacklisted_keywords()
-            if keywords:
-                decoded_url = urllib.parse.unquote(flow.request.pretty_url)
-                req_body = ""
-
-                if flow.request.content:
-                    req_body = urllib.parse.unquote(flow.request.get_text(strict=False))
-
-                combined_search_text = f"{decoded_url} {req_body}"
-
-                matched = scan_text_for_keywords(combined_search_text, keywords)
-                if matched:
-                    config = load_proxy_config()
-                    if config.get('block_harmful', True):
-                        print(f"[VIGILANT] KEYWORD BLOCKED (request): {matched} from {client_ip} @ {host}")
-                        log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "KEYWORD_MATCH")
-                        flow.response = http.Response.make(
-                            403,
-                            render_block_page(host, "Harmful"),
-                            {"Content-Type": "text/html"}
-                        )
-                        return
-        except sqlite3.Error as e:
-            print(f"[VIGILANT] Database error during keyword blacklist check: {e}")
-        except Exception as e:
-            print(f"[VIGILANT] Error during keyword blacklist check: {e}")
-
-        # TLS Passthrough: Check if host belongs to pinned SSL certificate domains.
-        # Throttle check still runs for pinned domains — only content scanning is skipped.
-        clean_host = host.removeprefix("www.").lower()
-        is_pinned = is_pinned_host(host)
-
-        # ── Dynamic Traffic Profiling (PFR) ──
-        # Only tick the doomscroll engagement timer for INTERACTIVE_FEED sessions.
-        # PASSIVE_MEDIA (long-form video/audio) and STANDARD_WEB skip the timer.
-        if profiler is not None:
-            behavior = profiler.evaluate_session_behavior(client_ip, clean_host)
-        else:
-            # Profiler unavailable — fall back to always tick (legacy behavior).
-            behavior = "INTERACTIVE_FEED"
-
-        if behavior == "INTERACTIVE_FEED":
-            flagged, rpm_now, rpm_base = should_throttle(client_ip, host)
-            if flagged and not is_device_exempt(client_ip):
-                level = escalate_circuit_breaker(client_ip, host, rpm_now, rpm_base)
-                if level >= CB_LEVEL_PAUSE:
-                    _mark_client_throttled(client_ip)
-                apply_circuit_breaker_action(client_ip, host, level, rpm_now, rpm_base)
-                if level >= CB_LEVEL_PAUSE:
-                    print(f"[VIGILANT] HTTP CB Level {level} ({CB_LEVEL_NAMES[level]}) {client_ip} @ {host} "
-                          f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
-        elif behavior == "PASSIVE_MEDIA":
-            # Long-form media — pause the engagement timer, no throttle escalation.
-            pass
-        # STANDARD_WEB — normal processing, no doomscroll tick.
-
-        if is_pinned:
-            print(f"[VIGILANT] TLS PASSTHROUGH: {host} from {client_ip} (pinned domain, content scan skipped)")
-            return
+        clean_host = host.split(":")[0].removeprefix("www.").lower()
 
         # STEP 1: Exact Domain Evaluation - Check category hints for strict override
         category_hints = load_category_hints()
         domain_category = None
 
         for category, domains in category_hints.items():
-            if any(clean_host == d or clean_host.endswith("." + d) for d in domains):
+            if any(
+                clean_host == d.strip().lower().removeprefix("www.")
+                or clean_host.endswith("." + d.strip().lower().removeprefix("www."))
+                for d in domains if d
+            ):
                 domain_category = category
                 print(f"[VIGILANT] DOMAIN OVERRIDE: {host} -> {category} (category hint match)")
                 break
@@ -2926,11 +2878,61 @@ class VIGILANTAddon:
             )
             return
 
-        # Optional secondary check: scan request BODY (POST payloads) with the more
-        # lenient body-context rules, since body text is closer to passive content
-        # than a deliberately-typed URL. Runs for ALL domains — a category hint
-        # (e.g. "Distracting") routes traffic but must NOT exempt POST bodies
-        # from keyword blocking.
+        # STEP 2: Keyword Blacklist scan on request URL & Body
+        try:
+            keywords = get_blacklisted_keywords()
+            if keywords:
+                decoded_url = urllib.parse.unquote(flow.request.pretty_url)
+                req_body = ""
+
+                if flow.request.content:
+                    req_body = urllib.parse.unquote(flow.request.get_text(strict=False))
+
+                combined_search_text = f"{decoded_url} {req_body}"
+
+                matched = scan_text_for_keywords(combined_search_text, keywords)
+                if matched:
+                    if config.get('block_harmful', True):
+                        print(f"[VIGILANT] KEYWORD BLOCKED (request): {matched} from {client_ip} @ {host}")
+                        log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "KEYWORD_MATCH")
+                        flow.response = http.Response.make(
+                            403,
+                            render_block_page(host, "Harmful"),
+                            {"Content-Type": "text/html"}
+                        )
+                        return
+        except sqlite3.Error as e:
+            print(f"[VIGILANT] Database error during keyword blacklist check: {e}")
+        except Exception as e:
+            print(f"[VIGILANT] Error during keyword blacklist check: {e}")
+
+        # STEP 3: Dynamic Traffic Profiling & Throttling
+        is_pinned = is_pinned_host(host)
+
+        if profiler is not None:
+            behavior = profiler.evaluate_session_behavior(client_ip, clean_host)
+        else:
+            behavior = "INTERACTIVE_FEED"
+
+        if behavior == "INTERACTIVE_FEED":
+            flagged, rpm_now, rpm_base = should_throttle(client_ip, host)
+            if flagged and not is_device_exempt(client_ip):
+                level = escalate_circuit_breaker(client_ip, host, rpm_now, rpm_base)
+                if level >= CB_LEVEL_PAUSE:
+                    _mark_client_throttled(client_ip)
+                apply_circuit_breaker_action(client_ip, host, level, rpm_now, rpm_base)
+                if level >= CB_LEVEL_PAUSE:
+                    print(f"[VIGILANT] HTTP CB Level {level} ({CB_LEVEL_NAMES[level]}) {client_ip} @ {host} "
+                          f"RPM={rpm_now:.1f} baseline={rpm_base:.1f}")
+        elif behavior == "PASSIVE_MEDIA":
+            pass
+
+        # TLS Passthrough for pinned domains (skip deep content scan for allowed pinned apps)
+        if is_pinned:
+            print(f"[VIGILANT] TLS PASSTHROUGH: {host} from {client_ip} (pinned domain, content scan skipped)")
+            return
+
+        # Secondary POST payload keyword scan
         try:
             keywords = get_blacklisted_keywords()
             if keywords:
@@ -2938,7 +2940,6 @@ class VIGILANTAddon:
                     request_body = flow.request.get_text(strict=False) if flow.request.content else ""
                 except Exception:
                     request_body = ""
-                # Use efficient token intersection for keyword detection (unified approach for all domains)
                 matched = scan_text_for_keywords(request_body, keywords)
                 if matched:
                     if config.get('block_harmful', True):

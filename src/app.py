@@ -1109,6 +1109,7 @@ def save_config(updates: dict) -> None:
                 (key, str(value), now_ts),
             )
         connection.commit()
+    _signal_rule_cache_reload()
 
 
 def _format_recent_log_entry(log: dict) -> dict:
