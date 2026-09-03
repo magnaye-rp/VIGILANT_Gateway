@@ -1,258 +1,284 @@
-      <!-- Behavioral Control Tab -->
-      <div id="tab-behavioral-control" class="tab-content">
-        <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">
-          Doomscroll Detection <span style="font-size: 0.9rem; color: var(--text-secondary); font-weight: 400;">— Engagement-time based detection. No RPM math. Just time on social media.</span>
-        </h2>
+<!-- Behavioral Control Tab -->
+<div id="tab-behavioral-control" class="tab-content">
+  <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 300;">
+    Doomscroll Detection <span style="font-size: 0.9rem; color: var(--text-secondary); font-weight: 400;">—
+      Engagement-time based detection.</span>
+  </h2>
 
-        <div class="card glassmorphic-card" style="margin-bottom: 2rem;">
-          <form id="behavioral-form" onsubmit="saveBehavioralSettings(event)">
-            <div class="card-header" style="border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 1rem; margin-bottom: 1.5rem;">
-              <div class="card-title"><i class="fa-solid fa-gauge-high" style="margin-right: 0.5rem;"></i> Detection Strictness</div>
-              <div class="card-subtitle">How long on social media before throttling kicks in</div>
-            </div>
+  <div class="card glassmorphic-card" style="margin-bottom: 2rem;">
+    <form id="behavioral-form" onsubmit="saveBehavioralSettings(event)">
+      <div class="card-header"
+        style="border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 1rem; margin-bottom: 1.5rem;">
+        <div class="card-title"><i class="fa-solid fa-gauge-high" style="margin-right: 0.5rem;"></i> Detection
+          Strictness</div>
+        <div class="card-subtitle">How long on social media before throttling kicks in</div>
+      </div>
 
-            <div class="mode-selector" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
-              <label class="mode-card" id="mode-card-relaxed" onclick="selectBehavioralMode('relaxed')" style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid transparent; border-radius: 10px; cursor: pointer;">
-                <i class="fa-solid fa-face-smile" style="font-size: 1.5rem; color: var(--success);"></i>
-                <div style="font-weight: 600;">Relaxed</div>
-                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">L1 5min (256k) &bull; L2 10min (64k) &bull; L3 20min (8k)</div>
-                <input type="radio" name="mode" value="relaxed" style="display: none;">
-              </label>
-              <label class="mode-card" id="mode-card-balanced" onclick="selectBehavioralMode('balanced')" style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid var(--primary); border-radius: 10px; cursor: pointer;">
-                <i class="fa-solid fa-scale-balanced" style="font-size: 1.5rem; color: var(--primary);"></i>
-                <div style="font-weight: 600;">Balanced</div>
-                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">L1 3min (128k) &bull; L2 6min (32k) &bull; L3 12min (4k)</div>
-                <input type="radio" name="mode" value="balanced" checked style="display: none;">
-              </label>
-              <label class="mode-card" id="mode-card-strict" onclick="selectBehavioralMode('strict')" style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid transparent; border-radius: 10px; cursor: pointer;">
-                <i class="fa-solid fa-face-frown" style="font-size: 1.5rem; color: var(--danger);"></i>
-                <div style="font-weight: 600;">Strict</div>
-                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">L1 2min (64k) &bull; L2 4min (16k) &bull; L3 8min (2k)</div>
-                <input type="radio" name="mode" value="strict" style="display: none;">
-              </label>
-              <label class="mode-card" id="mode-card-custom" onclick="selectBehavioralMode('custom')" style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid transparent; border-radius: 10px; cursor: pointer;">
-                <i class="fa-solid fa-sliders" style="font-size: 1.5rem; color: var(--warning);"></i>
-                <div style="font-weight: 600;">Custom</div>
-                <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">Set custom time thresholds, rates, and tuning below</div>
-                <input type="radio" name="mode" value="custom" style="display: none;">
-              </label>
-            </div>
+      <div class="mode-selector"
+        style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+        <label class="mode-card" id="mode-card-relaxed" onclick="selectBehavioralMode('relaxed')"
+          style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid transparent; border-radius: 10px; cursor: pointer;">
+          <i class="fa-solid fa-face-smile" style="font-size: 1.5rem; color: var(--success);"></i>
+          <div style="font-weight: 600;">Relaxed</div>
+          <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">L1 30min (256k) &bull; L2
+            60min (64k) &bull; L3 90min (8k) &bull; 20min idle reset </div>
+          <input type="radio" name="mode" value="relaxed" style="display: none;">
+        </label>
+        <label class="mode-card" id="mode-card-balanced" onclick="selectBehavioralMode('balanced')"
+          style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid var(--primary); border-radius: 10px; cursor: pointer;">
+          <i class="fa-solid fa-scale-balanced" style="font-size: 1.5rem; color: var(--primary);"></i>
+          <div style="font-weight: 600;">Balanced</div>
+          <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">L1 15min (128k) &bull; L2
+            30min (32k) &bull; L3 45min (4k) &bull; 15min idle reset </div>
+          <input type="radio" name="mode" value="balanced" checked style="display: none;">
+        </label>
+        <label class="mode-card" id="mode-card-strict" onclick="selectBehavioralMode('strict')"
+          style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid transparent; border-radius: 10px; cursor: pointer;">
+          <i class="fa-solid fa-face-frown" style="font-size: 1.5rem; color: var(--danger);"></i>
+          <div style="font-weight: 600;">Strict</div>
+          <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">L1 5min (64k) &bull; L2
+            10min
+            (16k) &bull; L3 15min (2k) &bull; 5min idle reset </div>
+          <input type="radio" name="mode" value="strict" style="display: none;">
+        </label>
+        <label class="mode-card" id="mode-card-custom" onclick="selectBehavioralMode('custom')"
+          style="display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.25rem; background: var(--surface); border: 2px solid transparent; border-radius: 10px; cursor: pointer;">
+          <i class="fa-solid fa-sliders" style="font-size: 1.5rem; color: var(--warning);"></i>
+          <div style="font-weight: 600;">Custom</div>
+          <div style="font-size: 0.8rem; color: var(--text-secondary); text-align: center;">Set custom time thresholds,
+            rates, and tuning below</div>
+          <input type="radio" name="mode" value="custom" style="display: none;">
+        </label>
+      </div>
 
-            <!-- How it works -->
-            <div style="margin-bottom: 1.5rem; padding: 1rem 1.25rem; background: rgba(26,147,138,0.08); border-radius: 8px; border: 1px solid rgba(26,147,138,0.15);">
-              <div style="display: flex; align-items: flex-start; gap: 0.75rem;">
-                <i class="fa-solid fa-circle-info" style="color: var(--primary); font-size: 1.1rem; margin-top: 0.15rem;"></i>
-                <div style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5;">
-                  <strong style="color: var(--text);">How it works:</strong>
-                  The system tracks <strong style="color: var(--text);">how long you actively scroll social media</strong>. After each threshold, bandwidth drops progressively.
-                  <strong style="color: var(--text);">Two ways to release:</strong> (1) Close the app or stop scrolling for the idle reset period — if activity drops below ~3 reqs/min, the throttle auto-releases. (2) Make zero social requests for the idle reset period.
-                </div>
-              </div>
-            </div>
-
-            <!-- Advanced (Custom mode) -->
-            <div id="behavioral-advanced" class="d-none">
-              <h3 style="font-size: 1.1rem; font-weight: 600; margin-bottom: 1rem; color: var(--primary); border-top: 1px solid rgba(255,255,255,0.1); padding-top: 1.5rem;">
-                <i class="fa-solid fa-sliders" style="margin-right: 0.5rem;"></i> Custom Time Thresholds
-              </h3>
-
-              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.25rem;">
-                <div class="form-group">
-                  <label class="form-label">L1 — Mild Nudge</label>
-                  <select id="adv-engagement-l1">
-                    <option value="1">1 minute</option>
-                    <option value="2">2 minutes</option>
-                    <option value="3" selected>3 minutes</option>
-                    <option value="5">5 minutes</option>
-                    <option value="10">10 minutes</option>
-                  </select>
-                  <div class="form-hint">Time before first bandwidth reduction</div>
-                </div>
-                <div class="form-group">
-                  <label class="form-label">L2 — Friction</label>
-                  <select id="adv-engagement-l2">
-                    <option value="3">3 minutes</option>
-                    <option value="4">4 minutes</option>
-                    <option value="6" selected>6 minutes</option>
-                    <option value="10">10 minutes</option>
-                    <option value="15">15 minutes</option>
-                  </select>
-                  <div class="form-hint">Videos struggle, text still loads</div>
-                </div>
-                <div class="form-group">
-                  <label class="form-label">L3 — Circuit Break</label>
-                  <select id="adv-engagement-l3">
-                    <option value="6">6 minutes</option>
-                    <option value="8">8 minutes</option>
-                    <option value="12" selected>12 minutes</option>
-                    <option value="20">20 minutes</option>
-                    <option value="30">30 minutes</option>
-                  </select>
-                  <div class="form-hint">Everything crawls — time to put the phone down</div>
-                </div>
-                <div class="form-group">
-                  <label class="form-label">Idle Reset</label>
-                  <select id="adv-engagement-reset">
-                    <option value="60">1 minute</option>
-                    <option value="120" selected>2 minutes</option>
-                    <option value="180">3 minutes</option>
-                    <option value="300">5 minutes</option>
-                  </select>
-                  <div class="form-hint">Stop scrolling this long → timer resets, throttle auto-releases</div>
-                </div>
-              </div>
-
-              <!-- Custom Throttle Rates -->
-              <h3 style="font-size: 1.1rem; font-weight: 600; margin: 1.5rem 0 1rem; color: var(--primary); border-top: 1px solid rgba(255,255,255,0.1); padding-top: 1.5rem;">
-                <i class="fa-solid fa-gauge-high" style="margin-right: 0.5rem;"></i> Custom Throttle Rates
-              </h3>
-
-              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.25rem;">
-                <div class="form-group">
-                  <label class="form-label">L1 Rate</label>
-                  <select id="adv-engagement-l1-rate">
-                    <option value="1mbit">1 mbit/s (Barely)</option>
-                    <option value="512kbit">512 kbit/s (Mild)</option>
-                    <option value="256kbit">256 kbit/s (Very Light)</option>
-                    <option value="128kbit" selected>128 kbit/s (Light)</option>
-                    <option value="64kbit">64 kbit/s (Moderate)</option>
-                    <option value="32kbit">32 kbit/s (Heavy)</option>
-                    <option value="16kbit">16 kbit/s (Severe)</option>
-                    <option value="8kbit">8 kbit/s (Critical)</option>
-                  </select>
-                  <div class="form-hint">Bandwidth cap for first level</div>
-                </div>
-                <div class="form-group">
-                  <label class="form-label">L2 Rate</label>
-                  <select id="adv-engagement-l2-rate">
-                    <option value="512kbit">512 kbit/s (Mild)</option>
-                    <option value="256kbit">256 kbit/s (Very Light)</option>
-                    <option value="128kbit">128 kbit/s (Light)</option>
-                    <option value="64kbit">64 kbit/s (Moderate)</option>
-                    <option value="32kbit" selected>32 kbit/s (Heavy)</option>
-                    <option value="16kbit">16 kbit/s (Severe)</option>
-                    <option value="8kbit">8 kbit/s (Critical)</option>
-                    <option value="4kbit">4 kbit/s (Hard Stop)</option>
-                  </select>
-                  <div class="form-hint">Bandwidth cap for second level</div>
-                </div>
-                <div class="form-group">
-                  <label class="form-label">L3 Rate</label>
-                  <select id="adv-engagement-l3-rate">
-                    <option value="64kbit">64 kbit/s (Moderate)</option>
-                    <option value="32kbit">32 kbit/s (Heavy)</option>
-                    <option value="16kbit">16 kbit/s (Severe)</option>
-                    <option value="8kbit">8 kbit/s (Critical)</option>
-                    <option value="4kbit" selected>4 kbit/s (Hard Stop)</option>
-                    <option value="2kbit">2 kbit/s (Near-Zero)</option>
-                    <option value="1kbit">1 kbit/s (Essentially Off)</option>
-                  </select>
-                  <div class="form-hint">Bandwidth cap for final level</div>
-                </div>
-              </div>
-
-              <!-- Custom Tuning -->
-              <h3 style="font-size: 1.1rem; font-weight: 600; margin: 1.5rem 0 1rem; color: var(--primary); border-top: 1px solid rgba(255,255,255,0.1); padding-top: 1.5rem;">
-                <i class="fa-solid fa-wrench" style="margin-right: 0.5rem;"></i> Advanced Tuning
-              </h3>
-
-              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.25rem;">
-                <div class="form-group">
-                  <label class="form-label">Check Interval</label>
-                  <select id="adv-engagement-check-interval">
-                    <option value="15">15 seconds (Aggressive)</option>
-                    <option value="30" selected>30 seconds (Default)</option>
-                    <option value="60">60 seconds (Relaxed)</option>
-                    <option value="120">120 seconds (Minimal)</option>
-                  </select>
-                  <div class="form-hint">How often the system checks engagement status</div>
-                </div>
-                <div class="form-group">
-                  <label class="form-label">Min Requests Before Tracking</label>
-                  <select id="adv-engagement-min-requests">
-                    <option value="5">5 requests</option>
-                    <option value="10" selected>10 requests (Default)</option>
-                    <option value="20">20 requests</option>
-                    <option value="30">30 requests</option>
-                  </select>
-                  <div class="form-hint">Social requests needed before engagement tracking starts</div>
-                </div>
-              </div>
-
-              <!-- Timeline -->
-              <div style="margin-top: 1.5rem; padding: 1.25rem; background: var(--bg); border-radius: 8px;">
-                <h4 style="font-size: 0.95rem; font-weight: 600; margin-bottom: 0.75rem; color: var(--primary);">
-                  <i class="fa-solid fa-clock" style="margin-right: 0.4rem;"></i> Escalation Timeline
-                </h4>
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem;">
-                  <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
-                    <div style="font-size: 0.7rem; color: var(--text-secondary);">Level 1</div>
-                    <div style="font-weight: 600;" id="tl-l1-time">3 min</div>
-                    <div style="font-size: 0.75rem; color: var(--text-secondary);" id="tl-l1-rate">128kbit</div>
-                  </div>
-                  <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
-                    <div style="font-size: 0.7rem; color: var(--text-secondary);">Level 2</div>
-                    <div style="font-weight: 600;" id="tl-l2-time">6 min</div>
-                    <div style="font-size: 0.75rem; color: var(--text-secondary);" id="tl-l2-rate">32kbit</div>
-                  </div>
-                  <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
-                    <div style="font-size: 0.7rem; color: var(--text-secondary);">Level 3</div>
-                    <div style="font-weight: 600;" id="tl-l3-time">12 min</div>
-                    <div style="font-size: 0.75rem; color: var(--text-secondary);" id="tl-l3-rate">4kbit</div>
-                  </div>
-                  <div style="text-align: center; padding: 0.75rem; background: rgba(26,147,138,0.1); border-radius: 6px; border: 1px dashed rgba(26,147,138,0.3);">
-                    <div style="font-size: 0.7rem; color: var(--primary);">Recovery</div>
-                    <div style="font-weight: 600; color: var(--primary);" id="tl-reset">2 min idle</div>
-                    <div style="font-size: 0.75rem; color: var(--text-secondary);">Stop scrolling → auto reset</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div style="display: flex; justify-content: flex-end; margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid rgba(255,255,255,0.08);">
-              <button type="submit" class="btn-primary" id="behavioral-save-btn" style="display: flex; align-items: center; gap: 0.5rem;">
-                <i class="fa-solid fa-save"></i> Save Settings
-              </button>
-            </div>
-          </form>
-        </div>
-
-        <!-- Domain Behavior Policies (PFR overrides) -->
-        <div class="card glassmorphic-card" style="margin-top: 1.5rem;">
-          <div class="card-header">
-            <div>
-              <div class="card-title"><i class="fa-solid fa-sliders" style="margin-right: 0.5rem;"></i> Domain Behavior Overrides</div>
-              <div class="card-subtitle">Per-domain traffic-profiling policies for the doomscroll engine</div>
-            </div>
+      <!-- How it works -->
+      <div
+        style="margin-bottom: 1.5rem; padding: 1rem 1.25rem; background: rgba(26,147,138,0.08); border-radius: 8px; border: 1px solid rgba(26,147,138,0.15);">
+        <div style="display: flex; align-items: flex-start; gap: 0.75rem;">
+          <i class="fa-solid fa-circle-info" style="color: var(--primary); font-size: 1.1rem; margin-top: 0.15rem;"></i>
+          <div style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5;">
+            <strong style="color: var(--text);">How it works:</strong>
+            The system tracks <strong style="color: var(--text);">how long you actively scroll social media</strong>.
+            After each threshold, bandwidth drops progressively.
+            <strong style="color: var(--text);">Two ways to release:</strong> (1) Close the app or stop scrolling for
+            the idle reset period — if activity drops below ~3 reqs/min, the throttle auto-releases. (2) Make zero
+            social requests for the idle reset period.
           </div>
-          <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem; align-items: flex-end;">
-            <div class="form-group" style="flex: 1; margin-bottom: 0;">
-              <label class="form-label">Domain</label>
-              <input type="text" id="bp-domain-input" class="form-input" placeholder="e.g., youtube.com">
-            </div>
-            <div class="form-group" style="flex: 1; margin-bottom: 0;">
-              <label class="form-label">Policy</label>
-              <select id="bp-policy-select" class="form-input">
-                <option value="auto">Auto (profile heuristics)</option>
-                <option value="enforce_doomscroll">Enforce Doomscroll</option>
-                <option value="exempt_media">Exempt Media</option>
-              </select>
-            </div>
-            <button class="btn-primary" onclick="setBehavioralPolicy()" style="white-space: nowrap; padding: 0.5rem 1rem;">
-              <i class="fa-solid fa-plus"></i> Set
-            </button>
-          </div>
-          <table class="traffic-table">
-            <thead>
-              <tr>
-                <th>Domain</th>
-                <th>Policy</th>
-                <th style="text-align: right;">Actions</th>
-              </tr>
-            </thead>
-            <tbody id="behavioral-policies-tbody">
-              <tr><td colspan="3" style="text-align: center; color: var(--text-secondary);">Loading...</td></tr>
-            </tbody>
-          </table>
         </div>
       </div>
+
+      <!-- Advanced (Custom mode) -->
+      <div id="behavioral-advanced" class="d-none">
+        <h3
+          style="font-size: 1.1rem; font-weight: 600; margin-bottom: 1rem; color: var(--primary); border-top: 1px solid rgba(255,255,255,0.1); padding-top: 1.5rem;">
+          <i class="fa-solid fa-sliders" style="margin-right: 0.5rem;"></i> Custom Time Thresholds
+        </h3>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.25rem;">
+          <div class="form-group">
+            <label class="form-label">L1 — Mild Nudge</label>
+            <select id="adv-engagement-l1">
+              <option value="1">1 minute</option>
+              <option value="2">2 minutes</option>
+              <option value="3" selected>3 minutes</option>
+              <option value="5">5 minutes</option>
+              <option value="10">10 minutes</option>
+            </select>
+            <div class="form-hint">Time before first bandwidth reduction</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">L2 — Friction</label>
+            <select id="adv-engagement-l2">
+              <option value="3">3 minutes</option>
+              <option value="4">4 minutes</option>
+              <option value="6" selected>6 minutes</option>
+              <option value="10">10 minutes</option>
+              <option value="15">15 minutes</option>
+            </select>
+            <div class="form-hint">Videos struggle, text still loads</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">L3 — Circuit Break</label>
+            <select id="adv-engagement-l3">
+              <option value="6">6 minutes</option>
+              <option value="8">8 minutes</option>
+              <option value="12" selected>12 minutes</option>
+              <option value="20">20 minutes</option>
+              <option value="30">30 minutes</option>
+            </select>
+            <div class="form-hint">Everything crawls — time to put the phone down</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Idle Reset</label>
+            <select id="adv-engagement-reset">
+              <option value="60">1 minute</option>
+              <option value="120" selected>2 minutes</option>
+              <option value="180">3 minutes</option>
+              <option value="300">5 minutes</option>
+            </select>
+            <div class="form-hint">Stop scrolling this long → timer resets, throttle auto-releases</div>
+          </div>
+        </div>
+
+        <!-- Custom Throttle Rates -->
+        <h3
+          style="font-size: 1.1rem; font-weight: 600; margin: 1.5rem 0 1rem; color: var(--primary); border-top: 1px solid rgba(255,255,255,0.1); padding-top: 1.5rem;">
+          <i class="fa-solid fa-gauge-high" style="margin-right: 0.5rem;"></i> Custom Throttle Rates
+        </h3>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.25rem;">
+          <div class="form-group">
+            <label class="form-label">L1 Rate</label>
+            <select id="adv-engagement-l1-rate">
+              <option value="1mbit">1 mbit/s (Barely)</option>
+              <option value="512kbit">512 kbit/s (Mild)</option>
+              <option value="256kbit">256 kbit/s (Very Light)</option>
+              <option value="128kbit" selected>128 kbit/s (Light)</option>
+              <option value="64kbit">64 kbit/s (Moderate)</option>
+              <option value="32kbit">32 kbit/s (Heavy)</option>
+              <option value="16kbit">16 kbit/s (Severe)</option>
+              <option value="8kbit">8 kbit/s (Critical)</option>
+            </select>
+            <div class="form-hint">Bandwidth cap for first level</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">L2 Rate</label>
+            <select id="adv-engagement-l2-rate">
+              <option value="512kbit">512 kbit/s (Mild)</option>
+              <option value="256kbit">256 kbit/s (Very Light)</option>
+              <option value="128kbit">128 kbit/s (Light)</option>
+              <option value="64kbit">64 kbit/s (Moderate)</option>
+              <option value="32kbit" selected>32 kbit/s (Heavy)</option>
+              <option value="16kbit">16 kbit/s (Severe)</option>
+              <option value="8kbit">8 kbit/s (Critical)</option>
+              <option value="4kbit">4 kbit/s (Hard Stop)</option>
+            </select>
+            <div class="form-hint">Bandwidth cap for second level</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">L3 Rate</label>
+            <select id="adv-engagement-l3-rate">
+              <option value="64kbit">64 kbit/s (Moderate)</option>
+              <option value="32kbit">32 kbit/s (Heavy)</option>
+              <option value="16kbit">16 kbit/s (Severe)</option>
+              <option value="8kbit">8 kbit/s (Critical)</option>
+              <option value="4kbit" selected>4 kbit/s (Hard Stop)</option>
+              <option value="2kbit">2 kbit/s (Near-Zero)</option>
+              <option value="1kbit">1 kbit/s (Essentially Off)</option>
+            </select>
+            <div class="form-hint">Bandwidth cap for final level</div>
+          </div>
+        </div>
+
+        <!-- Custom Tuning -->
+        <h3
+          style="font-size: 1.1rem; font-weight: 600; margin: 1.5rem 0 1rem; color: var(--primary); border-top: 1px solid rgba(255,255,255,0.1); padding-top: 1.5rem;">
+          <i class="fa-solid fa-wrench" style="margin-right: 0.5rem;"></i> Advanced Tuning
+        </h3>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.25rem;">
+          <div class="form-group">
+            <label class="form-label">Check Interval</label>
+            <select id="adv-engagement-check-interval">
+              <option value="15">15 seconds (Aggressive)</option>
+              <option value="30" selected>30 seconds (Default)</option>
+              <option value="60">60 seconds (Relaxed)</option>
+              <option value="120">120 seconds (Minimal)</option>
+            </select>
+            <div class="form-hint">How often the system checks engagement status</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Min Requests Before Tracking</label>
+            <select id="adv-engagement-min-requests">
+              <option value="5">5 requests</option>
+              <option value="10" selected>10 requests (Default)</option>
+              <option value="20">20 requests</option>
+              <option value="30">30 requests</option>
+            </select>
+            <div class="form-hint">Social requests needed before engagement tracking starts</div>
+          </div>
+        </div>
+
+        <!-- Timeline -->
+        <div style="margin-top: 1.5rem; padding: 1.25rem; background: var(--bg); border-radius: 8px;">
+          <h4 style="font-size: 0.95rem; font-weight: 600; margin-bottom: 0.75rem; color: var(--primary);">
+            <i class="fa-solid fa-clock" style="margin-right: 0.4rem;"></i> Escalation Timeline
+          </h4>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem;">
+            <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Level 1</div>
+              <div style="font-weight: 600;" id="tl-l1-time">3 min</div>
+              <div style="font-size: 0.75rem; color: var(--text-secondary);" id="tl-l1-rate">128kbit</div>
+            </div>
+            <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Level 2</div>
+              <div style="font-weight: 600;" id="tl-l2-time">6 min</div>
+              <div style="font-size: 0.75rem; color: var(--text-secondary);" id="tl-l2-rate">32kbit</div>
+            </div>
+            <div style="text-align: center; padding: 0.75rem; background: var(--surface); border-radius: 6px;">
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Level 3</div>
+              <div style="font-weight: 600;" id="tl-l3-time">12 min</div>
+              <div style="font-size: 0.75rem; color: var(--text-secondary);" id="tl-l3-rate">4kbit</div>
+            </div>
+            <div
+              style="text-align: center; padding: 0.75rem; background: rgba(26,147,138,0.1); border-radius: 6px; border: 1px dashed rgba(26,147,138,0.3);">
+              <div style="font-size: 0.7rem; color: var(--primary);">Recovery</div>
+              <div style="font-weight: 600; color: var(--primary);" id="tl-reset">2 min idle</div>
+              <div style="font-size: 0.75rem; color: var(--text-secondary);">Stop scrolling → auto reset</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div
+        style="display: flex; justify-content: flex-end; margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid rgba(255,255,255,0.08);">
+        <button type="submit" class="btn-primary" id="behavioral-save-btn"
+          style="display: flex; align-items: center; gap: 0.5rem;">
+          <i class="fa-solid fa-save"></i> Save Settings
+        </button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Domain Behavior Policies (PFR overrides) -->
+  <div class="card glassmorphic-card" style="margin-top: 1.5rem;">
+    <div class="card-header">
+      <div>
+        <div class="card-title"><i class="fa-solid fa-sliders" style="margin-right: 0.5rem;"></i> Domain Behavior
+          Overrides</div>
+        <div class="card-subtitle">Per-domain traffic-profiling policies for the doomscroll engine</div>
+      </div>
+    </div>
+    <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem; align-items: flex-end;">
+      <div class="form-group" style="flex: 1; margin-bottom: 0;">
+        <label class="form-label">Domain</label>
+        <input type="text" id="bp-domain-input" class="form-input" placeholder="e.g., youtube.com">
+      </div>
+      <div class="form-group" style="flex: 1; margin-bottom: 0;">
+        <label class="form-label">Policy</label>
+        <select id="bp-policy-select" class="form-input">
+          <option value="auto">Auto (profile heuristics)</option>
+          <option value="enforce_doomscroll">Enforce Doomscroll</option>
+          <option value="exempt_media">Exempt Media</option>
+        </select>
+      </div>
+      <button class="btn-primary" onclick="setBehavioralPolicy()" style="white-space: nowrap; padding: 0.5rem 1rem;">
+        <i class="fa-solid fa-plus"></i> Set
+      </button>
+    </div>
+    <table class="traffic-table">
+      <thead>
+        <tr>
+          <th>Domain</th>
+          <th>Policy</th>
+          <th style="text-align: right;">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="behavioral-policies-tbody">
+        <tr>
+          <td colspan="3" style="text-align: center; color: var(--text-secondary);">Loading...</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
