@@ -270,7 +270,7 @@ CATEGORY_KEYWORDS = {
         "music", "meme", "feed", "funny", "comedy", "gossip", "entertainment", 
         "social", "media", "post", "comment", "instagram", "photo", "story", 
         "follower", "like", "share", "tweet", "timeline", "notification", "gaming", 
-        "stream", "influencer"
+        "stream", "influencer", "instagram"
     },
     "Harmful": {
         "pornography", "sex", "adult", "erotic", "nude", "naked", "erotic", "naked", "hentai",
