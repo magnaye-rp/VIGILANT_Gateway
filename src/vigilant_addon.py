@@ -201,8 +201,16 @@ def is_pinned_host(host: str) -> bool:
     if not host:
         return False
     config = load_proxy_config()
-    pinned_domains = config['pinned_domains']
-    clean_host = host.removeprefix("www.").lower()
+    if config.get('block_distracting', False):
+        category, _ = get_domain_hint(host)
+        if category == "Distracting":
+            return False
+    if config.get('block_harmful', True):
+        category, _ = get_domain_hint(host)
+        if category == "Harmful":
+            return False
+    pinned_domains = config.get('pinned_domains', set())
+    clean_host = host.split(":")[0].removeprefix("www.").lower()
     base_domain = ".".join(clean_host.split(".")[-2:])
     return any(
         base_domain in d or clean_host == d or clean_host.endswith("." + d)
@@ -2662,26 +2670,31 @@ class VIGILANTAddon:
 
             # 2. Check bypass conditions in explicit order
             is_bypassed = False
+            config = load_proxy_config()
+            hint_cat, _ = get_domain_hint(server_name)
+            is_blocked_cat = (hint_cat == "Distracting" and config.get('block_distracting', False)) or \
+                             (hint_cat == "Harmful" and config.get('block_harmful', True))
             
-            # a) Global asset whitelist (infrastructure/CDN domains — checked first
-            #    to avoid intercepting TLS for known-trusted asset domains)
-            if is_whitelisted(server_name):
-                is_bypassed = True
-            
-            # b) Admin DB overrides
-            elif is_custom_bypass(server_name):
-                is_bypassed = True
-                
-            # c) In-memory SSL pinning auto-detected during current uptime
-            elif server_name in self.pinned_hosts:
-                is_bypassed = True
-                
-            # d) Hardcoded system safety domains
-            else:
-                _APPLE_DOMAINS = {"apple.com", "icloud.com", "mzstatic.com"}
-                clean_sni = server_name.lower().removeprefix("www.")
-                if any(clean_sni == d or clean_sni.endswith("." + d) for d in _APPLE_DOMAINS):
+            if not is_blocked_cat:
+                # a) Global asset whitelist (infrastructure/CDN domains — checked first
+                #    to avoid intercepting TLS for known-trusted asset domains)
+                if is_whitelisted(server_name):
                     is_bypassed = True
+                
+                # b) Admin DB overrides
+                elif is_custom_bypass(server_name):
+                    is_bypassed = True
+                    
+                # c) In-memory SSL pinning auto-detected during current uptime
+                elif server_name in self.pinned_hosts:
+                    is_bypassed = True
+                    
+                # d) Hardcoded system safety domains
+                else:
+                    _APPLE_DOMAINS = {"apple.com", "icloud.com", "mzstatic.com"}
+                    clean_sni = server_name.lower().removeprefix("www.")
+                    if any(clean_sni == d or clean_sni.endswith("." + d) for d in _APPLE_DOMAINS):
+                        is_bypassed = True
 
             # Throttling is applied via tc on the interface regardless of bypass
             flagged, rpm_now, rpm_base = should_throttle(client_ip, server_name)
@@ -2697,13 +2710,6 @@ class VIGILANTAddon:
             if is_bypassed:
                 data.ignore_connection = True
                 return
-
-            # 3. Log social domain requests to traffic log (non-pinned only)
-            social_domains = load_social_domains()
-            clean_sni = server_name.removeprefix("www.")
-            base = ".".join(clean_sni.split(".")[-2:])
-            if any(base in d for d in social_domains):
-                log_request(client_ip, server_name, "(TLS_SNI)", "TLS", "Distracting", False, [], None)
 
         except (AttributeError, IndexError, TypeError) as e:
             print(f"[VIGILANT] TLS ClientHello data structure parsing issue: {e}")
@@ -2798,6 +2804,7 @@ class VIGILANTAddon:
     def log_to_dashboard(self, client_ip: str, sni: str):
         """Log SNI domain to dashboard database for transparent passthrough tracking using TF-IDF classification"""
         try:
+            config = load_proxy_config()
             # Get domain hint for categorization
             hint_category, _ = get_domain_hint(sni)
             
@@ -2806,9 +2813,6 @@ class VIGILANTAddon:
                 category = hint_category
             else:
                 # Use TF-IDF classifier to categorize SNI domain name
-                # Convert domain to text for classification (e.g., "instagram.com" -> "instagram social media")
-                # Use lower threshold (0.05-0.08) for domain names/short URLs
-                config = load_proxy_config()
                 domain_threshold = float(config.get('tfidf_url_threshold', 0.05))
                 domain_text = sni.replace(".", " ").replace("-", " ")
                 tfidf_category, _tfidf_scores = tfidf_classifier.classify(domain_text, threshold=domain_threshold)
@@ -2818,8 +2822,16 @@ class VIGILANTAddon:
                 else:
                     category = "Productive"  # Default category for SNI logs to ensure database logging
             
+            # Check if this category should be flagged as blocked
+            is_blocked = (category == "Distracting" and config.get('block_distracting', False)) or \
+                         (category == "Harmful" and config.get('block_harmful', True))
+            block_reason = "CATEGORY_BLOCKED" if is_blocked else None
+
             # Log the SNI domain request
-            log_request(client_ip, sni, "(TLS_SNI)", "TLS", category, False, [], None)
+            log_request(client_ip, sni, "(TLS_SNI)", "TLS", category, is_blocked, [], block_reason)
+            print(f"[VIGILANT] SNI logged to dashboard: {client_ip} -> {sni} [{category}] blocked={is_blocked}")
+        except Exception as e:
+            print(f"[VIGILANT] Failed to log SNI to dashboard: {e}")
             print(f"[VIGILANT] SNI logged to dashboard: {client_ip} -> {sni} [{category}]")
         except Exception as e:
             print(f"[VIGILANT] Failed to log SNI to dashboard: {e}")
@@ -2878,7 +2890,24 @@ class VIGILANTAddon:
             )
             return
 
-        # STEP 2: Keyword Blacklist scan on request URL & Body
+        # STEP 2: TF-IDF Classification on URL / Host
+        domain_threshold = float(config.get('tfidf_url_threshold', 0.3))
+        domain_text = clean_host.replace(".", " ").replace("-", " ")
+        url_text = urllib.parse.unquote(flow.request.path).replace("/", " ").replace("-", " ").replace("_", " ")
+        req_text = f"{domain_text} {url_text}"
+        url_category, _ = tfidf_classifier.classify(req_text, threshold=domain_threshold)
+        if url_category == "Harmful" and config.get('block_harmful', True):
+            print(f"[VIGILANT] REQUEST URL TF-IDF BLOCKED: {host}{flow.request.path[:40]} [Harmful]")
+            log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "TFIDF_HARMFUL")
+            flow.response = http.Response.make(403, render_block_page(host, "Harmful"), {"Content-Type": "text/html"})
+            return
+        elif url_category == "Distracting" and config.get('block_distracting', False):
+            print(f"[VIGILANT] REQUEST URL TF-IDF BLOCKED: {host}{flow.request.path[:40]} [Distracting]")
+            log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Distracting", True, [], "TFIDF_DISTRACTING")
+            flow.response = http.Response.make(403, render_block_page(host, "Distracting"), {"Content-Type": "text/html"})
+            return
+
+        # STEP 3: Keyword Blacklist scan on request URL & Body
         try:
             keywords = get_blacklisted_keywords()
             if keywords:
@@ -2906,7 +2935,7 @@ class VIGILANTAddon:
         except Exception as e:
             print(f"[VIGILANT] Error during keyword blacklist check: {e}")
 
-        # STEP 3: Dynamic Traffic Profiling & Throttling
+        # STEP 4: Dynamic Traffic Profiling & Throttling
         is_pinned = is_pinned_host(host)
 
         if profiler is not None:
@@ -2981,7 +3010,7 @@ class VIGILANTAddon:
             print(f"[VIGILANT] WHITELIST BYPASS (response): {host} -> {client_ip}")
             return
 
-        clean_host = host.removeprefix("www.").lower()
+        clean_host = host.split(":")[0].removeprefix("www.").lower()
 
         # ── Payload profiling (PFR window) ──
         payload_bytes = len(flow.response.content) if flow.response.content else 0
@@ -2995,9 +3024,22 @@ class VIGILANTAddon:
             category_hints = load_category_hints()
             domain_category = None
             for category, domains in category_hints.items():
-                if any(clean_host == d or clean_host.endswith("." + d) for d in domains):
+                if any(
+                    clean_host == d.strip().lower().removeprefix("www.")
+                    or clean_host.endswith("." + d.strip().lower().removeprefix("www."))
+                    for d in domains if d
+                ):
                     domain_category = category
                     break
+            config = load_proxy_config()
+            if domain_category == "Harmful" and config.get('block_harmful', True):
+                log_request(client_ip, host, path, method, "Harmful", True, [], "CATEGORY_BLOCKED")
+                flow.response = http.Response.make(403, render_block_page(host, "Harmful"), {"Content-Type": "text/html"})
+                return
+            elif domain_category == "Distracting" and config.get('block_distracting', False):
+                log_request(client_ip, host, path, method, "Distracting", True, [], "CATEGORY_BLOCKED")
+                flow.response = http.Response.make(403, render_block_page(host, "Distracting"), {"Content-Type": "text/html"})
+                return
             log_request(client_ip, host, path, method, domain_category or "Non-HTML", False, [], None)
             return
 
@@ -3067,11 +3109,24 @@ class VIGILANTAddon:
         category_hints = load_category_hints()
         domain_category = None
         for category, domains in category_hints.items():
-            if any(clean_host == d or clean_host.endswith("." + d) for d in domains):
+            if any(
+                clean_host == d.strip().lower().removeprefix("www.")
+                or clean_host.endswith("." + d.strip().lower().removeprefix("www."))
+                for d in domains if d
+            ):
                 domain_category = category
                 break
 
         final_category = domain_category or tfidf_category or "Uncategorized"
+        if final_category == "Harmful" and config.get('block_harmful', True):
+            log_request(client_ip, host, path, method, "Harmful", True, [], "CATEGORY_BLOCKED")
+            flow.response = http.Response.make(403, render_block_page(host, "Harmful"), {"Content-Type": "text/html"})
+            return
+        elif final_category == "Distracting" and config.get('block_distracting', False):
+            log_request(client_ip, host, path, method, "Distracting", True, [], "CATEGORY_BLOCKED")
+            flow.response = http.Response.make(403, render_block_page(host, "Distracting"), {"Content-Type": "text/html"})
+            return
+
         log_request(client_ip, host, path, method, final_category, False, [], None)
         print(f"[VIGILANT] {method} {host}{path[:40]} -> [{final_category}] client={client_ip}")
 
