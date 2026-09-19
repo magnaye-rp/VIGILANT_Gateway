@@ -1492,6 +1492,15 @@ def should_throttle(client_ip, host, path="", referer=""):
     if not is_social:
         return False, rpm_now, rpm_base
 
+    # YouTube check: ONLY Shorts requests should trigger YouTube engagement tracking
+    is_youtube = "youtube.com" in clean_host or "googlevideo.com" in clean_host
+    if is_youtube:
+        ref_lower = (referer or "").lower()
+        path_lower = (path or "").lower()
+        is_shorts = ("/shorts/" in path_lower or "shorts" in path_lower or "youtube.com/shorts" in ref_lower)
+        if not is_shorts:
+            return False, rpm_now, rpm_base
+
     # ── Social-only tracking: accumulate velocity for social media
     # domains separately from the global request_history. This prevents
     # the initial app-load burst (50+ requests in 2s when opening
@@ -1517,15 +1526,6 @@ def should_throttle(client_ip, host, path="", referer=""):
 
     if social_count < int(config.get('engagement_min_requests', MIN_SOCIAL_REQUESTS_BASELINE)):
         return False, rpm_now, rpm_base
-
-    # Optional: YouTube / IG short-form detection
-    is_youtube = "youtube.com" in clean_host or "googlevideo.com" in clean_host
-    if is_youtube:
-        ref_lower = (referer or "").lower()
-        path_lower = (path or "").lower()
-        is_shorts = ("/shorts/" in path_lower or "shorts" in path_lower or "youtube.com/shorts" in ref_lower)
-        if not is_shorts:
-            return False, rpm_now, rpm_base
 
     # ── Detection: engagement-based ──
     # Real doomscrolling = watching a reel 25s → swipe → watch 25s → swipe.
