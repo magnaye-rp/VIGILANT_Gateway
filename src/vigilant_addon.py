@@ -1509,6 +1509,12 @@ def should_throttle(client_ip, host, path="", referer=""):
         social_session_totals[client_ip] += 1
         social_count = social_session_totals[client_ip]
 
+    # Initialize engagement timer immediately so dashboard & background loop count from minute 0
+    with _engagement_lock:
+        _engagement_last_request[client_ip] = now
+        if _engagement_start[client_ip] == 0:
+            _engagement_start[client_ip] = social_session_start[client_ip]
+
     if social_count < int(config.get('engagement_min_requests', MIN_SOCIAL_REQUESTS_BASELINE)):
         return False, rpm_now, rpm_base
 
@@ -1530,10 +1536,11 @@ def should_throttle(client_ip, host, path="", referer=""):
         social_rpm = len(sdq)
         social_elapsed = time.time() - social_session_start[client_ip]
 
-    # Flag if: 3+ min on social media AND actively making requests (2+ RPM).
+    # Flag if: L1 threshold minutes reached on social media AND actively making requests (2+ RPM).
     # At 1 RPM the user has stopped scrolling — those are just background pings
     # from the app staying open. We require 2+ RPM to consider them "engaged."
-    flagged = social_elapsed >= 180 and social_rpm >= 2
+    l1_seconds = int(config.get('engagement_l1_minutes', ENGAGEMENT_L1_MINUTES)) * 60
+    flagged = social_elapsed >= l1_seconds and social_rpm >= 2
 
     if flagged:
         # Rate-limit the "Engaged" log — should_throttle is called on every
