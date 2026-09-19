@@ -639,12 +639,13 @@ def get_domain_behavior_policy(domain: str) -> str:
     """Return the behavior policy for a domain ('auto', 'enforce_doomscroll',
     or 'exempt_media'). Defaults to 'auto' when no explicit policy exists."""
     clean = domain.removeprefix("www.").lower()
+    base = _base_domain(clean)
     conn = None
     try:
         with db_lock:
             conn = _connect_db()
             cursor = conn.execute(
-                "SELECT policy_type FROM domain_behavior_policies WHERE domain = ?", (clean,)
+                "SELECT policy_type FROM domain_behavior_policies WHERE domain = ? OR domain = ?", (clean, base)
             )
             row = cursor.fetchone()
             return str(row[0]) if row else "auto"
@@ -1493,7 +1494,8 @@ def should_throttle(client_ip, host, path="", referer=""):
         return False, rpm_now, rpm_base
 
     # YouTube check: ONLY Shorts requests should trigger YouTube engagement tracking
-    is_youtube = "youtube.com" in clean_host or "googlevideo.com" in clean_host
+    # Include all YouTube CDNs and asset domains (youtube.com, googlevideo.com, ytimg.com, youtu.be, youtube-nocookie.com)
+    is_youtube = any(d in clean_host for d in ("youtube.com", "googlevideo.com", "ytimg.com", "youtu.be", "youtube-nocookie.com"))
     if is_youtube:
         ref_lower = (referer or "").lower()
         path_lower = (path or "").lower()
