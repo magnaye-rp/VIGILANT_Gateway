@@ -1448,7 +1448,7 @@ def _cleanup_stale_velocity_state():
         except Exception as e:
             print(f"[VIGILANT] PFR cleanup error: {e}")
 
-def should_throttle(client_ip, host, path=""):
+def should_throttle(client_ip, host, path="", referer=""):
     config = load_proxy_config()
     network_velocity_threshold = config['network_velocity_threshold']
     physical_scroll_threshold = config['physical_scroll_threshold']
@@ -1514,8 +1514,12 @@ def should_throttle(client_ip, host, path=""):
 
     # Optional: YouTube / IG short-form detection
     is_youtube = "youtube.com" in clean_host or "googlevideo.com" in clean_host
-    if is_youtube and not ("/shorts/" in path or "shorts" in path):
-        return False, rpm_now, rpm_base
+    if is_youtube:
+        ref_lower = (referer or "").lower()
+        path_lower = (path or "").lower()
+        is_shorts = ("/shorts/" in path_lower or "shorts" in path_lower or "youtube.com/shorts" in ref_lower)
+        if not is_shorts:
+            return False, rpm_now, rpm_base
 
     # ── Detection: engagement-based ──
     # Real doomscrolling = watching a reel 25s → swipe → watch 25s → swipe.
@@ -2846,10 +2850,13 @@ class VIGILANTAddon:
             print(f"[VIGILANT] Request: Failed to extract client IP from peername: {e}")
             return
         host      = flow.request.pretty_host
+        referer   = flow.request.headers.get("referer", "")
+        is_shorts_request = "youtube.com/shorts" in referer.lower() or "/shorts/" in flow.request.path or "shorts" in flow.request.path
 
         # Whitelist bypass: asset subdomains (kept ahead of everything else - these
         # are infrastructure/CDN domains, not user-navigable content).
-        if is_whitelisted(host) or is_custom_bypass(host):
+        # Exception: YouTube Shorts media requests must pass through to throttling/profiling.
+        if (is_whitelisted(host) or is_custom_bypass(host)) and not is_shorts_request:
             log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Educational", False, [], None)
             print(f"[VIGILANT] WHITELIST BYPASS (request): {host} -> {client_ip}")
             return
@@ -2939,12 +2946,12 @@ class VIGILANTAddon:
         is_pinned = is_pinned_host(host)
 
         if profiler is not None:
-            behavior = profiler.evaluate_session_behavior(client_ip, clean_host)
+            behavior = profiler.evaluate_session_behavior(client_ip, clean_host, referer=referer, path=flow.request.path)
         else:
             behavior = "INTERACTIVE_FEED"
 
         if behavior == "INTERACTIVE_FEED":
-            flagged, rpm_now, rpm_base = should_throttle(client_ip, host)
+            flagged, rpm_now, rpm_base = should_throttle(client_ip, host, path=flow.request.path, referer=referer)
             if flagged and not is_device_exempt(client_ip):
                 level = escalate_circuit_breaker(client_ip, host, rpm_now, rpm_base)
                 if level >= CB_LEVEL_PAUSE:
@@ -3005,7 +3012,10 @@ class VIGILANTAddon:
         if is_pinned_host(host):
             return
         # Global whitelist / custom bypass — pass through unmodified.
-        if is_whitelisted(host) or is_custom_bypass(host):
+        # Exception: YouTube Shorts media requests must reach payload profiling (profiler.record_response).
+        referer = flow.request.headers.get("referer", "")
+        is_shorts_request = "youtube.com/shorts" in referer.lower() or "/shorts/" in flow.request.path or "shorts" in flow.request.path
+        if (is_whitelisted(host) or is_custom_bypass(host)) and not is_shorts_request:
             log_request(client_ip, host, path, method, "Educational", False, [], None)
             print(f"[VIGILANT] WHITELIST BYPASS (response): {host} -> {client_ip}")
             return

@@ -68,8 +68,14 @@ def _requests_in_last_60s(client_ip: str, clean_host: str, now: float) -> int:
     return sum(1 for (ts, _) in dq if now - ts <= 60.0)
 
 
-def evaluate_session_behavior(client_ip: str, clean_host: str) -> str:
+def evaluate_session_behavior(client_ip: str, clean_host: str, referer: str = "", path: str = "") -> str:
     """Classify the current session behavior for a (client_ip, clean_host) pair."""
+    # Referer/Path check for short-form video feed overrides (YouTube Shorts, IG Reels, TikTok)
+    ref_lower = (referer or "").lower()
+    path_lower = (path or "").lower()
+    if "youtube.com/shorts" in ref_lower or "/shorts/" in path_lower or "shorts" in path_lower:
+        return "INTERACTIVE_FEED"
+
     # Lazy import avoids a circular import at module-load time: vigilant_addon
     # imports profiler, and profiler needs vigilant_addon's DB helpers only at
     # runtime once the addon module is fully loaded.
