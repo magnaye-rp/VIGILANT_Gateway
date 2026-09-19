@@ -248,13 +248,13 @@ stage_5_network_config() {
     log_info "STAGE 5: NETWORK CONFIGURATION"
     log_info "═══════════════════════════════════════════"
 
-    rm -f /etc/netplan/*.bak 2>/dev/null || true
-    rm -rf /etc/netplan/backup 2>/dev/null || true
     rm -f /etc/netplan/*.bak /etc/netplan/*.yaml.bak 2>/dev/null || true
     
     log_info "Backing up netplan config..."
-    cp /etc/netplan/00-installer-config.yaml \
-       /etc/netplan/00-installer-config.yaml.bak 2>/dev/null || true
+    if [ -f /etc/netplan/00-installer-config.yaml ]; then
+        cp /etc/netplan/00-installer-config.yaml \
+           /etc/netplan/00-installer-config.yaml.bak 2>/dev/null || true
+    fi
 
     log_info "Configuring Netplan: WAN ($WAN_INTERFACE) via DHCP, LAN ($LAN_INTERFACE) on $LAN_IP/24..."
     
@@ -265,20 +265,16 @@ network:
   ethernets:
     $WAN_INTERFACE:
       dhcp4: true
+      dhcp4-overrides:
+        use-dns: true
     $LAN_INTERFACE:
       dhcp4: no
       addresses:
         - ${LAN_IP}/24
 EOF
 
-    log_info "Applying netplan changes..."
-    netplan generate > /dev/null 2>&1
-    netplan apply > /dev/null 2>&1
-    systemctl restart systemd-networkd > /dev/null 2>&1 || true
-    echo "[*] Applying Netplan network configuration..."
+    log_info "Applying netplan changes once..."
     netplan apply
-    ip addr flush dev enp1s0 2>/dev/null || true
-    systemctl restart systemd-networkd 2>/dev/null || true
     
     log_success "Network configured: WAN ($WAN_INTERFACE), LAN ($LAN_INTERFACE - $LAN_IP)"
 }
@@ -293,22 +289,17 @@ stage_6_dns_dhcp() {
     log_info "Ensuring systemd-resolved service is active..."
     systemctl enable --now systemd-resolved > /dev/null 2>&1 || true
     
-    # Determine the safest available resolv.conf path dynamically
     RESOLV_PATH="/etc/resolv.conf"
     if [ -f "/run/systemd/resolve/resolv.conf" ]; then
         RESOLV_PATH="/run/systemd/resolve/resolv.conf"
     fi
     
-    log_info "Backing up dnsmasq.conf..."
-    cp /etc/dnsmasq.conf /etc/dnsmasq.conf.bak 2>/dev/null || true
-    
-    log_info "Generating Plug-and-Play dnsmasq.conf for interface $LAN_INTERFACE..."
+    log_info "Generating safe, single-interface dnsmasq.conf for $LAN_INTERFACE..."
     cat > /etc/dnsmasq.conf << EOF
 interface=$LAN_INTERFACE
-# bind-dynamic (NOT bind-interfaces): tolerates the interface address not
-# being assigned yet when dnsmasq starts at boot, preventing the bind-failure
-# crash that leaves devices without DHCP after a reboot.
 bind-dynamic
+except-interface=lo
+no-dhcp-interface=lo
 dhcp-range=172.20.10.50,172.20.10.200,255.255.255.0,12h
 dhcp-option=option:router,$LAN_IP
 dhcp-option=option:dns-server,$LAN_IP
@@ -317,12 +308,6 @@ log-queries
 log-facility=/var/log/dnsmasq.log
 EOF
     
-    log_info "Restarting dnsmasq..."
-    # CRITICAL: create /var/log/dnsmasq.log BEFORE starting dnsmasq and grant
-    # write access to the unprivileged dnsmasq user. A root-owned 644 file is
-    # NOT writable by dnsmasq, which silently falls back to syslog and leaves
-    # the file empty — breaking DNS-based device liveness tracking in the proxy
-    # addon (tail_dnsmasq_log reads this file).
     touch /var/log/dnsmasq.log
     chown dnsmasq:dnsmasq /var/log/dnsmasq.log 2>/dev/null \
         || chown nobody:nogroup /var/log/dnsmasq.log 2>/dev/null \
@@ -330,7 +315,7 @@ EOF
     chmod 664 /var/log/dnsmasq.log
     systemctl restart dnsmasq
     
-    log_success "DNS/DHCP dynamic forwarding configured on $LAN_SUBNET using $RESOLV_PATH"
+    log_success "DNS/DHCP dynamic forwarding configured on $LAN_SUBNET"
 }
 
 # ─── Stage 7: Firewall & NAT Routing ────────────────────────────────────────
@@ -436,30 +421,36 @@ stage_8_certificates() {
     log_info "STAGE 8: MITMPROXY CERTIFICATES & LOG PERMISSIONS"
     log_info "═══════════════════════════════════════════"
     
-    # 1. Generate mitmproxy certificates
+    log_info "Checking/Generating mitmproxy certificates..."
     sudo -u "$VIGILANT_USER" bash << CMD
 source $VIGILANT_HOME/venv/bin/activate
-timeout 3 mitmdump --listen-port 8081 > /dev/null 2>&1 || true
+if [ ! -f "/home/$VIGILANT_USER/.mitmproxy/mitmproxy-ca-cert.pem" ]; then
+    mitmdump --listen-port 8081 > /dev/null 2>&1 &
+    PID=\$!
+    for i in {1..10}; do
+        if [ -f "/home/$VIGILANT_USER/.mitmproxy/mitmproxy-ca-cert.pem" ]; then
+            break
+        fi
+        sleep 1
+    done
+    kill \$PID 2>/dev/null || true
+fi
 CMD
     
-    if [ -f "/home/$VIGILANT_USER/.mitmproxy/mitmproxy-ca-cert.pem" ]; then
-        log_success "mitmproxy CA certificate created"
-        cp "/home/$VIGILANT_USER/.mitmproxy/mitmproxy-ca-cert.pem" /usr/local/share/ca-certificates/mitmproxy.crt 2>/dev/null || true
+    CERT_PATH="/home/$VIGILANT_USER/.mitmproxy/mitmproxy-ca-cert.pem"
+    if [ -f "$CERT_PATH" ]; then
+        log_success "mitmproxy CA certificate verified"
+        cp "$CERT_PATH" /usr/local/share/ca-certificates/mitmproxy.crt 2>/dev/null || true
         update-ca-certificates --fresh > /dev/null 2>&1 || true
         log_success "CA certificate installed in system trust store"
     else
-        log_warn "Certificate not found — will be generated on first proxy start"
+        log_warn "Certificate generation timed out — will be generated on first proxy start"
     fi
 
-    # 2. Configure DNS log permissions and system group memberships
-    log_info "Configuring log permissions for non-root proxy access..."
     touch /var/log/dnsmasq.log
     chmod 644 /var/log/dnsmasq.log
-    
-    # Grant service user permission to tail system/dns logs
     usermod -aG adm,syslog "$VIGILANT_USER" || true
     
-    # Ensure logrotate maintains read permissions on log rotation
     if [ -f /etc/logrotate.d/dnsmasq ]; then
         sed -i 's/create 640/create 644/g' /etc/logrotate.d/dnsmasq 2>/dev/null || true
     fi
