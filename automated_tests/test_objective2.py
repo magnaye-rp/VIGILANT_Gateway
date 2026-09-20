@@ -77,8 +77,8 @@ def run_objective_2_test():
     print("\n--- CLASSIFICATION REPORT ---")
     print(report)
 
-    print("--- CONFUSION MATRIX ---")
-    header = f"{'True \\ Pred':<15}" + "".join([f"{cat:>15}" for cat in TARGET_CATEGORIES])
+    true_pred_hdr = "True \\ Pred"
+    header = f"{true_pred_hdr:<15}" + "".join([f"{cat:>15}" for cat in TARGET_CATEGORIES])
     print(header)
     print("-" * len(header))
     for i, row in enumerate(cm):

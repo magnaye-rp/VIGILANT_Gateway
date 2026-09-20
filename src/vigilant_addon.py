@@ -12,7 +12,18 @@ from pathlib import Path
 try:
     from mitmproxy import ctx, http, tls
 except ImportError:
-    ctx = http = tls = None
+    ctx = tls = None
+    class _MockResponse:
+        def __init__(self, status_code=200, content="", headers=None):
+            self.status_code = status_code
+            self.content = content
+            self.headers = headers or {}
+    class _DummyHTTP:
+        class Response:
+            @staticmethod
+            def make(status_code=200, content="", headers=None):
+                return _MockResponse(status_code, content, headers)
+    http = _DummyHTTP()
 
 try:
     import spacy
@@ -459,6 +470,7 @@ _active_addon = None
 
 
 def _connect_db() -> sqlite3.Connection:
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
@@ -2651,7 +2663,7 @@ class VIGILANTAddon:
         # If socket lookup failed, fallback to default LAN IP
         return os.getenv("LAN_IP", "172.20.10.1")
 
-    def tls_clienthello(self, data: tls.ClientHelloData):
+    def tls_clienthello(self, data):
         """Unified TLS ClientHello hook: Dynamic SSL Pinning Bypass + SNI Logging."""
         try:
             # 1. Safely extract SNI name across mitmproxy API versions
@@ -2689,25 +2701,31 @@ class VIGILANTAddon:
                              (hint_cat == "Harmful" and config.get('block_harmful', True))
             
             if not is_blocked_cat:
-                # a) Global asset whitelist (infrastructure/CDN domains — checked first
-                #    to avoid intercepting TLS for known-trusted asset domains)
-                if is_whitelisted(server_name):
-                    is_bypassed = True
-                
-                # b) Admin DB overrides
-                elif is_custom_bypass(server_name):
-                    is_bypassed = True
-                    
-                # c) In-memory SSL pinning auto-detected during current uptime
-                elif server_name in self.pinned_hosts:
-                    is_bypassed = True
-                    
-                # d) Hardcoded system safety domains
-                else:
-                    _APPLE_DOMAINS = {"apple.com", "icloud.com", "mzstatic.com"}
-                    clean_sni = server_name.lower().removeprefix("www.")
-                    if any(clean_sni == d or clean_sni.endswith("." + d) for d in _APPLE_DOMAINS):
+                # Search engines / interactive user domains (google.com, bing.com, etc.) must NEVER be bypassed at TLS layer
+                # so that GET request query parameters (e.g. ?q=banned_keyword) can be intercepted and scanned.
+                _SEARCH_ENGINE_ROOTS = {"google.com", "bing.com", "yahoo.com", "duckduckgo.com", "ecosia.org", "yandex.com", "baidu.com"}
+                clean_sni = server_name.lower().removeprefix("www.")
+                is_search_engine = any(clean_sni == d or clean_sni.endswith("." + d) for d in _SEARCH_ENGINE_ROOTS)
+
+                if not is_search_engine:
+                    # a) Global asset whitelist (infrastructure/CDN domains — checked first
+                    #    to avoid intercepting TLS for known-trusted asset domains)
+                    if is_whitelisted(server_name):
                         is_bypassed = True
+                    
+                    # b) Admin DB overrides
+                    elif is_custom_bypass(server_name):
+                        is_bypassed = True
+                        
+                    # c) In-memory SSL pinning auto-detected during current uptime
+                    elif server_name in self.pinned_hosts:
+                        is_bypassed = True
+                        
+                    # d) Hardcoded system safety domains
+                    else:
+                        _APPLE_DOMAINS = {"apple.com", "icloud.com", "mzstatic.com"}
+                        if any(clean_sni == d or clean_sni.endswith("." + d) for d in _APPLE_DOMAINS):
+                            is_bypassed = True
 
             # Throttling is applied via tc on the interface regardless of bypass
             flagged, rpm_now, rpm_base = should_throttle(client_ip, server_name)
@@ -2729,7 +2747,7 @@ class VIGILANTAddon:
         except Exception as e:
             print(f"[VIGILANT] TLS ClientHello error: {e}")
 
-    def tls_failed_client(self, data: tls.TlsData):
+    def tls_failed_client(self, data):
         """Detect SSL-pinning rejections and record them as observations.
 
         Records every pinning-symptom failure into pinning_observations,
@@ -2781,8 +2799,8 @@ class VIGILANTAddon:
 
     def _persist_bypass_domain(self, domain: str):
         """Add exact domain to custom_bypass_domains in DB without broad base-domain wildcards."""
-        # Prevent broad Google/Apple core domains from auto-persisting globally
-        PROTECTED_ROOTS = {"google.com", "googleapis.com", "googleusercontent.com", "gstatic.com"}
+        # Prevent broad Google/Apple/Search Engine core domains from auto-persisting globally
+        PROTECTED_ROOTS = {"google.com", "googleapis.com", "googleusercontent.com", "gstatic.com", "bing.com", "yahoo.com", "duckduckgo.com"}
         
         clean = domain.removeprefix("www.").lower()
         if clean in PROTECTED_ROOTS:
@@ -2849,7 +2867,7 @@ class VIGILANTAddon:
         except Exception as e:
             print(f"[VIGILANT] Failed to log SNI to dashboard: {e}")
 
-    def request(self, flow: http.HTTPFlow):
+    def request(self, flow):
         try:
             client_ip = flow.client_conn.peername[0]
             if not client_ip:
@@ -2861,6 +2879,39 @@ class VIGILANTAddon:
         host      = flow.request.pretty_host
         referer   = flow.request.headers.get("referer", "")
         is_shorts_request = "youtube.com/shorts" in referer.lower() or "/shorts/" in flow.request.path or "shorts" in flow.request.path
+
+        config = load_proxy_config()
+
+        # STEP 0: Priority Keyword Blacklist scan on request URL & Body
+        # Must run BEFORE whitelist/custom bypass early return so that searches
+        # containing banned harmful keywords (e.g. on Google, Bing, Wikipedia)
+        # are immediately caught and blocked regardless of domain whitelisting.
+        try:
+            keywords = get_blacklisted_keywords()
+            if keywords:
+                decoded_url = urllib.parse.unquote(flow.request.pretty_url)
+                req_body = ""
+
+                if flow.request.content:
+                    req_body = urllib.parse.unquote(flow.request.get_text(strict=False))
+
+                combined_search_text = f"{decoded_url} {req_body}"
+
+                matched = scan_text_for_keywords(combined_search_text, keywords)
+                if matched:
+                    if config.get('block_harmful', True):
+                        print(f"[VIGILANT] KEYWORD BLOCKED (request): {matched} from {client_ip} @ {host}")
+                        log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "KEYWORD_MATCH")
+                        flow.response = http.Response.make(
+                            403,
+                            render_block_page(host, "Harmful"),
+                            {"Content-Type": "text/html"}
+                        )
+                        return
+        except sqlite3.Error as e:
+            print(f"[VIGILANT] Database error during keyword blacklist check: {e}")
+        except Exception as e:
+            print(f"[VIGILANT] Error during keyword blacklist check: {e}")
 
         # Whitelist bypass: asset subdomains (kept ahead of everything else - these
         # are infrastructure/CDN domains, not user-navigable content).
@@ -2886,7 +2937,6 @@ class VIGILANTAddon:
                 print(f"[VIGILANT] DOMAIN OVERRIDE: {host} -> {category} (category hint match)")
                 break
 
-        config = load_proxy_config()
         if domain_category == "Harmful" and config.get('block_harmful', True):
             print(f"[VIGILANT] CATEGORY BLOCKED (request domain hint): {host} [Harmful]")
             log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "CATEGORY_BLOCKED")
@@ -2922,34 +2972,6 @@ class VIGILANTAddon:
             log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Distracting", True, [], "TFIDF_DISTRACTING")
             flow.response = http.Response.make(403, render_block_page(host, "Distracting"), {"Content-Type": "text/html"})
             return
-
-        # STEP 3: Keyword Blacklist scan on request URL & Body
-        try:
-            keywords = get_blacklisted_keywords()
-            if keywords:
-                decoded_url = urllib.parse.unquote(flow.request.pretty_url)
-                req_body = ""
-
-                if flow.request.content:
-                    req_body = urllib.parse.unquote(flow.request.get_text(strict=False))
-
-                combined_search_text = f"{decoded_url} {req_body}"
-
-                matched = scan_text_for_keywords(combined_search_text, keywords)
-                if matched:
-                    if config.get('block_harmful', True):
-                        print(f"[VIGILANT] KEYWORD BLOCKED (request): {matched} from {client_ip} @ {host}")
-                        log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "KEYWORD_MATCH")
-                        flow.response = http.Response.make(
-                            403,
-                            render_block_page(host, "Harmful"),
-                            {"Content-Type": "text/html"}
-                        )
-                        return
-        except sqlite3.Error as e:
-            print(f"[VIGILANT] Database error during keyword blacklist check: {e}")
-        except Exception as e:
-            print(f"[VIGILANT] Error during keyword blacklist check: {e}")
 
         # STEP 4: Dynamic Traffic Profiling & Throttling
         is_pinned = is_pinned_host(host)
@@ -2999,7 +3021,7 @@ class VIGILANTAddon:
         except sqlite3.Error as e:
             print(f"[VIGILANT] Request body keyword blacklist check failed: {e}")
 
-    def response(self, flow: http.HTTPFlow):
+    def response(self, flow):
         try:
             client_ip = flow.client_conn.peername[0]
             if not client_ip:
