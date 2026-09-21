@@ -799,12 +799,12 @@ const BEHAVIORAL_PRESETS = {
     description: 'L1 at 30min (256kbit), L2 at 60min (64kbit), L3 at 90min (8kbit). 20min idle reset.'
   },
   balanced: {
-    l1_minutes: 15, l2_minutes: 30, l3_minutes: 45, idle_reset: 900,
+    l1_minutes: 15, l2_minutes: 30, l3_minutes: 45, idle_reset: 600,
     l1_rate: '128kbit', l2_rate: '32kbit', l3_rate: '4kbit',
-    description: 'L1 at 15min (128kbit), L2 at 30min (32kbit), L3 at 45min (4kbit). 15min idle reset.'
+    description: 'L1 at 15min (128kbit), L2 at 30min (32kbit), L3 at 45min (4kbit). 10 idle reset.'
   },
   strict: {
-    l1_minutes: 5, l2_minutes: 10, l3_minutes: 15, idle_reset: 180,
+    l1_minutes: 3, l2_minutes: 7, l3_minutes: 15, idle_reset: 180,
     l1_rate: '64kbit', l2_rate: '16kbit', l3_rate: '2kbit',
     description: 'L1 at 5min (64kbit), L2 at 10min (16kbit), L3 at 15min (2kbit). 3min idle reset.'
   }
