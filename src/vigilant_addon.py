@@ -1620,38 +1620,20 @@ RE_EXTRA_SPACES = re.compile(r'\s+')
 
 
 def fast_extract_text(html_text: str) -> str:
-    """Extract visible text from an HTML string.
-
-    Step A — Strip explicit <script>, <style>, <head>, <footer>, <nav>,
-             <header>, <noscript>, <meta> blocks (including contents).
-    Step B — Strip orphaned inline JS execution blocks that
-             Google embeds as attribute payloads, e.g.
-             (function(){var _g=...})(); and var _nnnn = {...};
-    Step C — Strip all remaining HTML tags and their attributes
-             (preserves text inside <span>, <a>, <p>, <div> for search snippets).
-    Step D — Collapse whitespace.
-
-    This is intentionally regex-based (no external parser) to keep
-    latency under 1 ms on a 50 KB input.
-    """
+    """Extract visible text from an HTML string using a simple regex approach."""
     if not html_text:
         return ""
-    # Step A: Strip explicit boilerplate blocks
-    text = RE_SCRIPT.sub(' ', html_text)
-    text = RE_STYLE.sub(' ', text)
-    text = RE_HEAD.sub(' ', text)
-    text = RE_FOOTER.sub(' ', text)
-    text = RE_NAV.sub(' ', text)
-    text = RE_HEADER.sub(' ', text)
-    text = RE_NOSCRIPT.sub(' ', text)
-    text = RE_META.sub(' ', text)
-    # Step B: Strip orphaned inline JS execution blocks (Google's attribute payloads)
-    text = RE_JS_FUNCTIONS.sub(' ', text)
-    text = RE_INLINE_JS_VARS.sub(' ', text)
-    # Step C: Strip all remaining HTML tags and attributes (preserves content text)
-    text = RE_ALL_TAGS.sub(' ', text)
-    # Step D: Collapse whitespace
-    return RE_EXTRA_SPACES.sub(' ', text).strip()
+    
+    # Strip script, style, and noscript blocks
+    text = re.sub(r'<script.*?>.*?</script>', ' ', html_text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'<style.*?>.*?</style>', ' ', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'<noscript.*?>.*?</noscript>', ' ', text, flags=re.IGNORECASE | re.DOTALL)
+    
+    # Strip all remaining HTML tag delimiters
+    text = re.sub(r'<[^>]+>', ' ', text)
+    
+    # Collapse multi-space and newline whitespace into single spaces
+    return ' '.join(text.split())
 
 
 def normalize_query(text: str) -> str:
