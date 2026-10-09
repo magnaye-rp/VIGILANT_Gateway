@@ -1636,6 +1636,17 @@ def fast_extract_text(html_text: str) -> str:
     if not html_text:
         return ""
     
+    # 1. Extract High-Priority Metadata First
+    meta_title = ""
+    title_match = re.search(r'<title[^>]*>(.*?)</title>', html_text, re.IGNORECASE | re.DOTALL)
+    if title_match:
+        meta_title = title_match.group(1).strip()
+
+    meta_description = ""
+    desc_match = re.search(r'<meta\s+(?:name|property)=["\'](?:og:title|title|description|og:description)["\']\s+content=["\'](.*?)["\']', html_text, re.IGNORECASE | re.DOTALL)
+    if desc_match:
+        meta_description = desc_match.group(1).strip()
+    
     # Strip script, style, and noscript blocks
     text = re.sub(r'<script.*?>.*?</script>', ' ', html_text, flags=re.IGNORECASE | re.DOTALL)
     text = re.sub(r'<style.*?>.*?</style>', ' ', text, flags=re.IGNORECASE | re.DOTALL)
@@ -1643,9 +1654,17 @@ def fast_extract_text(html_text: str) -> str:
     
     # Strip all remaining HTML tag delimiters
     text = re.sub(r'<[^>]+>', ' ', text)
+
+    # 3. Strip JS Bootstrap Noise
+    text = re.sub(r'ytBootstrapConfig.*?\}', ' ', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'ytcfg\.set\(.*?\);', ' ', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'window\.ytplayer.*?\}', ' ', text, flags=re.IGNORECASE | re.DOTALL)
     
     # Collapse multi-space and newline whitespace into single spaces
-    return ' '.join(text.split())
+    clean_text = ' '.join(text.split())
+
+    # 2. Prepend Extracted Metadata to Text Input
+    return f"{meta_title} {meta_description} {clean_text}".strip()
 
 
 def normalize_query(text: str) -> str:
@@ -3125,16 +3144,8 @@ class VIGILANTAddon:
             # HTML tags, and boilerplate phrases — leaving only what the user
             # would actually read on the page.
             
-            # Since fast_extract_text completely strips <head>, we must explicitly 
-            # preserve the <title> tag text to provide strong signals to TF-IDF.
-            extracted_title = ""
-            title_match = re.search(r'<title[^>]*>(.*?)</title>', body_text, re.IGNORECASE | re.DOTALL)
-            if title_match:
-                extracted_title = title_match.group(1).strip()
-                
+            # fast_extract_text extracts <title> and <meta> tags before stripping
             clean_text = fast_extract_text(body_text)
-            if extracted_title:
-                clean_text = f"{extracted_title} {clean_text}"
 
             # ── DEBUG: Log what the classifier actually sees ──
             tfidf_input_snippet = clean_text[:800] if clean_text else ""
