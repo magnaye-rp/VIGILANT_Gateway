@@ -15,8 +15,8 @@ import time
 import threading
 from collections import defaultdict, deque
 
-WINDOW_SIZE = 10
-MIN_SAMPLES_FOR_CLASSIFY = 3
+WINDOW_SIZE = 50
+MIN_SAMPLES_FOR_CLASSIFY = 5
 PASSIVE_IAT_SECONDS = 8.0
 INTERACTIVE_IAT_SECONDS = 3.5
 PASSIVE_MEDIAN_BYTES = 500 * 1024  # 500 KB
@@ -73,7 +73,7 @@ def evaluate_session_behavior(client_ip: str, clean_host: str, referer: str = ""
     # Referer/Path check for short-form video feed overrides (YouTube Shorts, IG Reels, TikTok)
     ref_lower = (referer or "").lower()
     path_lower = (path or "").lower()
-    if "youtube.com/shorts" in ref_lower or "/shorts/" in path_lower or "shorts" in path_lower:
+    if "youtube.com/shorts" in ref_lower or "/shorts/" in path_lower:
         return "INTERACTIVE_FEED"
 
     # Lazy import avoids a circular import at module-load time: vigilant_addon
@@ -99,12 +99,15 @@ def evaluate_session_behavior(client_ip: str, clean_host: str, referer: str = ""
     now = time.time()
     recent_count = _requests_in_last_60s(client_ip, clean_host, now)
 
-    if iat > PASSIVE_IAT_SECONDS and median_payload > PASSIVE_MEDIAN_BYTES:
+    # If the majority of traffic is large chunks (>500KB), this is long-form streaming
+    # (buffering can cause high request rates, so we ignore inter-arrival time here)
+    if median_payload > PASSIVE_MEDIAN_BYTES:
         return "PASSIVE_MEDIA"
 
     if iat < INTERACTIVE_IAT_SECONDS and recent_count > INTERACTIVE_REQ_IN_60S:
         return "INTERACTIVE_FEED"
 
+    # If it's slow, steady polling but small payloads, it's just standard web traffic
     return "STANDARD_WEB"
 
 

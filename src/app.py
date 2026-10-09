@@ -1009,12 +1009,14 @@ def init_category_hints_db() -> None:
                 return
 
             default_hints = [
-                ("Educational", "wikipedia.org"), ("Educational", "khanacademy.org"),
-                ("Educational", "coursera.org"), ("Educational", "edx.org"),
-                ("Educational", "scholar.google.com"), ("Educational", "researchgate.net"),
-                ("Educational", "academia.edu"), ("Educational", "jstor.org"),
-                ("Educational", "pubmed.ncbi.nlm.nih.gov"), ("Educational", "stackoverflow.com"),
-                ("Educational", "docs.python.org"), ("Educational", "arxiv.org"),
+                ("Educational", "wikipedia.org"), 
+                ("Educational", "arxiv.org"),
+                ("Educational", "jstor.org"), 
+                ("Educational", "pubmed.ncbi.nlm.nih.gov"), 
+                ("Educational", "researchgate.net"),
+                ("Educational", "plos.org"),
+                ("Educational", "nature.com"),
+                ("Educational", "wiktionary.org"),
                 ("Productive", "github.com"), ("Productive", "gitlab.com"),
                 ("Productive", "notion.so"), ("Productive", "trello.com"),
                 ("Productive", "slack.com"), ("Productive", "linear.app"),

@@ -1528,7 +1528,7 @@ def should_throttle(client_ip, host, path="", referer=""):
     if is_youtube:
         ref_lower = (referer or "").lower()
         path_lower = (path or "").lower()
-        is_shorts = ("/shorts/" in path_lower or "shorts" in path_lower or "youtube.com/shorts" in ref_lower)
+        is_shorts = ("/shorts/" in path_lower or "youtube.com/shorts" in ref_lower)
         if not is_shorts:
             return False, rpm_now, rpm_base
 
@@ -2850,40 +2850,55 @@ class VIGILANTAddon:
             return
         host      = flow.request.pretty_host
         referer   = flow.request.headers.get("referer", "")
-        is_shorts_request = "youtube.com/shorts" in referer.lower() or "/shorts/" in flow.request.path or "shorts" in flow.request.path
+        is_shorts_request = "youtube.com/shorts" in referer.lower() or "/shorts/" in flow.request.path
 
         config = load_proxy_config()
+
+        clean_host = host.split(":")[0].removeprefix("www.").lower()
+        
+        category_hints = load_category_hints()
+        domain_category = None
+        for category, domains in category_hints.items():
+            if any(
+                clean_host == d.strip().lower().removeprefix("www.")
+                or clean_host.endswith("." + d.strip().lower().removeprefix("www."))
+                for d in domains if d
+            ):
+                domain_category = category
+                break
 
         # STEP 0: Priority Keyword Blacklist scan on request URL & Body
         # Must run BEFORE whitelist/custom bypass early return so that searches
         # containing banned harmful keywords (e.g. on Google, Bing, Wikipedia)
         # are immediately caught and blocked regardless of domain whitelisting.
-        try:
-            automaton = get_blacklisted_automaton()
-            if automaton:
-                decoded_url = urllib.parse.unquote(flow.request.pretty_url)
-                req_body = ""
-
-                if flow.request.content:
-                    req_body = urllib.parse.unquote(flow.request.get_text(strict=False))
-
-                combined_search_text = f"{decoded_url} {req_body}"
-
-                _, matched = scan_text_fast(automaton, combined_search_text)
-                if matched:
-                    if config.get('block_harmful', True):
-                        print(f"[VIGILANT] KEYWORD BLOCKED (request): {matched} from {client_ip} @ {host}")
-                        log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "KEYWORD_MATCH")
-                        flow.response = http.Response.make(
-                            403,
-                            render_block_page(host, "Harmful"),
-                            {"Content-Type": "text/html"}
-                        )
-                        return
-        except sqlite3.Error as e:
-            print(f"[VIGILANT] Database error during keyword blacklist check: {e}")
-        except Exception as e:
-            print(f"[VIGILANT] Error during keyword blacklist check: {e}")
+        # EXCEPTION: Educational domains are exempt from strict keyword blocking (research allowed).
+        if domain_category != "Educational":
+            try:
+                automaton = get_blacklisted_automaton()
+                if automaton:
+                    decoded_url = urllib.parse.unquote(flow.request.pretty_url)
+                    req_body = ""
+    
+                    if flow.request.content:
+                        req_body = urllib.parse.unquote(flow.request.get_text(strict=False))
+    
+                    combined_search_text = f"{decoded_url} {req_body}"
+    
+                    _, matched = scan_text_fast(automaton, combined_search_text)
+                    if matched:
+                        if config.get('block_harmful', True):
+                            print(f"[VIGILANT] KEYWORD BLOCKED (request): {matched} from {client_ip} @ {host}")
+                            log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "KEYWORD_MATCH")
+                            flow.response = http.Response.make(
+                                403,
+                                render_block_page(host, "Harmful"),
+                                {"Content-Type": "text/html"}
+                            )
+                            return
+            except sqlite3.Error as e:
+                print(f"[VIGILANT] Database error during keyword blacklist check: {e}")
+            except Exception as e:
+                print(f"[VIGILANT] Error during keyword blacklist check: {e}")
 
         # Whitelist bypass: asset subdomains (kept ahead of everything else - these
         # are infrastructure/CDN domains, not user-navigable content).
@@ -2893,21 +2908,9 @@ class VIGILANTAddon:
             print(f"[VIGILANT] WHITELIST BYPASS (request): {host} -> {client_ip}")
             return
 
-        clean_host = host.split(":")[0].removeprefix("www.").lower()
-
         # STEP 1: Exact Domain Evaluation - Check category hints for strict override
-        category_hints = load_category_hints()
-        domain_category = None
-
-        for category, domains in category_hints.items():
-            if any(
-                clean_host == d.strip().lower().removeprefix("www.")
-                or clean_host.endswith("." + d.strip().lower().removeprefix("www."))
-                for d in domains if d
-            ):
-                domain_category = category
-                print(f"[VIGILANT] DOMAIN OVERRIDE: {host} -> {category} (category hint match)")
-                break
+        if domain_category:
+            print(f"[VIGILANT] DOMAIN OVERRIDE: {host} -> {domain_category} (category hint match)")
 
         if domain_category == "Harmful" and config.get('block_harmful', True):
             print(f"[VIGILANT] CATEGORY BLOCKED (request domain hint): {host} [Harmful]")
@@ -2954,7 +2957,11 @@ class VIGILANTAddon:
             behavior = "INTERACTIVE_FEED"
 
         if behavior == "INTERACTIVE_FEED":
-            flagged, rpm_now, rpm_base = should_throttle(client_ip, host, path=flow.request.path, referer=referer)
+            if domain_category in ["Educational", "Productive"]:
+                # Bypass doomscrolling limits for productive/educational research
+                flagged, rpm_now, rpm_base = False, 0.0, 0.0
+            else:
+                flagged, rpm_now, rpm_base = should_throttle(client_ip, host, path=flow.request.path, referer=referer)
             if flagged and not is_device_exempt(client_ip):
                 level = escalate_circuit_breaker(client_ip, host, rpm_now, rpm_base)
                 if level >= CB_LEVEL_PAUSE:
@@ -3017,13 +3024,24 @@ class VIGILANTAddon:
         # Global whitelist / custom bypass — pass through unmodified.
         # Exception: YouTube Shorts media requests must reach payload profiling (profiler.record_response).
         referer = flow.request.headers.get("referer", "")
-        is_shorts_request = "youtube.com/shorts" in referer.lower() or "/shorts/" in flow.request.path or "shorts" in flow.request.path
+        is_shorts_request = "youtube.com/shorts" in referer.lower() or "/shorts/" in flow.request.path
         if (is_whitelisted(host) or is_custom_bypass(host)) and not is_shorts_request:
             log_request(client_ip, host, path, method, "Educational", False, [], None)
             print(f"[VIGILANT] WHITELIST BYPASS (response): {host} -> {client_ip}")
             return
 
         clean_host = host.split(":")[0].removeprefix("www.").lower()
+
+        category_hints = load_category_hints()
+        domain_category = None
+        for category, domains in category_hints.items():
+            if any(
+                clean_host == d.strip().lower().removeprefix("www.")
+                or clean_host.endswith("." + d.strip().lower().removeprefix("www."))
+                for d in domains if d
+            ):
+                domain_category = category
+                break
 
         # ── Payload profiling (PFR window) ──
         payload_bytes = len(flow.response.content) if flow.response.content else 0
@@ -3034,16 +3052,6 @@ class VIGILANTAddon:
         # Images, JSON, CSS, JS, fonts, etc. never need content classification.
         print(f"DEBUG Content-Type: {content_type} from {host}")
         if "text/html" not in content_type:
-            category_hints = load_category_hints()
-            domain_category = None
-            for category, domains in category_hints.items():
-                if any(
-                    clean_host == d.strip().lower().removeprefix("www.")
-                    or clean_host.endswith("." + d.strip().lower().removeprefix("www."))
-                    for d in domains if d
-                ):
-                    domain_category = category
-                    break
             config = load_proxy_config()
             if domain_category == "Harmful" and config.get('block_harmful', True):
                 log_request(client_ip, host, path, method, "Harmful", True, [], "CATEGORY_BLOCKED")
@@ -3064,75 +3072,69 @@ class VIGILANTAddon:
             body_text = ""
 
         # ── Stage A — Strict Metadata Keyword Scan (runs on <title> tags) ──
-        try:
-            automaton = get_blacklisted_automaton()
-            if automaton and body_text:
-                title_match = re.search(r'<title[^>]*>(.*?)</title>', body_text, re.IGNORECASE | re.DOTALL)
-                video_title = title_match.group(1) if title_match else ""
-                
-                if video_title:
-                    _, matched = scan_text_fast(automaton, video_title)
-                    if matched:
-                        config = load_proxy_config()
-                        if config.get('block_harmful', True):
-                            print(f"[VIGILANT] RESPONSE KEYWORD BLOCKED: {matched} in <title> from {host}")
-                            log_request(client_ip, host, path, method, "Harmful", True, [], "KEYWORD_MATCH")
-                            flow.response = http.Response.make(
-                                403,
-                                render_block_page(host, "Harmful"),
-                                {"Content-Type": "text/html"}
-                            )
-                            return
-        except sqlite3.Error as e:
-            print(f"[VIGILANT] Response keyword blacklist check failed: {e}")
+        # EXCEPTION: Educational domains are exempt from strict keyword blocking (research allowed).
+        if domain_category != "Educational":
+            try:
+                automaton = get_blacklisted_automaton()
+                if automaton and body_text:
+                    title_match = re.search(r'<title[^>]*>(.*?)</title>', body_text, re.IGNORECASE | re.DOTALL)
+                    video_title = title_match.group(1) if title_match else ""
+                    
+                    if video_title:
+                        _, matched = scan_text_fast(automaton, video_title)
+                        if matched:
+                            config = load_proxy_config()
+                            if config.get('block_harmful', True):
+                                print(f"[VIGILANT] RESPONSE KEYWORD BLOCKED: {matched} in <title> from {host}")
+                                log_request(client_ip, host, path, method, "Harmful", True, [], "KEYWORD_MATCH")
+                                flow.response = http.Response.make(
+                                    403,
+                                    render_block_page(host, "Harmful"),
+                                    {"Content-Type": "text/html"}
+                                )
+                                return
+            except sqlite3.Error as e:
+                print(f"[VIGILANT] Response keyword blacklist check failed: {e}")
 
-        # ── Stage B — TF-IDF vectorizer scan ──
-        # Extract clean visible text: strips <script>, <style>, <head>,
-        # <footer>, <nav>, <header>, <noscript>, <meta>, all remaining
-        # HTML tags, and boilerplate phrases — leaving only what the user
-        # would actually read on the page.
-        clean_text = fast_extract_text(body_text)
-
-        # ── TEMPORARY DEBUG: Log what the classifier actually sees ──
-        tfidf_input_snippet = clean_text[:500]
-        print("--- TF-IDF INPUT START ---")
-        print(tfidf_input_snippet)
-        print("--- TF-IDF INPUT END ---")
-
-        config = load_proxy_config()
-        threshold = float(config.get('tfidf_classification_threshold', 0.15))
-        tfidf_category, _tfidf_scores = tfidf_classifier.classify(clean_text, threshold=threshold)
-
-        if tfidf_category == "Harmful" and config.get('block_harmful', True):
-            print(f"[VIGILANT] RESPONSE TF-IDF BLOCKED: {host} classified Harmful  scores={_tfidf_scores}")
-            log_request(client_ip, host, path, method, "Harmful", True, [], "TFIDF_HARMFUL")
-            flow.response = http.Response.make(
-                403,
-                render_block_page(host, "Harmful", debug_info=tfidf_input_snippet),
-                {"Content-Type": "text/html"}
-            )
-            return
-        elif tfidf_category == "Distracting" and config.get('block_distracting', False):
-            print(f"[VIGILANT] RESPONSE TF-IDF BLOCKED: {host} classified Distracting  scores={_tfidf_scores}")
-            log_request(client_ip, host, path, method, "Distracting", True, [], "TFIDF_DISTRACTING")
-            flow.response = http.Response.make(
-                403,
-                render_block_page(host, "Distracting", debug_info=tfidf_input_snippet),
-                {"Content-Type": "text/html"}
-            )
-            return
+            # ── Stage B — TF-IDF vectorizer scan ──
+            # Extract clean visible text: strips <script>, <style>, <head>,
+            # <footer>, <nav>, <header>, <noscript>, <meta>, all remaining
+            # HTML tags, and boilerplate phrases — leaving only what the user
+            # would actually read on the page.
+            clean_text = fast_extract_text(body_text)
+    
+            # ── TEMPORARY DEBUG: Log what the classifier actually sees ──
+            tfidf_input_snippet = clean_text[:500]
+            print("--- TF-IDF INPUT START ---")
+            print(tfidf_input_snippet)
+            print("--- TF-IDF INPUT END ---")
+    
+            config = load_proxy_config()
+            threshold = float(config.get('tfidf_classification_threshold', 0.15))
+            tfidf_category, _tfidf_scores = tfidf_classifier.classify(clean_text, threshold=threshold)
+    
+            if tfidf_category == "Harmful" and config.get('block_harmful', True):
+                print(f"[VIGILANT] RESPONSE TF-IDF BLOCKED: {host} classified Harmful  scores={_tfidf_scores}")
+                log_request(client_ip, host, path, method, "Harmful", True, [], "TFIDF_HARMFUL")
+                flow.response = http.Response.make(
+                    403,
+                    render_block_page(host, "Harmful", debug_info=tfidf_input_snippet),
+                    {"Content-Type": "text/html"}
+                )
+                return
+            elif tfidf_category == "Distracting" and config.get('block_distracting', False):
+                print(f"[VIGILANT] RESPONSE TF-IDF BLOCKED: {host} classified Distracting  scores={_tfidf_scores}")
+                log_request(client_ip, host, path, method, "Distracting", True, [], "TFIDF_DISTRACTING")
+                flow.response = http.Response.make(
+                    403,
+                    render_block_page(host, "Distracting", debug_info=tfidf_input_snippet),
+                    {"Content-Type": "text/html"}
+                )
+                return
+        else:
+            tfidf_category = None
 
         # ── Normal logging (non-block) ──
-        category_hints = load_category_hints()
-        domain_category = None
-        for category, domains in category_hints.items():
-            if any(
-                clean_host == d.strip().lower().removeprefix("www.")
-                or clean_host.endswith("." + d.strip().lower().removeprefix("www."))
-                for d in domains if d
-            ):
-                domain_category = category
-                break
 
         final_category = domain_category or tfidf_category or "Uncategorized"
         if final_category == "Harmful" and config.get('block_harmful', True):
