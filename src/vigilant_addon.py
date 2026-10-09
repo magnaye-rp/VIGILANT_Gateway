@@ -526,6 +526,27 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    c.execute("CREATE TABLE IF NOT EXISTS seed_status (seeded_slang INTEGER DEFAULT 0)")
+    c.execute("SELECT seeded_slang FROM seed_status LIMIT 1")
+    row = c.fetchone()
+    if not row:
+        c.execute("INSERT INTO seed_status (seeded_slang) VALUES (0)")
+        row = (0,)
+        
+    if row[0] == 0:
+        import json
+        from pathlib import Path
+        slang_path = Path(__file__).resolve().parent / "slang_blacklist.json"
+        if slang_path.exists():
+            try:
+                with open(slang_path, "r") as f:
+                    slangs = json.load(f).get("keywords", [])
+                for word in slangs:
+                    c.execute("INSERT OR IGNORE INTO keyword_blacklist (keyword) VALUES (?)", (word,))
+                c.execute("UPDATE seed_status SET seeded_slang = 1")
+                print(f"[VIGILANT] Successfully seeded {len(slangs)} slangs into database.")
+            except Exception as e:
+                print(f"[VIGILANT] Failed to seed slang_blacklist.json: {e}")
     c.execute("""
         CREATE TABLE IF NOT EXISTS sni_requests (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,

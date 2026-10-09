@@ -1012,20 +1012,31 @@ async function handlePasswordChange() {
 }
 
 // ─── Keyword Filtering ───
-window.loadKeywords = async function () {
-  const tableBody = document.getElementById('keywords-table-body');
-  if (!tableBody) return;
+window.keywordsData = [];
+window.keywordsCurrentPage = 1;
+window.keywordsPerPage = 10;
 
-  try {
-    const response = await fetch('/api/keywords');
-    const keywords = await response.json();
+window.renderKeywordsPage = function(page) {
+    const tableBody = document.getElementById('keywords-table-body');
+    const paginationDiv = document.getElementById('keywords-pagination');
+    if (!tableBody) return;
 
-    if (!keywords || keywords.length === 0) {
-      tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No constraints active</td></tr>';
-      return;
+    if (!window.keywordsData || window.keywordsData.length === 0) {
+        tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No constraints active</td></tr>';
+        if (paginationDiv) paginationDiv.innerHTML = '';
+        return;
     }
 
-    tableBody.innerHTML = keywords.map(kw => `
+    window.keywordsCurrentPage = page;
+    const totalPages = Math.ceil(window.keywordsData.length / window.keywordsPerPage);
+    if (window.keywordsCurrentPage < 1) window.keywordsCurrentPage = 1;
+    if (window.keywordsCurrentPage > totalPages) window.keywordsCurrentPage = totalPages;
+
+    const start = (window.keywordsCurrentPage - 1) * window.keywordsPerPage;
+    const end = start + window.keywordsPerPage;
+    const pageData = window.keywordsData.slice(start, end);
+
+    tableBody.innerHTML = pageData.map(kw => `
       <tr>
         <td>${kw.keyword}</td>
         <td style="text-align: right;">
@@ -1033,9 +1044,32 @@ window.loadKeywords = async function () {
         </td>
       </tr>
     `).join('');
+
+    if (paginationDiv) {
+        if (totalPages <= 1) {
+            paginationDiv.innerHTML = '';
+        } else {
+            let html = `<span>Page ${window.keywordsCurrentPage} of ${totalPages}</span>`;
+            if (window.keywordsCurrentPage > 1) {
+                html += `<button style="padding: 0.25rem 0.75rem; border: 1px solid var(--border-color); background: var(--card-bg); border-radius: 4px; cursor: pointer; color: var(--text-primary);" onclick="renderKeywordsPage(${window.keywordsCurrentPage - 1})">Prev</button>`;
+            }
+            if (window.keywordsCurrentPage < totalPages) {
+                html += `<button style="padding: 0.25rem 0.75rem; border: 1px solid var(--border-color); background: var(--card-bg); border-radius: 4px; cursor: pointer; color: var(--text-primary);" onclick="renderKeywordsPage(${window.keywordsCurrentPage + 1})">Next</button>`;
+            }
+            paginationDiv.innerHTML = html;
+        }
+    }
+};
+
+window.loadKeywords = async function () {
+  try {
+    const response = await fetch('/api/keywords');
+    window.keywordsData = await response.json();
+    renderKeywordsPage(window.keywordsCurrentPage);
   } catch (error) {
     console.error('Error loading keywords:', error);
-    tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading keywords</td></tr>';
+    const tableBody = document.getElementById('keywords-table-body');
+    if (tableBody) tableBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Error loading keywords</td></tr>';
   }
 };
 
