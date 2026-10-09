@@ -3,19 +3,64 @@
   "categories": {
     "Educational": {
       "iab_tier1_mapping": ["Education", "Science", "Reference"],
-      "keywords": ["calculus", "derivative", "integral", "algebra", "math", "course", "lecture", "notes", "exam", "assignment", "physics", "syllabus", "university", "textbook", "academy", "curriculum", "homework", "tutorial", "reference", "research", "paper", "science", "study", "documentation", "history", "learning", "quiz"]
+      "keywords": [
+        "calculus", "derivative", "integral", "algebra", "geometry", "trigonometry", "statistics", "probability", "math", "mathematics",
+        "course", "courses", "lecture", "lectures", "notes", "exam", "exams", "assignment", "physics", "chemistry", "biology", "astronomy",
+        "syllabus", "university", "college", "school", "textbook", "academy", "curriculum", "homework", "tutorial", "tutorials",
+        "reference", "research", "paper", "journal", "science", "study", "documentation", "history", "geography", "literature",
+        "learning", "learn", "quiz", "flashcards", "lesson", "classroom", "scholar", "scholarship", "thesis", "dissertation",
+        "encyclopedia", "dictionary", "thesaurus", "translation", "language", "grammar", "vocabulary", "essay", "tutor", "ebook",
+        "khanacademy", "coursera", "edx", "udemy", "udacity", "brilliant", "duolingo", "quizlet", "wikipedia", "wikibooks",
+        "britannica", "arxiv", "jstor", "scholar.google", "researchgate", "sciencedirect", "springer", "nature", "pubmed",
+        "mit.edu", "stanford.edu", "harvard.edu", "ocw", "openstax", "libretexts", "wolframalpha", "desmos", "geogebra",
+        "ted", "nationalgeographic", "nasa", "mathway", "symbolab", "chegg", "coursehero", "scribd", "libgen", "zotero", "mendeley"
+      ]
     },
     "Productive": {
       "iab_tier1_mapping": ["Technology & Computing", "Business", "Careers"],
-      "keywords": ["git", "commit", "push", "pull", "request", "repository", "code", "review", "bug", "fix", "issue", "tracker", "documentation", "api", "reference", "function", "class", "method", "module", "library", "developer", "sprint", "backlog", "ticket", "task", "workflow", "project", "management", "status", "stack", "overflow", "debug", "syntax", "error", "compiler", "implementation", "solution", "workspace"]
+      "keywords": [
+        "git", "commit", "push", "pull", "request", "merge", "branch", "repository", "repo", "code", "coding", "review", "bug", "fix",
+        "issue", "issues", "tracker", "documentation", "docs", "api", "reference", "function", "class", "method", "module", "library",
+        "framework", "sdk", "cli", "developer", "devops", "sprint", "backlog", "ticket", "task", "tasks", "workflow", "project",
+        "management", "status", "stack", "overflow", "debug", "syntax", "error", "compiler", "implementation", "solution", "workspace",
+        "deploy", "deployment", "pipeline", "build", "ci", "cd", "kubernetes", "docker", "database", "sql", "cloud", "server",
+        "email", "inbox", "calendar", "meeting", "agenda", "spreadsheet", "presentation", "slides", "document", "report", "invoice",
+        "resume", "career", "jobs", "hiring", "linkedin", "indeed", "glassdoor", "payroll", "accounting", "crm", "analytics",
+        "github", "gitlab", "bitbucket", "stackoverflow", "stackexchange", "jira", "atlassian", "confluence", "trello", "asana",
+        "notion", "slack", "teams", "zoom", "meet", "figma", "miro", "airtable", "monday", "clickup", "linear", "vercel",
+        "netlify", "heroku", "aws", "azure", "gcloud", "cloudflare", "npm", "pypi", "crates", "maven", "mozilla", "mdn",
+        "docs.google", "drive.google", "office", "outlook", "onedrive", "dropbox", "salesforce", "hubspot", "zendesk",
+        "datadog", "sentry", "grafana", "postman", "swagger", "leetcode", "hackerrank", "codepen", "replit", "jetbrains", "vscode"
+      ]
     },
     "Distracting": {
       "iab_tier1_mapping": ["Pop Culture", "Video Gaming", "Social Networking"],
-      "keywords": ["viral", "dance", "video", "reel", "short", "clip", "trending", "scroll", "music", "meme", "feed", "funny", "comedy", "gossip", "entertainment", "social", "media", "post", "comment", "instagram", "photo", "story", "follower", "like", "share", "tweet", "timeline", "notification", "gaming", "stream", "influencer"]
+      "keywords": [
+        "viral", "dance", "video", "videos", "reel", "reels", "short", "shorts", "clip", "clips", "trending", "scroll", "music", "meme",
+        "memes", "feed", "funny", "comedy", "gossip", "entertainment", "social", "media", "post", "comment", "instagram", "photo",
+        "story", "stories", "follower", "followers", "like", "share", "tweet", "timeline", "notification", "gaming", "game", "games",
+        "stream", "streaming", "streamer", "influencer", "celebrity", "prank", "challenge", "vlog", "podcast", "anime", "manga",
+        "movie", "movies", "series", "episode", "binge", "sitcom", "reality", "tv", "esports", "gameplay", "walkthrough", "playlist",
+        "youtube", "tiktok", "facebook", "instagram.com", "twitter", "x.com", "snapchat", "reddit", "pinterest", "tumblr", "threads",
+        "twitch", "discord", "kick", "netflix", "hulu", "disneyplus", "hbomax", "primevideo", "crunchyroll", "viu", "iflix", "vimeo",
+        "dailymotion", "9gag", "imgur", "buzzfeed", "ifunny", "giphy", "spotify", "soundcloud", "steam", "epicgames", "roblox",
+        "minecraft", "fortnite", "valorant", "leagueoflegends", "dota", "mobilelegends", "genshin", "playstation", "xbox", "nintendo",
+        "wattpad", "webtoon", "tinder", "bumble", "likee", "bigo", "kumu", "weibo", "vk", "quora"
+      ]
     },
     "Harmful": {
       "iab_tier1_mapping": ["Explicit Material", "Gambling", "Security Threats"],
-      "keywords": ["porn", "pornhub", "sex", "xxx", "xvideos", "pornography", "adult", "erotic", "nude", "naked", "hentai", "gambling", "bet", "casino", "poker", "blackjack", "slot", "drugs", "marijuana", "cocaine", "heroin", "violence", "terror", "phishing", "hacking", "scam", "malware", "darknet", "darkweb"]
+      "keywords": [
+        "porn", "pornhub", "sex", "xxx", "xvideos", "xnxx", "xhamster", "redtube", "youporn", "onlyfans", "pornography", "adult",
+        "erotic", "nude", "naked", "nsfw", "hentai", "camgirl", "escort", "fetish", "milf", "stripchat", "chaturbate",
+        "gambling", "bet", "betting", "casino", "poker", "blackjack", "slot", "slots", "roulette", "jackpot", "sportsbook", "wager",
+        "lottery", "bookmaker", "bet365", "draftkings", "fanduel", "stake", "1xbet", "betway", "pinnacle", "888casino", "sabong",
+        "drugs", "marijuana", "weed", "cannabis", "cocaine", "heroin", "meth", "fentanyl", "lsd", "mdma", "ecstasy", "opioid",
+        "violence", "gore", "terror", "terrorism", "extremist", "beheading", "liveleak", "bestgore",
+        "phishing", "hacking", "hacker", "exploit", "scam", "fraud", "malware", "ransomware", "spyware", "keylogger", "botnet",
+        "trojan", "crack", "keygen", "warez", "torrent", "pirate", "piratebay", "darknet", "darkweb", "onion", "tor", "silkroad",
+        "carding", "ddos", "credential", "stealer", "fakeid", "counterfeit", "pyramid", "ponzi"
+      ]
     }
   }
 }
