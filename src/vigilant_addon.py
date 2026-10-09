@@ -3042,22 +3042,26 @@ class VIGILANTAddon:
         except Exception:
             body_text = ""
 
-        # ── Stage A — Fuzzy keyword scan (runs on raw decoded text) ──
+        # ── Stage A — Strict Metadata Keyword Scan (runs on <title> tags) ──
         try:
             automaton = get_blacklisted_automaton()
             if automaton and body_text:
-                _, matched = scan_text_fast(automaton, body_text)
-                if matched:
-                    config = load_proxy_config()
-                    if config.get('block_harmful', True):
-                        print(f"[VIGILANT] RESPONSE KEYWORD BLOCKED: {matched} in {content_type} response from {host}")
-                        log_request(client_ip, host, path, method, "Harmful", True, [], "KEYWORD_MATCH")
-                        flow.response = http.Response.make(
-                            403,
-                            render_block_page(host, "Harmful"),
-                            {"Content-Type": "text/html"}
-                        )
-                        return
+                title_match = re.search(r'<title[^>]*>(.*?)</title>', body_text, re.IGNORECASE | re.DOTALL)
+                video_title = title_match.group(1) if title_match else ""
+                
+                if video_title:
+                    _, matched = scan_text_fast(automaton, video_title)
+                    if matched:
+                        config = load_proxy_config()
+                        if config.get('block_harmful', True):
+                            print(f"[VIGILANT] RESPONSE KEYWORD BLOCKED: {matched} in <title> from {host}")
+                            log_request(client_ip, host, path, method, "Harmful", True, [], "KEYWORD_MATCH")
+                            flow.response = http.Response.make(
+                                403,
+                                render_block_page(host, "Harmful"),
+                                {"Content-Type": "text/html"}
+                            )
+                            return
         except sqlite3.Error as e:
             print(f"[VIGILANT] Response keyword blacklist check failed: {e}")
 
