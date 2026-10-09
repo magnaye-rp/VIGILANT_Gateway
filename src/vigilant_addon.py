@@ -6,7 +6,8 @@ import threading
 import subprocess
 import urllib.parse
 import ipaddress
-import difflib
+import json
+import ahocorasick
 from collections import defaultdict, deque
 from pathlib import Path
 try:
@@ -261,38 +262,33 @@ DEFAULT_SOCIAL_DOMAINS = {
     "youtube.com", "www.youtube.com",
 }
 
-CATEGORY_KEYWORDS = {
-    "Educational": {
-        "calculus", "derivative", "integral", "algebra", "math", "course", "lecture", 
-        "notes", "exam", "assignment", "physics", "syllabus", "university", "textbook", 
-        "academy", "curriculum", "homework", "tutorial", "reference", "article", 
-        "research", "paper", "science", "study", "documentation", "history", "learning", "quiz"
-    },
-    "Productive": {
-        "git", "commit", "push", "pull", "request", "repository", "code", "review", 
-        "bug", "fix", "issue", "tracker", "documentation", "api", "reference", 
-        "function", "class", "method", "module", "library", "developer", "sprint", 
-        "backlog", "ticket", "task", "workflow", "project", "management", "status", 
-        "stack", "overflow", "debug", "syntax", "error", "compiler", "implementation", 
-        "solution", "workspace", "notes", "kanban", "board"
-    },
-    "Distracting": {
-        "viral", "dance", "video", "reel", "short", "clip", "trending", "scroll", 
-        "music", "meme", "feed", "funny", "comedy", "gossip", "entertainment", 
-        "social", "media", "post", "comment", "instagram", "photo", "story", 
-        "follower", "like", "share", "tweet", "timeline", "notification", "gaming", 
-        "stream", "influencer", "instagram"
-    },
-    "Harmful": {
-        "pornography", "sex", "adult", "erotic", "nude", "naked", "erotic", "naked", "hentai",
-        "gambling", "bet", "casino", "poker", "blackjack", "slot", "slot-machine", "slot machine",
-        "drugs", "alcohol", "marijuana", "weed", "cannabis", "cocaine", "heroin", "meth", "lsd", "ecstasy", 
-        "nigger", "rape", "murder", "kill", "suicide", "violence", "war", "terror", "terrorist",
-        "baterbonia", "butterbonia", "phishing", "hacking", "scam", "malware", "rnicrosoft", "darknet", "darkweb",
-        "pornhub", "rene baterbonia", "bisaya", "bisakol", "bisayad", "kupal", "burat", "betlog", "kumag",
-        "philippines", "philippine", "phil", "ph", "bobo", "pakyu", "tarantado", "fucker", "panot", "putangina",
+POLICY_PATH = Path(__file__).resolve().parent / "policy_taxonomy.json"
+try:
+    with open(POLICY_PATH, "r") as f:
+        policy_data = json.load(f)
+    CATEGORY_KEYWORDS = {
+        cat: set(data["keywords"]) 
+        for cat, data in policy_data.get("categories", {}).items()
     }
-}
+except Exception as e:
+    print(f"[VIGILANT] Failed to load policy_taxonomy.json: {e}")
+    CATEGORY_KEYWORDS = {}
+
+def build_keyword_automaton(keyword_dict):
+    """Builds a deterministic finite-state automaton for O(N) multi-pattern matching."""
+    A = ahocorasick.Automaton()
+    for category, terms in keyword_dict.items():
+        for word in terms:
+            A.add_word(word.lower(), (category, word.lower()))
+    A.make_automaton()
+    return A
+
+def scan_text_fast(automaton, text):
+    """Scans payload text in O(N) linear time."""
+    text_lower = text.lower()
+    for end_index, (category, matched_word) in automaton.iter(text_lower):
+        return category, matched_word  # Immediate match return
+    return None, None
 # Boilerplate phrases that often appear in search engine footers or legal sections.
 # These are stripped before TF-IDF classification to avoid false positives.
 BOILERPLATE_PATTERNS = [
@@ -864,22 +860,22 @@ def load_category_hints():
             conn.close()
 
 
-def get_blacklisted_keywords():
-    """Return blacklisted keywords from in-memory cache or database."""
+def get_blacklisted_automaton():
+    """Return blacklisted keywords automaton from in-memory cache or database."""
     if _active_addon is not None:
         with _active_addon._cache_lock:
             if _active_addon._last_cache_refresh > 0:
-                return list(_active_addon.cached_keywords)
+                return _active_addon.cached_automaton
 
     conn = None
     try:
         conn = _connect_db()
         cursor = conn.execute("SELECT keyword FROM keyword_blacklist")
         keywords = [row[0] for row in cursor.fetchall()]
-        return keywords
+        return build_keyword_automaton({"Harmful": keywords}) if keywords else None
     except Exception as e:
         print(f"[VIGILANT] Error loading keyword blacklist from database: {e}")
-        return []
+        return None
     finally:
         if conn:
             conn.close()
@@ -1649,54 +1645,7 @@ def normalize_query(text: str) -> str:
     return normalize_text_simple(extracted)
 
 
-def scan_text_for_keywords(text: str, keywords) -> str:
-    """
-    Keyword detection with query normalization + fuzzy matching.
-    Returns the first matched keyword or None.
 
-    - Keywords with len(keyword) <= 3 require an EXACT word match to prevent
-      catastrophic false positives on short words.
-    - Keywords with len(keyword) > 3 match if the keyword is a substring of a
-      token OR difflib.SequenceMatcher ratio >= 0.82 (catches typos / dropped
-      letters, e.g. "por" vs "porn", "p0rn", "pornn").
-    """
-    if not text or not keywords:
-        return None
-
-    normalized_text = normalize_text_simple(text)
-    tokens = normalized_text.split()
-    token_set = set(tokens)
-
-    for keyword in keywords:
-        if not keyword:
-            continue
-        normalized_keyword = normalize_text_simple(keyword)
-        if not normalized_keyword:
-            continue
-
-        # Multi-word keyword: exact subset of all tokens (fuzzy multi-word is
-        # noisy; exact presence is the reliable signal).
-        keyword_tokens = normalized_keyword.split()
-        if len(keyword_tokens) > 1:
-            if set(keyword_tokens).issubset(token_set):
-                return keyword
-            continue
-
-        word = normalized_keyword
-        if len(word) <= 3:
-            # Short keyword — exact word match only.
-            if word in token_set:
-                return keyword
-            continue
-
-        # Long keyword — substring or fuzzy ratio.
-        for token in tokens:
-            if word in token:
-                return keyword
-            if difflib.SequenceMatcher(None, token, word).ratio() >= 0.82:
-                return keyword
-
-    return None
 
 
 def get_domain_hint(host):
@@ -2459,6 +2408,7 @@ class VIGILANTAddon:
         global _active_addon
         init_db()
         self.cached_keywords = []
+        self.cached_automaton = None
         self.cached_hints = {}
         self.cached_exempt_devices = set()
         self._cache_lock = threading.Lock()
@@ -2515,6 +2465,7 @@ class VIGILANTAddon:
 
             with self._cache_lock:
                 self.cached_keywords = keywords
+                self.cached_automaton = build_keyword_automaton({"Harmful": keywords}) if keywords else None
                 self.cached_hints = hints
                 self.cached_exempt_devices = exempt_ips
 
@@ -2887,8 +2838,8 @@ class VIGILANTAddon:
         # containing banned harmful keywords (e.g. on Google, Bing, Wikipedia)
         # are immediately caught and blocked regardless of domain whitelisting.
         try:
-            keywords = get_blacklisted_keywords()
-            if keywords:
+            automaton = get_blacklisted_automaton()
+            if automaton:
                 decoded_url = urllib.parse.unquote(flow.request.pretty_url)
                 req_body = ""
 
@@ -2897,7 +2848,7 @@ class VIGILANTAddon:
 
                 combined_search_text = f"{decoded_url} {req_body}"
 
-                matched = scan_text_for_keywords(combined_search_text, keywords)
+                _, matched = scan_text_fast(automaton, combined_search_text)
                 if matched:
                     if config.get('block_harmful', True):
                         print(f"[VIGILANT] KEYWORD BLOCKED (request): {matched} from {client_ip} @ {host}")
@@ -3001,13 +2952,13 @@ class VIGILANTAddon:
 
         # Secondary POST payload keyword scan
         try:
-            keywords = get_blacklisted_keywords()
-            if keywords:
+            automaton = get_blacklisted_automaton()
+            if automaton:
                 try:
                     request_body = flow.request.get_text(strict=False) if flow.request.content else ""
                 except Exception:
                     request_body = ""
-                matched = scan_text_for_keywords(request_body, keywords)
+                _, matched = scan_text_fast(automaton, request_body)
                 if matched:
                     if config.get('block_harmful', True):
                         print(f"[VIGILANT] REQUEST KEYWORD BLOCKED: {matched} in request body from {host}")
@@ -3093,9 +3044,9 @@ class VIGILANTAddon:
 
         # ── Stage A — Fuzzy keyword scan (runs on raw decoded text) ──
         try:
-            keywords = get_blacklisted_keywords()
-            if keywords and body_text:
-                matched = scan_text_for_keywords(body_text, keywords)
+            automaton = get_blacklisted_automaton()
+            if automaton and body_text:
+                _, matched = scan_text_fast(automaton, body_text)
                 if matched:
                     config = load_proxy_config()
                     if config.get('block_harmful', True):

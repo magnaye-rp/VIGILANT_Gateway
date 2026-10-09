@@ -1,0 +1,21 @@
+{
+  "taxonomy_version": "IAB Tech Lab Content Taxonomy v3.0 Mapped",
+  "categories": {
+    "Educational": {
+      "iab_tier1_mapping": ["Education", "Science", "Reference"],
+      "keywords": ["calculus", "derivative", "integral", "algebra", "math", "course", "lecture", "notes", "exam", "assignment", "physics", "syllabus", "university", "textbook", "academy", "curriculum", "homework", "tutorial", "reference", "research", "paper", "science", "study", "documentation", "history", "learning", "quiz"]
+    },
+    "Productive": {
+      "iab_tier1_mapping": ["Technology & Computing", "Business", "Careers"],
+      "keywords": ["git", "commit", "push", "pull", "request", "repository", "code", "review", "bug", "fix", "issue", "tracker", "documentation", "api", "reference", "function", "class", "method", "module", "library", "developer", "sprint", "backlog", "ticket", "task", "workflow", "project", "management", "status", "stack", "overflow", "debug", "syntax", "error", "compiler", "implementation", "solution", "workspace"]
+    },
+    "Distracting": {
+      "iab_tier1_mapping": ["Pop Culture", "Video Gaming", "Social Networking"],
+      "keywords": ["viral", "dance", "video", "reel", "short", "clip", "trending", "scroll", "music", "meme", "feed", "funny", "comedy", "gossip", "entertainment", "social", "media", "post", "comment", "instagram", "photo", "story", "follower", "like", "share", "tweet", "timeline", "notification", "gaming", "stream", "influencer"]
+    },
+    "Harmful": {
+      "iab_tier1_mapping": ["Explicit Material", "Gambling", "Security Threats"],
+      "keywords": ["pornography", "adult", "erotic", "nude", "naked", "hentai", "gambling", "bet", "casino", "poker", "blackjack", "slot", "drugs", "marijuana", "cocaine", "heroin", "violence", "terror", "phishing", "hacking", "scam", "malware", "darknet", "darkweb"]
+    }
+  }
+}
