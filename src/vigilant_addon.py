@@ -1647,23 +1647,31 @@ def fast_extract_text(html_text: str) -> str:
     if desc_match:
         meta_description = desc_match.group(1).strip()
     
-    # Strip script, style, and noscript blocks
-    text = re.sub(r'<script.*?>.*?</script>', ' ', html_text, flags=re.IGNORECASE | re.DOTALL)
+    # Strip JSON Script Tags explicitly
+    text = re.sub(r'<script[^>]*type=["\']application/(?:ld\+)?json["\'][^>]*>.*?</script>', ' ', html_text, flags=re.IGNORECASE | re.DOTALL)
+
+    # Strip general script, style, and noscript blocks
+    text = re.sub(r'<script.*?>.*?</script>', ' ', text, flags=re.IGNORECASE | re.DOTALL)
     text = re.sub(r'<style.*?>.*?</style>', ' ', text, flags=re.IGNORECASE | re.DOTALL)
     text = re.sub(r'<noscript.*?>.*?</noscript>', ' ', text, flags=re.IGNORECASE | re.DOTALL)
     
     # Strip all remaining HTML tag delimiters
     text = re.sub(r'<[^>]+>', ' ', text)
 
-    # 3. Strip JS Bootstrap Noise
+    # Strip JS Bootstrap Noise
     text = re.sub(r'ytBootstrapConfig.*?\}', ' ', text, flags=re.IGNORECASE | re.DOTALL)
     text = re.sub(r'ytcfg\.set\(.*?\);', ' ', text, flags=re.IGNORECASE | re.DOTALL)
     text = re.sub(r'window\.ytplayer.*?\}', ' ', text, flags=re.IGNORECASE | re.DOTALL)
+
+    # Strip Raw JSON Strings
+    text = re.sub(r'\[?\{".*?\}\]?', ' ', text, flags=re.DOTALL)
+    text = re.sub(r'"[^"]+"\s*:\s*(?:".*?"|[0-9]+|true|false|null)', ' ', text)
+    text = re.sub(r'"__typename"\s*:', ' ', text)
     
     # Collapse multi-space and newline whitespace into single spaces
     clean_text = ' '.join(text.split())
 
-    # 2. Prepend Extracted Metadata to Text Input
+    # Prepend Extracted Metadata to Text Input
     return f"{meta_title} {meta_description} {clean_text}".strip()
 
 
