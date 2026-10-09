@@ -799,6 +799,14 @@ def load_proxy_config():
         eng_check_interval = _read_int('engagement_check_interval', 30)
         eng_min_requests = _read_int('engagement_min_requests', ENGAGEMENT_MIN_REQUESTS)
 
+        def _read_float(key, default):
+            cursor.execute("SELECT value FROM config_settings WHERE key = ?", (key,))
+            r = cursor.fetchone()
+            return float(r[0]) if r else default
+
+        tfidf_class_threshold = _read_float('tfidf_classification_threshold', 0.08)
+        tfidf_body_threshold = _read_float('tfidf_body_threshold', tfidf_class_threshold)
+
         conn.close()
 
         return {
@@ -819,6 +827,8 @@ def load_proxy_config():
             'engagement_l3_rate': eng_l3_rate,
             'engagement_check_interval': eng_check_interval,
             'engagement_min_requests': eng_min_requests,
+            'tfidf_classification_threshold': tfidf_class_threshold,
+            'tfidf_body_threshold': tfidf_body_threshold,
         }
     except Exception as e:
         print(f"[VIGILANT] Error loading proxy config from database: {e}, using defaults")
@@ -840,6 +850,8 @@ def load_proxy_config():
             'engagement_l3_rate': ENGAGEMENT_LEVEL_RATE.get(3, '4kbit'),
             'engagement_check_interval': 30,
             'engagement_min_requests': ENGAGEMENT_MIN_REQUESTS,
+            'tfidf_classification_threshold': 0.08,
+            'tfidf_body_threshold': 0.08,
         }
 
 
@@ -1695,7 +1707,7 @@ def categorize_content(text, host=""):
     # positives from boilerplate.  Truncate to SAMPLE_PREFIX_BYTES at the
     # call-site so the classify() truncation guard never needs to copy a
     # large string unnecessarily (classify() also guards internally).
-    classification_threshold = float(config.get('tfidf_classification_threshold', 0.15))
+    classification_threshold = float(config.get('tfidf_body_threshold', config.get('tfidf_classification_threshold', 0.08)))
     classify_text = text[:SAMPLE_PREFIX_BYTES] if len(text) > SAMPLE_PREFIX_BYTES else text
     tfidf_category, tfidf_scores = tfidf_classifier.classify(classify_text, threshold=classification_threshold)
 
@@ -3134,7 +3146,7 @@ class VIGILANTAddon:
             print("--- TF-IDF INPUT END ---")
 
             config = load_proxy_config()
-            threshold = float(config.get('tfidf_classification_threshold', 0.15))
+            threshold = float(config.get('tfidf_body_threshold', config.get('tfidf_classification_threshold', 0.08)))
             tfidf_category, tfidf_scores = tfidf_classifier.classify(clean_text, threshold=threshold)
 
             # ── DEBUG: Log classification results ──
