@@ -3101,7 +3101,17 @@ class VIGILANTAddon:
             # <footer>, <nav>, <header>, <noscript>, <meta>, all remaining
             # HTML tags, and boilerplate phrases — leaving only what the user
             # would actually read on the page.
+            
+            # Since fast_extract_text completely strips <head>, we must explicitly 
+            # preserve the <title> tag text to provide strong signals to TF-IDF.
+            extracted_title = ""
+            title_match = re.search(r'<title[^>]*>(.*?)</title>', body_text, re.IGNORECASE | re.DOTALL)
+            if title_match:
+                extracted_title = title_match.group(1).strip()
+                
             clean_text = fast_extract_text(body_text)
+            if extracted_title:
+                clean_text = f"{extracted_title} {clean_text}"
     
             # ── TEMPORARY DEBUG: Log what the classifier actually sees ──
             tfidf_input_snippet = clean_text[:500]

@@ -15,7 +15,7 @@
     },
     "Harmful": {
       "iab_tier1_mapping": ["Explicit Material", "Gambling", "Security Threats"],
-      "keywords": ["pornography", "adult", "erotic", "nude", "naked", "hentai", "gambling", "bet", "casino", "poker", "blackjack", "slot", "drugs", "marijuana", "cocaine", "heroin", "violence", "terror", "phishing", "hacking", "scam", "malware", "darknet", "darkweb"]
+      "keywords": ["porn", "pornhub", "sex", "xxx", "xvideos", "pornography", "adult", "erotic", "nude", "naked", "hentai", "gambling", "bet", "casino", "poker", "blackjack", "slot", "drugs", "marijuana", "cocaine", "heroin", "violence", "terror", "phishing", "hacking", "scam", "malware", "darknet", "darkweb"]
     }
   }
 }
