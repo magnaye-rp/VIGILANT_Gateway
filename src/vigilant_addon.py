@@ -1598,16 +1598,21 @@ def normalize_text_simple(text: str) -> str:
     return re.sub(r'\s+', ' ', collapsed).strip()
 
 
-# 1. Block tags (crosses newlines)
+# 1. Block tags (crosses newlines) - these contain boilerplate, not user content
 RE_SCRIPT = re.compile(r'<script\b[^>]*>.*?</script>', re.IGNORECASE | re.DOTALL)
 RE_STYLE  = re.compile(r'<style\b[^>]*>.*?</style>',   re.IGNORECASE | re.DOTALL)
 RE_HEAD   = re.compile(r'<head\b[^>]*>.*?</head>',     re.IGNORECASE | re.DOTALL)
+RE_FOOTER = re.compile(r'<footer\b[^>]*>.*?</footer>', re.IGNORECASE | re.DOTALL)
+RE_NAV    = re.compile(r'<nav\b[^>]*>.*?</nav>',       re.IGNORECASE | re.DOTALL)
+RE_HEADER = re.compile(r'<header\b[^>]*>.*?</header>', re.IGNORECASE | re.DOTALL)
+RE_NOSCRIPT = re.compile(r'<noscript\b[^>]*>.*?</noscript>', re.IGNORECASE | re.DOTALL)
+RE_META   = re.compile(r'<meta\b[^>]*>', re.IGNORECASE)
 
 # 2. Catch orphaned/unclosed scripts or raw JS inside attributes
 RE_JS_FUNCTIONS   = re.compile(r'\(function\(\)\{.*?\}\)\(\);', re.DOTALL)
 RE_INLINE_JS_VARS = re.compile(r'var\s+_[a-zA-Z0-9_]+\s*=\s*\{.*?\};', re.DOTALL)
 
-# 3. Strip all tags along with ALL their internal attributes
+# 3. Strip all remaining HTML tags and their attributes (preserves text inside)
 RE_ALL_TAGS = re.compile(r'<[^>]+>', re.DOTALL)
 
 # 4. Cleanup extra whitespace
@@ -1617,27 +1622,33 @@ RE_EXTRA_SPACES = re.compile(r'\s+')
 def fast_extract_text(html_text: str) -> str:
     """Extract visible text from an HTML string.
 
-    Step A — Strip explicit <script>, <style>, <head> blocks
-             (including contents that span multiple lines).
+    Step A — Strip explicit <script>, <style>, <head>, <footer>, <nav>,
+             <header>, <noscript>, <meta> blocks (including contents).
     Step B — Strip orphaned inline JS execution blocks that
              Google embeds as attribute payloads, e.g.
              (function(){var _g=...})(); and var _nnnn = {...};
-    Step C — Strip all remaining HTML tags and their attributes.
+    Step C — Strip all remaining HTML tags and their attributes
+             (preserves text inside <span>, <a>, <p>, <div> for search snippets).
     Step D — Collapse whitespace.
 
     This is intentionally regex-based (no external parser) to keep
-    latency under 1 ms on a 20 KB input.
+    latency under 1 ms on a 50 KB input.
     """
     if not html_text:
         return ""
-    # Step A: Strip explicit blocks
+    # Step A: Strip explicit boilerplate blocks
     text = RE_SCRIPT.sub(' ', html_text)
     text = RE_STYLE.sub(' ', text)
     text = RE_HEAD.sub(' ', text)
+    text = RE_FOOTER.sub(' ', text)
+    text = RE_NAV.sub(' ', text)
+    text = RE_HEADER.sub(' ', text)
+    text = RE_NOSCRIPT.sub(' ', text)
+    text = RE_META.sub(' ', text)
     # Step B: Strip orphaned inline JS execution blocks (Google's attribute payloads)
     text = RE_JS_FUNCTIONS.sub(' ', text)
     text = RE_INLINE_JS_VARS.sub(' ', text)
-    # Step C: Strip all remaining HTML tags and attributes
+    # Step C: Strip all remaining HTML tags and attributes (preserves content text)
     text = RE_ALL_TAGS.sub(' ', text)
     # Step D: Collapse whitespace
     return RE_EXTRA_SPACES.sub(' ', text).strip()
@@ -3064,12 +3075,30 @@ class VIGILANTAddon:
             log_request(client_ip, host, path, method, domain_category or "Non-HTML", False, [], None)
             return
 
-        # ── Truncate raw bytes FIRST (20 KB cap) to save memory and CPU ──
+        # ── Step 1: Decode full response (up to 100KB) ──
+        # Increased from 20KB to 100KB to capture search result snippets that appear
+        # after large HTML/JS headers in search engine responses.
         try:
-            prefix_bytes = flow.response.content[:20000] if flow.response.content else b""
+            max_bytes = 100000  # 100KB cap
+            prefix_bytes = flow.response.content[:max_bytes] if flow.response.content else b""
             body_text = prefix_bytes.decode("utf-8", errors="replace")
         except Exception:
             body_text = ""
+
+        # ── Step 2: Strip script/style/head BEFORE truncation to maximize content density ──
+        # This removes bulky JS/CSS that would otherwise push actual content past the 100KB limit.
+        try:
+            body_text = RE_SCRIPT.sub(' ', body_text)
+            body_text = RE_STYLE.sub(' ', body_text)
+            body_text = RE_HEAD.sub(' ', body_text)
+            body_text = RE_JS_FUNCTIONS.sub(' ', body_text)
+            body_text = RE_INLINE_JS_VARS.sub(' ', body_text)
+        except Exception:
+            pass
+
+        # ── Step 3: Truncate to 50KB of actual text content (after removing script/style) ──
+        # This ensures we capture search result snippets while keeping memory usage reasonable.
+        body_text = body_text[:50000]
 
         # ── Stage A — Strict Metadata Keyword Scan (runs on <title> tags) ──
         # EXCEPTION: Educational domains are exempt from strict keyword blocking (research allowed).
@@ -3112,19 +3141,27 @@ class VIGILANTAddon:
             clean_text = fast_extract_text(body_text)
             if extracted_title:
                 clean_text = f"{extracted_title} {clean_text}"
-    
-            # ── TEMPORARY DEBUG: Log what the classifier actually sees ──
-            tfidf_input_snippet = clean_text[:500]
+
+            # ── DEBUG: Log what the classifier actually sees ──
+            tfidf_input_snippet = clean_text[:800] if clean_text else ""
+            print(f"[VIGILANT TF-IDF DEBUG] Host: {host}")
+            print(f"[VIGILANT TF-IDF DEBUG] Extracted text length: {len(clean_text)} chars")
+            print(f"[VIGILANT TF-IDF DEBUG] Text preview (first 800 chars):")
             print("--- TF-IDF INPUT START ---")
             print(tfidf_input_snippet)
             print("--- TF-IDF INPUT END ---")
-    
+
             config = load_proxy_config()
             threshold = float(config.get('tfidf_classification_threshold', 0.15))
-            tfidf_category, _tfidf_scores = tfidf_classifier.classify(clean_text, threshold=threshold)
-    
+            tfidf_category, tfidf_scores = tfidf_classifier.classify(clean_text, threshold=threshold)
+
+            # ── DEBUG: Log classification results ──
+            print(f"[VIGILANT TF-IDF DEBUG] Classification result: {tfidf_category}")
+            print(f"[VIGILANT TF-IDF DEBUG] TF-IDF scores: {tfidf_scores}")
+            print(f"[VIGILANT TF-IDF DEBUG] Threshold: {threshold}")
+
             if tfidf_category == "Harmful" and config.get('block_harmful', True):
-                print(f"[VIGILANT] RESPONSE TF-IDF BLOCKED: {host} classified Harmful  scores={_tfidf_scores}")
+                print(f"[VIGILANT] RESPONSE TF-IDF BLOCKED: {host} classified Harmful scores={tfidf_scores} threshold={threshold}")
                 log_request(client_ip, host, path, method, "Harmful", True, [], "TFIDF_HARMFUL")
                 flow.response = http.Response.make(
                     403,
@@ -3133,7 +3170,7 @@ class VIGILANTAddon:
                 )
                 return
             elif tfidf_category == "Distracting" and config.get('block_distracting', False):
-                print(f"[VIGILANT] RESPONSE TF-IDF BLOCKED: {host} classified Distracting  scores={_tfidf_scores}")
+                print(f"[VIGILANT] RESPONSE TF-IDF BLOCKED: {host} classified Distracting scores={tfidf_scores} threshold={threshold}")
                 log_request(client_ip, host, path, method, "Distracting", True, [], "TFIDF_DISTRACTING")
                 flow.response = http.Response.make(
                     403,
