@@ -224,11 +224,11 @@ def is_pinned_host(host: str) -> bool:
         return False
     config = load_proxy_config()
     if config.get('block_distracting', False):
-        category, _ = get_domain_hint(host)
+        category, _ = get_domain_category(host)
         if category == "Distracting":
             return False
     if config.get('block_harmful', True):
-        category, _ = get_domain_hint(host)
+        category, _ = get_domain_category(host)
         if category == "Harmful":
             return False
     pinned_domains = config.get('pinned_domains', set())
@@ -285,6 +285,21 @@ def cache_domain_category(host: str, category: str):
     clean = _base_domain(host)
     with _domain_cache_lock:
         _domain_classification_cache[clean] = (category, time.time())
+
+
+def invalidate_domain_cache(host: str):
+    """
+    Invalidate cached entry for a specific domain.
+    Called when Active Routing Rules are updated to ensure user overrides take effect.
+
+    Args:
+        host: Domain to invalidate from cache (www. prefix is stripped automatically)
+    """
+    clean = _base_domain(host)
+    with _domain_cache_lock:
+        if clean in _domain_classification_cache:
+            del _domain_classification_cache[clean]
+            print(f"[VIGILANT] Cache invalidated for {clean} (Active Routing Rule updated)")
 
 
 # Default social domains for doomscroll detection
@@ -1805,22 +1820,68 @@ def normalize_query(text: str) -> str:
 
 
 
-def get_domain_hint(host):
+def get_domain_category(host: str) -> tuple:
+    """
+    Get domain category with proper precedence order:
+    Priority 1: Active Routing Rules (category_hints DB table - user overrides)
+    Priority 2: In-Memory Domain Cache (_domain_classification_cache)
+    Priority 3: Static category_hints.json (if it exists)
+    Priority 4: Fallback to None (will trigger TF-IDF later)
+
+    Args:
+        host: Domain/host to categorize
+
+    Returns:
+        Tuple of (category, source) where source indicates the lookup priority level
+    """
     if not host:
         return None, 0
-    category_hints = load_category_hints()
+
+    # Normalize domain - strip www. and port
     clean = host.split(":")[0].removeprefix("www.").lower()
+
+    # Priority 1: Active Routing Rules (category_hints DB table - user overrides)
+    # This is the user-configured database table that takes highest precedence
+    try:
+        conn = _connect_db()
+        cursor = conn.execute(
+            "SELECT category FROM category_hints WHERE domain = ? OR domain = ?",
+            (clean, f"www.{clean}")
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return row[0], 1  # Source 1 = Active Routing Rules
+    except Exception as e:
+        print(f"[VIGILANT] Error checking category_hints for {clean}: {e}")
+
+    # Priority 2: In-Memory Domain Cache (TF-IDF classification results)
+    cached_category, was_cached = get_cached_domain_category(clean)
+    if cached_category and was_cached:
+        return cached_category, 2  # Source 2 = In-Memory Cache
+
+    # Priority 3: Static category_hints (loaded from JSON if it exists)
+    # This is the legacy static hints - lower priority than DB overrides
+    category_hints = load_category_hints()
     for category, domains in category_hints.items():
         if any(clean == d.strip().lower().removeprefix("www.") or clean.endswith("." + d.strip().lower().removeprefix("www.")) for d in domains if d):
-            return category, 3
+            return category, 3  # Source 3 = Static Hints
+
+    # Priority 4: No hint - will trigger TF-IDF classification later
     return None, 0
+
+
+def get_domain_hint(host):
+    """Legacy function - redirects to get_domain_category for backward compatibility."""
+    category, _ = get_domain_category(host)
+    return category, 3 if category else 0
 
 
 def categorize_content(text, host=""):
     if not text:
         text = ""
 
-    hint_category, _hint_score = get_domain_hint(host)
+    hint_category, _hint_score = get_domain_category(host)
     protected_hint = hint_category in ("Educational", "Productive")
 
     config = load_proxy_config()
@@ -2804,7 +2865,7 @@ class VIGILANTAddon:
             # 2. Check bypass conditions in explicit order
             is_bypassed = False
             config = load_proxy_config()
-            hint_cat, _ = get_domain_hint(server_name)
+            hint_cat, _ = get_domain_category(server_name)
             is_blocked_cat = (hint_cat == "Distracting" and config.get('block_distracting', False)) or \
                              (hint_cat == "Harmful" and config.get('block_harmful', True))
             
@@ -2945,7 +3006,7 @@ class VIGILANTAddon:
         try:
             config = load_proxy_config()
             # Get domain hint for categorization
-            hint_category, _ = get_domain_hint(sni)
+            hint_category, _ = get_domain_category(sni)
             
             # Use domain hint category if it's loggable
             if hint_category and hint_category.lower() in _LOGGABLE_CATEGORIES:
@@ -3038,18 +3099,33 @@ class VIGILANTAddon:
         except Exception as e:
             print(f"[VIGILANT] Error during URL parameter scanning: {e}")
 
-        category_hints = load_category_hints()
-        domain_category = None
-        for category, domains in category_hints.items():
-            if any(
-                clean_host == d.strip().lower().removeprefix("www.")
-                or clean_host.endswith("." + d.strip().lower().removeprefix("www."))
-                for d in domains if d
-            ):
-                domain_category = category
-                break
+        # STEP 1: Exact Domain Evaluation - Use get_domain_category with proper precedence
+        domain_category, _ = get_domain_category(host)
 
-        # STEP 0: Priority Keyword Blacklist scan on request URL & Body
+        # STEP 1: Exact Domain Evaluation - Check category hints for strict override
+        if domain_category:
+            print(f"[VIGILANT] DOMAIN OVERRIDE: {host} -> {domain_category} (category hint match)")
+
+        if domain_category == "Harmful" and config.get('block_harmful', True):
+            print(f"[VIGILANT] CATEGORY BLOCKED (request domain hint): {host} [Harmful]")
+            log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "CATEGORY_BLOCKED")
+            flow.response = http.Response.make(
+                403,
+                render_block_page(host, "Harmful"),
+                {"Content-Type": "text/html"}
+            )
+            return
+        elif domain_category == "Distracting" and config.get('block_distracting', False):
+            print(f"[VIGILANT] CATEGORY BLOCKED (request domain hint): {host} [Distracting]")
+            log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Distracting", True, [], "CATEGORY_BLOCKED")
+            flow.response = http.Response.make(
+                403,
+                render_block_page(host, "Distracting"),
+                {"Content-Type": "text/html"}
+            )
+            return
+
+        # STEP 2: Priority Keyword Blacklist scan on request URL & Body
         # Must run BEFORE whitelist/custom bypass early return so that searches
         # containing banned harmful keywords (e.g. on Google, Bing, Wikipedia)
         # are immediately caught and blocked regardless of domain whitelisting.
@@ -3227,7 +3303,7 @@ class VIGILANTAddon:
         if "text/html" not in content_type:
             # Fast path: use in-memory hint cache if available, otherwise minimal DB lookup
             clean_host = host.split(":")[0].removeprefix("www.").lower()
-            hint_category, _ = get_domain_hint(clean_host)
+            hint_category, _ = get_domain_category(clean_host)
 
             if hint_category == "Harmful" and config.get('block_harmful', True):
                 log_request(client_ip, host, path, method, "Harmful", True, [], "CATEGORY_BLOCKED")
@@ -3259,24 +3335,12 @@ class VIGILANTAddon:
 
         clean_host = host.split(":")[0].removeprefix("www.").lower()
 
-        # ── Check domain classification cache BEFORE TF-IDF ──
-        cached_category, was_cached = get_cached_domain_category(clean_host)
-        if cached_category:
-            domain_category = cached_category
-            if was_cached:
-                print(f"[VIGILANT] Domain category from cache: {clean_host} -> {cached_category}")
-        else:
-            # Existing domain hints lookup
-            category_hints = load_category_hints()
-            domain_category = None
-            for category, domains in category_hints.items():
-                if any(
-                    clean_host == d.strip().lower().removeprefix("www.")
-                    or clean_host.endswith("." + d.strip().lower().removeprefix("www."))
-                    for d in domains if d
-                ):
-                    domain_category = category
-                    break
+        # ── Check domain classification with proper precedence ──
+        domain_category, source = get_domain_category(host)
+        if source == 2:
+            print(f"[VIGILANT] Domain category from cache: {clean_host} -> {domain_category}")
+        elif source == 1:
+            print(f"[VIGILANT] Domain category from Active Routing Rules: {clean_host} -> {domain_category}")
 
         # ── Payload profiling (PFR window) ──
         payload_bytes = len(flow.response.content) if flow.response.content else 0

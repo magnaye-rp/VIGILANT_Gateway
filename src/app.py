@@ -2756,27 +2756,95 @@ def manage_category_hints():
                     cursor = conn.execute("INSERT INTO category_hints (category, domain) VALUES (?, ?)", (category, domain))
                 conn.commit()
                 new_id = cursor.lastrowid
+
+                # Invalidate cache for this domain to ensure the new rule takes effect immediately
+                try:
+                    from vigilant_addon import invalidate_domain_cache
+                    invalidate_domain_cache(domain)
+                except ImportError:
+                    pass
+
             _signal_rule_cache_reload()
             return jsonify({"id": new_id, "category": category, "domain": domain, "action": action}), 201
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/categories/hints/<int:hint_id>", methods=["DELETE"])
+@app.route("/api/categories/hints/<int:hint_id>", methods=["DELETE", "PUT"])
 @require_auth
 def delete_category_hint(hint_id):
-    try:
-        with _open_db() as conn:
-            if not _table_exists(conn, "category_hints"):
+    if request.method == "DELETE":
+        try:
+            with _open_db() as conn:
+                if not _table_exists(conn, "category_hints"):
+                    return jsonify({"error": "Not found"}), 404
+
+                # Get the domain before deleting so we can invalidate cache
+                cursor = conn.execute("SELECT domain FROM category_hints WHERE id = ?", (hint_id,))
+                row = cursor.fetchone()
+                domain_to_invalidate = row[0] if row else None
+
+                cursor = conn.execute("DELETE FROM category_hints WHERE id = ?", (hint_id,))
+                conn.commit()
+
+                if cursor.rowcount > 0:
+                    # Invalidate cache for this domain
+                    if domain_to_invalidate:
+                        try:
+                            from vigilant_addon import invalidate_domain_cache
+                            invalidate_domain_cache(domain_to_invalidate)
+                        except ImportError:
+                            pass
+
+                    _signal_rule_cache_reload()
+                    return jsonify({"success": True}), 200
                 return jsonify({"error": "Not found"}), 404
-            cursor = conn.execute("DELETE FROM category_hints WHERE id = ?", (hint_id,))
-            conn.commit()
-            if cursor.rowcount > 0:
-                _signal_rule_cache_reload()
-                return jsonify({"success": True}), 200
-            return jsonify({"error": "Not found"}), 404
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    elif request.method == "PUT":
+        try:
+            data = request.get_json(silent=True) or {}
+            category = data.get("category")
+            domain = data.get("domain")
+            action = data.get("action", "throttle")
+
+            if not category or not domain:
+                return jsonify({"error": "Category and domain are required"}), 400
+
+            with _open_db() as conn:
+                if not _table_exists(conn, "category_hints"):
+                    return jsonify({"error": "Not found"}), 404
+
+                # Get old domain before updating so we can invalidate cache
+                cursor = conn.execute("SELECT domain FROM category_hints WHERE id = ?", (hint_id,))
+                row = cursor.fetchone()
+                old_domain = row[0] if row else None
+
+                # Try updating with action column, fallback without it
+                try:
+                    cursor = conn.execute("UPDATE category_hints SET category=?, domain=?, action=? WHERE id=?",
+                                        (category, domain, action, hint_id))
+                except sqlite3.OperationalError:
+                    cursor = conn.execute("UPDATE category_hints SET category=?, domain=? WHERE id=?",
+                                        (category, domain, hint_id))
+                conn.commit()
+
+                if cursor.rowcount > 0:
+                    # Invalidate cache for both old and new domains
+                    for d in [old_domain, domain]:
+                        if d:
+                            try:
+                                from vigilant_addon import invalidate_domain_cache
+                                invalidate_domain_cache(d)
+                            except ImportError:
+                                pass
+
+                    _signal_rule_cache_reload()
+                    return jsonify({"success": True}), 200
+                return jsonify({"error": "Not found"}), 404
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/config/behavioral", methods=["GET", "POST"])
