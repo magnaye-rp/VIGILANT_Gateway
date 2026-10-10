@@ -11,7 +11,7 @@
         "learning", "learn", "quiz", "flashcards", "lesson", "classroom", "scholar", "scholarship", "thesis", "dissertation",
         "encyclopedia", "dictionary", "thesaurus", "translation", "language", "grammar", "vocabulary", "essay", "tutor", "ebook",
         "khanacademy", "coursera", "edx", "udemy", "udacity", "brilliant", "duolingo", "quizlet", "wikipedia", "wikibooks",
-        "britannica", "arxiv", "jstor", "scholar.google", "researchgate", "sciencedirect", "springer", "nature", "pubmed",
+        "britannica", "arxiv", "jstor", "researchgate", "sciencedirect", "springer", "nature", "pubmed",
         "mit.edu", "stanford.edu", "harvard.edu", "ocw", "openstax", "libretexts", "wolframalpha", "desmos", "geogebra",
         "ted", "nationalgeographic", "nasa", "mathway", "symbolab", "chegg", "coursehero", "scribd", "libgen", "zotero", "mendeley"
       ]
@@ -29,7 +29,7 @@
         "github", "gitlab", "bitbucket", "stackoverflow", "stackexchange", "jira", "atlassian", "confluence", "trello", "asana",
         "notion", "slack", "teams", "zoom", "meet", "figma", "miro", "airtable", "monday", "clickup", "linear", "vercel",
         "netlify", "heroku", "aws", "azure", "gcloud", "cloudflare", "npm", "pypi", "crates", "maven", "mozilla", "mdn",
-        "docs.google", "drive.google", "office", "outlook", "onedrive", "dropbox", "salesforce", "hubspot", "zendesk",
+        "docs.google", "google", "office", "outlook", "onedrive", "dropbox", "salesforce", "hubspot", "zendesk",
         "datadog", "sentry", "grafana", "postman", "swagger", "leetcode", "hackerrank", "codepen", "replit", "jetbrains", "vscode"
       ]
     },
