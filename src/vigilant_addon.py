@@ -1663,47 +1663,24 @@ RE_EXTRA_SPACES = re.compile(r'\s+')
 
 
 def fast_extract_text(html_text: str) -> str:
-    """Extract visible text from an HTML string using a simple regex approach."""
+    """Extract visible text from an HTML string using a simple regex approach.
+    Strips <script>, <style>, and HTML tags without metadata extraction."""
     if not html_text:
         return ""
-    
-    # 1. Extract High-Priority Metadata First
-    meta_title = ""
-    title_match = re.search(r'<title[^>]*>(.*?)</title>', html_text, re.IGNORECASE | re.DOTALL)
-    if title_match:
-        meta_title = title_match.group(1).strip()
 
-    meta_description = ""
-    desc_match = re.search(r'<meta\s+(?:name|property)=["\'](?:og:title|title|description|og:description)["\']\s+content=["\'](.*?)["\']', html_text, re.IGNORECASE | re.DOTALL)
-    if desc_match:
-        meta_description = desc_match.group(1).strip()
-    
-    # Strip JSON Script Tags explicitly
-    text = re.sub(r'<script[^>]*type=["\']application/(?:ld\+)?json["\'][^>]*>.*?</script>', ' ', html_text, flags=re.IGNORECASE | re.DOTALL)
+    # Strip script blocks
+    text = re.sub(r'<script.*?>.*?</script>', ' ', html_text, flags=re.IGNORECASE | re.DOTALL)
 
-    # Strip general script, style, and noscript blocks
-    text = re.sub(r'<script.*?>.*?</script>', ' ', text, flags=re.IGNORECASE | re.DOTALL)
+    # Strip style blocks
     text = re.sub(r'<style.*?>.*?</style>', ' ', text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r'<noscript.*?>.*?</noscript>', ' ', text, flags=re.IGNORECASE | re.DOTALL)
-    
-    # Strip all remaining HTML tag delimiters
+
+    # Strip all remaining HTML tags
     text = re.sub(r'<[^>]+>', ' ', text)
 
-    # Strip JS Bootstrap Noise
-    text = re.sub(r'ytBootstrapConfig.*?\}', ' ', text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r'ytcfg\.set\(.*?\);', ' ', text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r'window\.ytplayer.*?\}', ' ', text, flags=re.IGNORECASE | re.DOTALL)
-
-    # Strip Raw JSON Strings
-    text = re.sub(r'\[?\{".*?\}\]?', ' ', text, flags=re.DOTALL)
-    text = re.sub(r'"[^"]+"\s*:\s*(?:".*?"|[0-9]+|true|false|null)', ' ', text)
-    text = re.sub(r'"__typename"\s*:', ' ', text)
-    
-    # Collapse multi-space and newline whitespace into single spaces
+    # Collapse whitespace into single spaces
     clean_text = ' '.join(text.split())
 
-    # Prepend Extracted Metadata to Text Input
-    return f"{meta_title} {meta_description} {clean_text}".strip()
+    return clean_text.strip()
 
 
 def normalize_query(text: str) -> str:
@@ -2918,7 +2895,38 @@ class VIGILANTAddon:
         config = load_proxy_config()
 
         clean_host = host.split(":")[0].removeprefix("www.").lower()
-        
+
+        # STEP 0: Request-side URL parameter scanning for explicit searches
+        # Parse query string parameters (q, search, v, etc.) and scan for blocked terms
+        try:
+            automaton = get_blacklisted_automaton()
+            if automaton:
+                parsed_url = urllib.parse.urlparse(flow.request.pretty_url)
+                query_params = urllib.parse.parse_qs(parsed_url.query)
+                
+                # Check common search/query parameters
+                search_params = ['q', 'search', 'query', 'v', 'p', 's', 'k']
+                for param in search_params:
+                    if param in query_params:
+                        param_values = query_params[param]
+                        for value in param_values:
+                            if value:
+                                decoded_value = urllib.parse.unquote(value.lower())
+                                # Check against blacklist automaton
+                                _, matched = scan_text_fast(automaton, decoded_value)
+                                if matched:
+                                    if config.get('block_harmful', True):
+                                        print(f"[VIGILANT] URL PARAM BLOCKED: {matched} in {param}={value} from {client_ip} @ {host}")
+                                        log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "KEYWORD_MATCH")
+                                        flow.response = http.Response.make(
+                                            403,
+                                            render_block_page(host, "Harmful"),
+                                            {"Content-Type": "text/html"}
+                                        )
+                                        return
+        except Exception as e:
+            print(f"[VIGILANT] Error during URL parameter scanning: {e}")
+
         category_hints = load_category_hints()
         domain_category = None
         for category, domains in category_hints.items():
