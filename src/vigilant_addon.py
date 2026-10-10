@@ -82,7 +82,7 @@ ENGAGEMENT_L3_MINUTES = 12   # 4kbit   — hard stop
 ENGAGEMENT_CHECK_INTERVAL = 30.0
 
 # How long without ANY social request before engagement resets
-ENGAGEMENT_RESET_IDLE = 120  # 2 minutes of no activity = session over
+ENGAGEMENT_RESET_IDLE = 1800  # 30 minutes of no activity = session over
 
 # Minimum social requests before engagement tracking starts
 ENGAGEMENT_MIN_REQUESTS = 10
@@ -104,6 +104,10 @@ _previous_rate = {}
 _engagement_low_activity_since = defaultdict(float)  # client_ip → when RPM first dropped below baseline
 _engaged_log_times = {}  # client_ip → last "Engaged:" log timestamp (rate-limited)
 _throttle_mutation_lock = threading.RLock()  # Prevents concurrent evaluation, cleanup, and TC mutations
+
+# ── Daily Reset Tracking ──
+_last_reset_date = None  # Stores the last date (YYYY-MM-DD) when midnight reset ran
+_daily_reset_lock = threading.Lock()
 
 # Level → tc rate
 ENGAGEMENT_LEVEL_RATE = {
@@ -1242,6 +1246,64 @@ def _reset_client_session(client_ip: str):
         request_history.pop(client_ip, None)
 
 
+def _daily_midnight_reset():
+    """Check if the day has changed since the last reset, and if so, clear all device
+    usage counters and engagement timers for all tracked client IPs. This ensures daily
+    quota resets work correctly for connected devices."""
+    global _last_reset_date
+
+    now = time.time()
+    from datetime import datetime
+
+    current_date = datetime.fromtimestamp(now).strftime("%Y-%m-%d")
+
+    with _daily_reset_lock:
+        if _last_reset_date == current_date:
+            return  # Already reset today
+
+        # Day has changed - perform reset
+        print(f"[VIGILANT] Daily midnight reset: {_last_reset_date} -> {current_date}")
+        _last_reset_date = current_date
+
+        # Reset all engagement state for all tracked IPs
+        with _engagement_lock:
+            for ip in list(_engagement_start.keys()):
+                _engagement_start[ip] = 0.0
+                _engagement_minutes[ip] = 0.0
+                _engagement_last_request[ip] = 0.0
+                _engagement_current_level[ip] = CB_LEVEL_NONE
+                _engagement_low_activity_since.pop(ip, None)
+                _engaged_log_times.pop(ip, None)
+
+        _previous_rate.clear()
+
+        with velocity_lock:
+            for ip in list(social_session_start.keys()):
+                social_session_start[ip] = 0.0
+                social_session_totals[ip] = 0
+                social_request_history.pop(ip, None)
+                _social_low_activity_since.pop(ip, None)
+            for ip in list(session_start.keys()):
+                session_start[ip] = 0.0
+                session_totals[ip] = 0
+                request_history.pop(ip, None)
+
+        # Clear throttle state database records for all devices
+        try:
+            with db_lock:
+                conn = _connect_db()
+                try:
+                    conn.execute("UPDATE throttle_state SET is_throttled=0, recovery_at=0")
+                    conn.commit()
+                    print(f"[VIGILANT] Daily reset: cleared throttle_state for all devices")
+                finally:
+                    conn.close()
+        except Exception as e:
+            print(f"[VIGILANT] Daily reset error clearing throttle_state: {e}")
+
+        print(f"[VIGILANT] Daily midnight reset complete")
+
+
 def _cleanup_throttle(client_ip: str, reason: str = "idle"):
     """Safely and atomically remove throttle and reset all session timestamps and state.
     Protected by _throttle_mutation_lock to prevent collisions with engagement evaluation."""
@@ -1340,6 +1402,9 @@ def _engagement_tracking_loop():
     Thresholds are read from DB config so the dashboard can tune them."""
     while True:
         try:
+            # Check for daily midnight reset
+            _daily_midnight_reset()
+
             config = load_proxy_config()
             check_interval = int(config.get('engagement_check_interval', 30))
             reset_idle = int(config.get('engagement_reset_idle', ENGAGEMENT_RESET_IDLE))

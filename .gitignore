@@ -14,3 +14,4 @@ __pycache__/
 *.backup
 /etc/netplan/backup/
 /etc/netplan/*.bak
+.DS_Store
