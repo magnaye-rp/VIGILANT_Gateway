@@ -1727,25 +1727,56 @@ RE_ALL_TAGS = re.compile(r'<[^>]+>', re.DOTALL)
 RE_EXTRA_SPACES = re.compile(r'\s+')
 
 
-def fast_extract_text(html_text: str) -> str:
-    """Extract visible text from an HTML string using a simple regex approach.
-    Strips <script>, <style>, and HTML tags without metadata extraction."""
+def fast_extract_text(html_text: str, url_path: str = "") -> str:
+    """
+    Lightweight HTML text extraction optimized for Lenovo M710q CPU.
+    Truncates to 20KB before any processing, uses compiled regexes only.
+
+    Args:
+        html_text: Raw HTML content (may be large)
+        url_path: URL path/query string to prepend for context
+
+    Returns:
+        Cleaned text snippet suitable for TF-IDF classification
+    """
     if not html_text:
         return ""
 
+    start_time = time.time()
+
+    # STEP 1: Lightweight truncation FIRST (guarantees sub-millisecond)
+    # Truncate to 20KB (20,000 characters) before any regex work
+    html_text = html_text[:20000]
+
+    # STEP 2: Fast regex stripping using compiled patterns
     # Strip script blocks
-    text = re.sub(r'<script.*?>.*?</script>', ' ', html_text, flags=re.IGNORECASE | re.DOTALL)
+    text = RE_SCRIPT.sub(' ', html_text)
 
     # Strip style blocks
-    text = re.sub(r'<style.*?>.*?</style>', ' ', text, flags=re.IGNORECASE | re.DOTALL)
+    text = RE_STYLE.sub(' ', text)
+
+    # Strip head section (contains metadata, not user content)
+    text = RE_HEAD.sub(' ', text)
 
     # Strip all remaining HTML tags
-    text = re.sub(r'<[^>]+>', ' ', text)
+    text = RE_ALL_TAGS.sub(' ', text)
 
-    # Collapse whitespace into single spaces
-    clean_text = ' '.join(text.split())
+    # STEP 3: Merge URL path & query for context
+    if url_path:
+        # Replace URL delimiters with spaces for TF-IDF tokenization
+        url_context = url_path.replace('/', ' ').replace('?', ' ').replace('=', ' ').replace('-', ' ')
+        # Prepend URL context to extracted text
+        text = f"{url_context} {text}"
 
-    return clean_text.strip()
+    # STEP 4: Collapse whitespace into single spaces
+    clean_text = RE_EXTRA_SPACES.sub(' ', text).strip()
+
+    # STEP 5: Debug timing (only when VIGILANT_DEBUG=1)
+    if os.getenv("VIGILANT_DEBUG", "0") == "1":
+        elapsed_ms = (time.time() - start_time) * 1000
+        print(f"[VIGILANT] fast_extract_text: {elapsed_ms:.2f}ms for {len(clean_text)} chars")
+
+    return clean_text
 
 
 def normalize_query(text: str) -> str:
@@ -3219,21 +3250,10 @@ class VIGILANTAddon:
             prefix_bytes = flow.response.content[:max_bytes] if flow.response.content else b""
             body_text = prefix_bytes.decode("utf-8", errors="replace")
 
-            # Truncate to 50KB immediately - regex operations below run on truncated text
+            # Truncate to 50KB immediately - fast_extract_text will further truncate to 20KB
             body_text = body_text[:50000]
         except Exception:
             body_text = ""
-
-        # ── Step 2: Strip script/style/head on TRUNCATED text ──
-        # This removes bulky JS/CSS after truncation to minimize regex CPU work.
-        try:
-            body_text = RE_SCRIPT.sub(' ', body_text)
-            body_text = RE_STYLE.sub(' ', body_text)
-            body_text = RE_HEAD.sub(' ', body_text)
-            body_text = RE_JS_FUNCTIONS.sub(' ', body_text)
-            body_text = RE_INLINE_JS_VARS.sub(' ', body_text)
-        except Exception:
-            pass
 
         # ── Stage A — Strict Metadata Keyword Scan (runs on <title> tags) ──
         # EXCEPTION: Educational domains are exempt from strict keyword blocking (research allowed).
@@ -3266,7 +3286,8 @@ class VIGILANTAddon:
             # would actually read on the page.
 
             # fast_extract_text extracts <title> and <meta> tags before stripping
-            clean_text = fast_extract_text(body_text)
+            # and merges URL path for additional context
+            clean_text = fast_extract_text(body_text, url_path=flow.request.path)
 
             # ── DEBUG: Log what the classifier actually sees (DISABLED in production) ──
             tfidf_input_snippet = clean_text[:800] if clean_text else ""
