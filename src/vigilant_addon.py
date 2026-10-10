@@ -2993,33 +2993,48 @@ class VIGILANTAddon:
         clean_host = host.split(":")[0].removeprefix("www.").lower()
 
         # STEP 0: Request-side URL parameter scanning for explicit searches
-        # Parse query string parameters (q, search, v, etc.) and scan for blocked terms
+        # Isolate search query parameters (q, query, search_query, keywords) and scan
+        # using word-boundary regexes to avoid false positives on engine flags (adlt, form, etc.)
         try:
-            automaton = get_blacklisted_automaton()
-            if automaton:
-                parsed_url = urllib.parse.urlparse(flow.request.pretty_url)
-                query_params = urllib.parse.parse_qs(parsed_url.query)
-                
-                # Check common search/query parameters
-                search_params = ['q', 'search', 'query', 'v', 'p', 's', 'k']
-                for param in search_params:
+            parsed_url = urllib.parse.urlparse(flow.request.pretty_url)
+            query_params = urllib.parse.parse_qs(parsed_url.query)
+
+            # Target ONLY search query keys - exclude engine flags like adlt, form, sclient, pc
+            search_query_keys = ['q', 'query', 'search_query', 'keywords']
+
+            # Load blacklist keywords for word-boundary matching
+            conn = None
+            try:
+                conn = _connect_db()
+                cursor = conn.execute("SELECT keyword FROM keyword_blacklist")
+                blacklist_keywords = [row[0].lower() for row in cursor.fetchall()]
+            except Exception:
+                blacklist_keywords = []
+            finally:
+                if conn:
+                    conn.close()
+
+            if blacklist_keywords:
+                for param in search_query_keys:
                     if param in query_params:
                         param_values = query_params[param]
                         for value in param_values:
                             if value:
-                                decoded_value = urllib.parse.unquote(value.lower())
-                                # Check against blacklist automaton
-                                _, matched = scan_text_fast(automaton, decoded_value)
-                                if matched:
-                                    if config.get('block_harmful', True):
-                                        print(f"[VIGILANT] URL PARAM BLOCKED: {matched} in {param}={value} from {client_ip} @ {host}")
-                                        log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "KEYWORD_MATCH")
-                                        flow.response = http.Response.make(
-                                            403,
-                                            render_block_page(host, "Harmful"),
-                                            {"Content-Type": "text/html"}
-                                        )
-                                        return
+                                decoded_value = urllib.parse.unquote(value).lower()
+
+                                # Use word-boundary regex matching instead of substring checks
+                                # This prevents false positives like "adlt=strict" matching "adult"
+                                for keyword in blacklist_keywords:
+                                    if re.search(rf"\b{re.escape(keyword)}\b", decoded_value, re.IGNORECASE):
+                                        if config.get('block_harmful', True):
+                                            print(f"[VIGILANT] URL PARAM BLOCKED: {keyword} in {param}={value} from {client_ip} @ {host}")
+                                            log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "KEYWORD_MATCH")
+                                            flow.response = http.Response.make(
+                                                403,
+                                                render_block_page(host, "Harmful"),
+                                                {"Content-Type": "text/html"}
+                                            )
+                                            return
         except Exception as e:
             print(f"[VIGILANT] Error during URL parameter scanning: {e}")
 
@@ -3041,27 +3056,38 @@ class VIGILANTAddon:
         # EXCEPTION: Educational domains are exempt from strict keyword blocking (research allowed).
         if domain_category != "Educational":
             try:
-                automaton = get_blacklisted_automaton()
-                if automaton:
-                    decoded_url = urllib.parse.unquote(flow.request.pretty_url)
+                conn = None
+                try:
+                    conn = _connect_db()
+                    cursor = conn.execute("SELECT keyword FROM keyword_blacklist")
+                    blacklist_keywords = [row[0].lower() for row in cursor.fetchall()]
+                except Exception:
+                    blacklist_keywords = []
+                finally:
+                    if conn:
+                        conn.close()
+
+                if blacklist_keywords:
+                    decoded_url = urllib.parse.unquote(flow.request.pretty_url).lower()
                     req_body = ""
-    
+
                     if flow.request.content:
-                        req_body = urllib.parse.unquote(flow.request.get_text(strict=False))
-    
+                        req_body = urllib.parse.unquote(flow.request.get_text(strict=False)).lower()
+
                     combined_search_text = f"{decoded_url} {req_body}"
-    
-                    _, matched = scan_text_fast(automaton, combined_search_text)
-                    if matched:
-                        if config.get('block_harmful', True):
-                            print(f"[VIGILANT] KEYWORD BLOCKED (request): {matched} from {client_ip} @ {host}")
-                            log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "KEYWORD_MATCH")
-                            flow.response = http.Response.make(
-                                403,
-                                render_block_page(host, "Harmful"),
-                                {"Content-Type": "text/html"}
-                            )
-                            return
+
+                    # Use word-boundary regex matching instead of substring checks
+                    for keyword in blacklist_keywords:
+                        if re.search(rf"\b{re.escape(keyword)}\b", combined_search_text, re.IGNORECASE):
+                            if config.get('block_harmful', True):
+                                print(f"[VIGILANT] KEYWORD BLOCKED (request): {keyword} from {client_ip} @ {host}")
+                                log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "KEYWORD_MATCH")
+                                flow.response = http.Response.make(
+                                    403,
+                                    render_block_page(host, "Harmful"),
+                                    {"Content-Type": "text/html"}
+                                )
+                                return
             except sqlite3.Error as e:
                 print(f"[VIGILANT] Database error during keyword blacklist check: {e}")
             except Exception as e:
@@ -3147,23 +3173,37 @@ class VIGILANTAddon:
 
         # Secondary POST payload keyword scan
         try:
-            automaton = get_blacklisted_automaton()
-            if automaton:
+            conn = None
+            try:
+                conn = _connect_db()
+                cursor = conn.execute("SELECT keyword FROM keyword_blacklist")
+                blacklist_keywords = [row[0].lower() for row in cursor.fetchall()]
+            except Exception:
+                blacklist_keywords = []
+            finally:
+                if conn:
+                    conn.close()
+
+            if blacklist_keywords:
                 try:
                     request_body = flow.request.get_text(strict=False) if flow.request.content else ""
                 except Exception:
                     request_body = ""
-                _, matched = scan_text_fast(automaton, request_body)
-                if matched:
-                    if config.get('block_harmful', True):
-                        print(f"[VIGILANT] REQUEST KEYWORD BLOCKED: {matched} in request body from {host}")
-                        log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "KEYWORD_MATCH")
-                        flow.response = http.Response.make(
-                            403,
-                            render_block_page(host, "Harmful"),
-                            {"Content-Type": "text/html"}
-                        )
-                        return
+
+                if request_body:
+                    decoded_body = urllib.parse.unquote(request_body).lower()
+                    # Use word-boundary regex matching instead of substring checks
+                    for keyword in blacklist_keywords:
+                        if re.search(rf"\b{re.escape(keyword)}\b", decoded_body, re.IGNORECASE):
+                            if config.get('block_harmful', True):
+                                print(f"[VIGILANT] REQUEST KEYWORD BLOCKED: {keyword} in request body from {host}")
+                                log_request(client_ip, host, flow.request.path[:120], flow.request.method, "Harmful", True, [], "KEYWORD_MATCH")
+                                flow.response = http.Response.make(
+                                    403,
+                                    render_block_page(host, "Harmful"),
+                                    {"Content-Type": "text/html"}
+                                )
+                                return
         except sqlite3.Error as e:
             print(f"[VIGILANT] Request body keyword blacklist check failed: {e}")
 
@@ -3259,23 +3299,35 @@ class VIGILANTAddon:
         # EXCEPTION: Educational domains are exempt from strict keyword blocking (research allowed).
         if domain_category != "Educational":
             try:
-                automaton = get_blacklisted_automaton()
-                if automaton and body_text:
+                conn = None
+                try:
+                    conn = _connect_db()
+                    cursor = conn.execute("SELECT keyword FROM keyword_blacklist")
+                    blacklist_keywords = [row[0].lower() for row in cursor.fetchall()]
+                except Exception:
+                    blacklist_keywords = []
+                finally:
+                    if conn:
+                        conn.close()
+
+                if blacklist_keywords and body_text:
                     title_match = re.search(r'<title[^>]*>(.*?)</title>', body_text, re.IGNORECASE | re.DOTALL)
                     video_title = title_match.group(1) if title_match else ""
 
                     if video_title:
-                        _, matched = scan_text_fast(automaton, video_title)
-                        if matched:
-                            if config.get('block_harmful', True):
-                                print(f"[VIGILANT] RESPONSE KEYWORD BLOCKED: {matched} in <title> from {host}")
-                                log_request(client_ip, host, path, method, "Harmful", True, [], "KEYWORD_MATCH")
-                                flow.response = http.Response.make(
-                                    403,
-                                    render_block_page(host, "Harmful"),
-                                    {"Content-Type": "text/html"}
-                                )
-                                return
+                        decoded_title = video_title.lower()
+                        # Use word-boundary regex matching instead of substring checks
+                        for keyword in blacklist_keywords:
+                            if re.search(rf"\b{re.escape(keyword)}\b", decoded_title, re.IGNORECASE):
+                                if config.get('block_harmful', True):
+                                    print(f"[VIGILANT] RESPONSE KEYWORD BLOCKED: {keyword} in <title> from {host}")
+                                    log_request(client_ip, host, path, method, "Harmful", True, [], "KEYWORD_MATCH")
+                                    flow.response = http.Response.make(
+                                        403,
+                                        render_block_page(host, "Harmful"),
+                                        {"Content-Type": "text/html"}
+                                    )
+                                    return
             except sqlite3.Error as e:
                 print(f"[VIGILANT] Response keyword blacklist check failed: {e}")
 
