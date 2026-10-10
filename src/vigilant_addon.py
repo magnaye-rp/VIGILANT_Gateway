@@ -118,6 +118,12 @@ MAX_PAYLOAD_SIZE = 5 * 1024 * 1024
 SAMPLE_PREFIX_BYTES = 512 * 1024
 SAMPLE_SUFFIX_BYTES = 256 * 1024
 
+# In-memory cache for domain classification results
+# Maps: base_domain -> (category, timestamp)
+_domain_classification_cache = {}
+_domain_cache_lock = threading.Lock()
+DOMAIN_CACHE_TTL = 3600  # 1 hour cache validity
+
 
 # ── Global Asset Whitelist ──────────────────────────────────────────
 # Default seed values; the authoritative list lives in the database
@@ -250,6 +256,31 @@ def _base_domain(host: str) -> str:
     if ".".join(labels[-2:]) in _MULTI_LABEL_TLDS:
         return ".".join(labels[-3:])
     return ".".join(labels[-2:])
+
+
+def get_cached_domain_category(host: str) -> tuple:
+    """
+    Check in-memory cache for domain classification result.
+    Returns (category, was_cached) where was_cached is True if from cache.
+    """
+    clean = _base_domain(host)
+    now = time.time()
+
+    with _domain_cache_lock:
+        cached = _domain_classification_cache.get(clean)
+        if cached:
+            category, timestamp = cached
+            if now - timestamp < DOMAIN_CACHE_TTL:
+                return category, True
+
+    return None, False
+
+
+def cache_domain_category(host: str, category: str):
+    """Store domain classification result in in-memory cache."""
+    clean = _base_domain(host)
+    with _domain_cache_lock:
+        _domain_classification_cache[clean] = (category, time.time())
 
 
 # Default social domains for doomscroll detection
@@ -3044,8 +3075,28 @@ class VIGILANTAddon:
         path         = flow.request.path[:120]
         method       = flow.request.method
         content_type = flow.response.headers.get("content-type", "")
+        config = load_proxy_config()
 
-        # ── Bypass rules ──
+        # ── EARLY BYPASS: Skip non-HTML content entirely ──
+        # Images, JSON, CSS, JS, fonts, etc. never need content classification.
+        # This check MUST come before any database lookups or regex operations.
+        if "text/html" not in content_type:
+            # Fast path: use in-memory hint cache if available, otherwise minimal DB lookup
+            clean_host = host.split(":")[0].removeprefix("www.").lower()
+            hint_category, _ = get_domain_hint(clean_host)
+
+            if hint_category == "Harmful" and config.get('block_harmful', True):
+                log_request(client_ip, host, path, method, "Harmful", True, [], "CATEGORY_BLOCKED")
+                flow.response = http.Response.make(403, render_block_page(host, "Harmful"), {"Content-Type": "text/html"})
+                return
+            elif hint_category == "Distracting" and config.get('block_distracting', False):
+                log_request(client_ip, host, path, method, "Distracting", True, [], "CATEGORY_BLOCKED")
+                flow.response = http.Response.make(403, render_block_page(host, "Distracting"), {"Content-Type": "text/html"})
+                return
+            log_request(client_ip, host, path, method, hint_category or "Non-HTML", False, [], None)
+            return
+
+        # ── Bypass rules (HTML only from here) ──
         # Already blocked by request-side inspection — do not re-scan.
         if flow.response.status_code == 403:
             return
@@ -3064,50 +3115,44 @@ class VIGILANTAddon:
 
         clean_host = host.split(":")[0].removeprefix("www.").lower()
 
-        category_hints = load_category_hints()
-        domain_category = None
-        for category, domains in category_hints.items():
-            if any(
-                clean_host == d.strip().lower().removeprefix("www.")
-                or clean_host.endswith("." + d.strip().lower().removeprefix("www."))
-                for d in domains if d
-            ):
-                domain_category = category
-                break
+        # ── Check domain classification cache BEFORE TF-IDF ──
+        cached_category, was_cached = get_cached_domain_category(clean_host)
+        if cached_category:
+            domain_category = cached_category
+            if was_cached:
+                print(f"[VIGILANT] Domain category from cache: {clean_host} -> {cached_category}")
+        else:
+            # Existing domain hints lookup
+            category_hints = load_category_hints()
+            domain_category = None
+            for category, domains in category_hints.items():
+                if any(
+                    clean_host == d.strip().lower().removeprefix("www.")
+                    or clean_host.endswith("." + d.strip().lower().removeprefix("www."))
+                    for d in domains if d
+                ):
+                    domain_category = category
+                    break
 
         # ── Payload profiling (PFR window) ──
         payload_bytes = len(flow.response.content) if flow.response.content else 0
         if profiler is not None:
             profiler.record_response(client_ip, clean_host, payload_bytes)
 
-        # ── Content gate — skip non-HTML entirely for TF-IDF ──
-        # Images, JSON, CSS, JS, fonts, etc. never need content classification.
-        print(f"DEBUG Content-Type: {content_type} from {host}")
-        if "text/html" not in content_type:
-            config = load_proxy_config()
-            if domain_category == "Harmful" and config.get('block_harmful', True):
-                log_request(client_ip, host, path, method, "Harmful", True, [], "CATEGORY_BLOCKED")
-                flow.response = http.Response.make(403, render_block_page(host, "Harmful"), {"Content-Type": "text/html"})
-                return
-            elif domain_category == "Distracting" and config.get('block_distracting', False):
-                log_request(client_ip, host, path, method, "Distracting", True, [], "CATEGORY_BLOCKED")
-                flow.response = http.Response.make(403, render_block_page(host, "Distracting"), {"Content-Type": "text/html"})
-                return
-            log_request(client_ip, host, path, method, domain_category or "Non-HTML", False, [], None)
-            return
-
-        # ── Step 1: Decode full response (up to 100KB) ──
-        # Increased from 20KB to 100KB to capture search result snippets that appear
-        # after large HTML/JS headers in search engine responses.
+        # ── Step 1: Decode and TRUNCATE BEFORE regex to minimize regex work ──
+        # Decode up to 100KB, then immediately truncate to 50KB to reduce regex overhead.
         try:
             max_bytes = 100000  # 100KB cap
             prefix_bytes = flow.response.content[:max_bytes] if flow.response.content else b""
             body_text = prefix_bytes.decode("utf-8", errors="replace")
+
+            # Truncate to 50KB immediately - regex operations below run on truncated text
+            body_text = body_text[:50000]
         except Exception:
             body_text = ""
 
-        # ── Step 2: Strip script/style/head BEFORE truncation to maximize content density ──
-        # This removes bulky JS/CSS that would otherwise push actual content past the 100KB limit.
+        # ── Step 2: Strip script/style/head on TRUNCATED text ──
+        # This removes bulky JS/CSS after truncation to minimize regex CPU work.
         try:
             body_text = RE_SCRIPT.sub(' ', body_text)
             body_text = RE_STYLE.sub(' ', body_text)
@@ -3117,10 +3162,6 @@ class VIGILANTAddon:
         except Exception:
             pass
 
-        # ── Step 3: Truncate to 50KB of actual text content (after removing script/style) ──
-        # This ensures we capture search result snippets while keeping memory usage reasonable.
-        body_text = body_text[:50000]
-
         # ── Stage A — Strict Metadata Keyword Scan (runs on <title> tags) ──
         # EXCEPTION: Educational domains are exempt from strict keyword blocking (research allowed).
         if domain_category != "Educational":
@@ -3129,11 +3170,10 @@ class VIGILANTAddon:
                 if automaton and body_text:
                     title_match = re.search(r'<title[^>]*>(.*?)</title>', body_text, re.IGNORECASE | re.DOTALL)
                     video_title = title_match.group(1) if title_match else ""
-                    
+
                     if video_title:
                         _, matched = scan_text_fast(automaton, video_title)
                         if matched:
-                            config = load_proxy_config()
                             if config.get('block_harmful', True):
                                 print(f"[VIGILANT] RESPONSE KEYWORD BLOCKED: {matched} in <title> from {host}")
                                 log_request(client_ip, host, path, method, "Harmful", True, [], "KEYWORD_MATCH")
@@ -3151,27 +3191,32 @@ class VIGILANTAddon:
             # <footer>, <nav>, <header>, <noscript>, <meta>, all remaining
             # HTML tags, and boilerplate phrases — leaving only what the user
             # would actually read on the page.
-            
+
             # fast_extract_text extracts <title> and <meta> tags before stripping
             clean_text = fast_extract_text(body_text)
 
-            # ── DEBUG: Log what the classifier actually sees ──
+            # ── DEBUG: Log what the classifier actually sees (DISABLED in production) ──
             tfidf_input_snippet = clean_text[:800] if clean_text else ""
-            print(f"[VIGILANT TF-IDF DEBUG] Host: {host}")
-            print(f"[VIGILANT TF-IDF DEBUG] Extracted text length: {len(clean_text)} chars")
-            print(f"[VIGILANT TF-IDF DEBUG] Text preview (first 800 chars):")
-            print("--- TF-IDF INPUT START ---")
-            print(tfidf_input_snippet)
-            print("--- TF-IDF INPUT END ---")
+            if os.getenv("VIGILANT_DEBUG", "0") == "1":
+                print(f"[VIGILANT TF-IDF DEBUG] Host: {host}")
+                print(f"[VIGILANT TF-IDF DEBUG] Extracted text length: {len(clean_text)} chars")
+                print(f"[VIGILANT TF-IDF DEBUG] Text preview (first 800 chars):")
+                print("--- TF-IDF INPUT START ---")
+                print(tfidf_input_snippet)
+                print("--- TF-IDF INPUT END ---")
 
-            config = load_proxy_config()
             threshold = float(config.get('tfidf_body_threshold', config.get('tfidf_classification_threshold', 0.08)))
             tfidf_category, tfidf_scores = tfidf_classifier.classify(clean_text, threshold=threshold)
 
-            # ── DEBUG: Log classification results ──
-            print(f"[VIGILANT TF-IDF DEBUG] Classification result: {tfidf_category}")
-            print(f"[VIGILANT TF-IDF DEBUG] TF-IDF scores: {tfidf_scores}")
-            print(f"[VIGILANT TF-IDF DEBUG] Threshold: {threshold}")
+            # Cache the TF-IDF classification result for future requests
+            if tfidf_category:
+                cache_domain_category(clean_host, tfidf_category)
+
+            # ── DEBUG: Log classification results (DISABLED in production) ──
+            if os.getenv("VIGILANT_DEBUG", "0") == "1":
+                print(f"[VIGILANT TF-IDF DEBUG] Classification result: {tfidf_category}")
+                print(f"[VIGILANT TF-IDF DEBUG] TF-IDF scores: {tfidf_scores}")
+                print(f"[VIGILANT TF-IDF DEBUG] Threshold: {threshold}")
 
             if tfidf_category == "Harmful" and config.get('block_harmful', True):
                 print(f"[VIGILANT] RESPONSE TF-IDF BLOCKED: {host} classified Harmful scores={tfidf_scores} threshold={threshold}")
